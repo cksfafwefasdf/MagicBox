@@ -1,4 +1,2 @@
-/boot/mbr/bochs.out
-/boot/bin/mbr.bin
-/boot/bin/loader.bin
+
 /boot/bin/
