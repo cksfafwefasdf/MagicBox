@@ -55,7 +55,7 @@ SECTION MBR vstart=MBR_START_ADDR ; let 0x7c00 become the begining of the mbr
 
 	mov bx,LOADER_BASE_ADDR
 	mov eax,LOADER_START_SECTOR	  
-	mov cx,0x1	
+	mov cx,0x4 ; because the loader will finally above 512 Bytes,so we allocate 4 blocks for loader	
 	call rd_disk_m_16 ;put the loader into the memory
 
 	jmp LOADER_BASE_ADDR ;go and execute the loader
