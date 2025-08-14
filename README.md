@@ -1,2 +1,2 @@
 # MagicBox
-A little simple basic OS which is x86-based
+Operating systems based on the x86 architecture
