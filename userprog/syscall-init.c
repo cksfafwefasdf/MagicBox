@@ -64,6 +64,8 @@ void syscall_init(void){
 	syscall_table[SYS_READRAW] = sys_readraw;
 	syscall_table[SYS_PIPE] = sys_pipe;
 	syscall_table[SYS_FD_REDIRECT] = sys_fd_redirect;
+	syscall_table[SYS_FREE_MEM] = sys_free_mem;
+	syscall_table[SYS_DISK_INFO] = sys_disk_info;
 	
 	put_str("syscall_init done\n");
 }

@@ -8,6 +8,7 @@
 #include "shell.h"
 #include "dir.h"
 #include "assert.h"
+#include "memory.h"
 
 static void wash_path(char* old_abs_path,char* new_abs_path){
 	assert(old_abs_path[0]=='/');
@@ -259,15 +260,17 @@ int32_t buildin_rm(uint32_t argc,char** argv){
 
 void buildin_help(uint32_t argc UNUSED,char** argv UNUSED){
 printf("buildin commands:\n\
-	ls: show directory or file information\n\
-	cd: change current work directory\n\
-	mkdir: creat a directory\n\
-	rmdir: remove a empty directory\n\
-	rm: remove a regular file\n\
-	pwd: show current work directory\n\
-	ps:show process information\n\
-	clear: clear screen\n\
-	readraw: read the disk without file system\n\
+	ls: Show directory or file information\n\
+	cd: Change current work directory\n\
+	mkdir: Creat a directory\n\
+	rmdir: Remove a empty directory\n\
+	rm: Remove a regular file\n\
+	pwd: Show current work directory\n\
+	ps:Show process information\n\
+	clear: Clear screen\n\
+	readraw: Read the disk without file system\n\
+	free_mem: Check memory usage in the system​\n\
+	df: Check disk space usage in the system​​\n\
 shortcut key:\n\
 	ctrl+l: clear screen\n\
 	ctrl+u: clear input\n\n");
@@ -334,4 +337,13 @@ void buildin_readraw(uint32_t argc,char** argv){
 
 	readraw(disk_name,(uint32_t)lba,(uint32_t)filename,(uint32_t)file_size);
 	printf("readraw: success!\n");
+}
+
+uint32_t buildin_free_mem(uint32_t argc UNUSED,char** argv UNUSED){
+	uint32_t free_mem_space = free_mem();
+	printf("total\tfree\tused\t\n%d\t%d\t%d\n",mem_bytes_total,free_mem_space, mem_bytes_total-free_mem_space);
+}
+
+void buildin_df(uint32_t argc UNUSED,char** argv UNUSED){
+	disk_info();
 }

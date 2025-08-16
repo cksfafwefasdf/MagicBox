@@ -12,6 +12,9 @@
 #define SEC_SIZE 512
 #define PRIM_PARTS_NUM 4
 #define LOGIC_PARTS_NUM 8
+#define DEVICE_NUM_PER_CHANNEL 2
+#define START_BYTE_PARTITION_TABLE 446
+#define END_BYTE_PARTITION_TABLE 509
 
 // disk partition
 struct partition{
@@ -42,7 +45,7 @@ struct ide_channel{
 	bool expecting_intr; // whether this channel is waiting the disk intr
 	// when I/O operation occurs, proc can use this semaphore to block itself
 	struct semaphore wait_disk; // is used to block and wakeup the driver prog
-	struct disk devices[2]; // a channel has two disk, one for master channel, one for slave channel
+	struct disk devices[DEVICE_NUM_PER_CHANNEL]; // a channel has two disk, one for master channel, one for slave channel
 };
 
 extern void ide_write(struct disk* hd,uint32_t lba,void* buf,uint32_t sec_cnt);
@@ -54,5 +57,7 @@ extern void sys_readraw(const char* disk_name,uint32_t lba,const char* filename,
 extern struct ide_channel channels[2];
 extern uint8_t channel_cnt;
 extern struct dlist partition_list;
+extern uint32_t* disk_size;
+extern uint8_t disk_num;
 
 #endif

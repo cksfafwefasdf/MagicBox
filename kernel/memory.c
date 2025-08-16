@@ -7,6 +7,7 @@
 #include "sync.h"
 #include "interrupt.h"
 #include "stdio-kernel.h"
+#include "bitmap.h"
 
 
 
@@ -37,6 +38,7 @@ struct mem_block_desc k_block_descs[DESC_TYPE_CNT];
 struct pool kernel_pool,user_pool;
 struct virtual_addr kernel_vaddr;
 
+uint32_t mem_bytes_total = 0;
 
 
 static void mem_pool_init(uint32_t all_mem){
@@ -223,7 +225,7 @@ void* get_kernel_pages(uint32_t pg_cnt){
 
 void mem_init(void){
 	put_str("mem_init start\n");
-	uint32_t mem_bytes_total = *((uint32_t*)(SYS_MEM_SIZE_PTR));
+	mem_bytes_total = *((uint32_t*)(SYS_MEM_SIZE_PTR));
 	mem_pool_init(mem_bytes_total);
 	block_desc_init(k_block_descs);
 	put_str("mem_init done\n");
@@ -569,4 +571,25 @@ void free_a_phy_page(uint32_t pg_phy_addr){
 		bit_idx = (pg_phy_addr-kernel_pool.phy_addr_start)/PG_SIZE;
 	}
 	bitmap_set(&mem_pool->pool_bitmap,bit_idx,0);
+}
+
+// this funciotn is called by dlist_traversal
+bool sum_free_list(struct dlist_elem *elem, int arg){
+	uint32_t* free_elem_num = (uint32_t*) arg;
+	*free_elem_num += 1;
+	// to ensure traverse the whole list
+	return false;
+}
+
+uint32_t sys_free_mem(){
+	uint32_t free_pages = bitmap_count(&user_pool.pool_bitmap)+bitmap_count(&kernel_pool.pool_bitmap);
+	int i;
+	uint32_t fragment_space = 0;
+	for(i=0;i<DESC_TYPE_CNT;i++){
+		if(dlist_empty(&k_block_descs[i].free_list)) continue;
+		uint32_t free_elem_num = 0;
+		dlist_traversal(&k_block_descs[i].free_list,sum_free_list,&free_elem_num);
+		fragment_space += free_elem_num*k_block_descs[i].block_size;
+	}
+	return free_pages*PG_SIZE + fragment_space;
 }

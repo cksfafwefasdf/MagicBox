@@ -86,6 +86,7 @@
 
 #define GDT_BASE 0xc0000903
 #define SYS_MEM_SIZE_PTR 0xb03
+#define DISK_NUM_PTR 0x475
 
 #define UNUSED __attribute__((unused))
 

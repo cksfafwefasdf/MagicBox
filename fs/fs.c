@@ -15,6 +15,7 @@
 #include "ioqueue.h"
 #include "keyboard.h"
 #include "pipe.h"
+#include "bitmap.h"
 
 
 struct partition* cur_part;
@@ -147,39 +148,39 @@ static bool mount_partition(struct dlist_elem* pelem,int arg){
 		cur_part = part;
 		struct disk* hd = cur_part->my_disk;
 
-		struct super_block* sb_buf = (struct super_block*) sys_malloc(sizeof(struct super_block));
+		// struct super_block* sb_buf = (struct super_block*) sys_malloc(sizeof(struct super_block));
 		
-		cur_part->sb = (struct super_block*) sys_malloc(sizeof(struct super_block));
-		if(cur_part->sb == NULL||sb_buf==NULL){
-			PANIC("alloc memory failed!");
-		}
+		// cur_part->sb = (struct super_block*) sys_malloc(sizeof(struct super_block));
+		// if(cur_part->sb == NULL||sb_buf==NULL){
+		// 	PANIC("alloc memory failed!");
+		// }
 
-		memset(sb_buf,0,SECTOR_SIZE);
-		ide_read(hd,cur_part->start_lba+1,sb_buf,1);
+		// memset(sb_buf,0,SECTOR_SIZE);
+		// ide_read(hd,cur_part->start_lba+1,sb_buf,1);
 
-		memcpy(cur_part->sb,sb_buf,sizeof(struct super_block));
+		// memcpy(cur_part->sb,sb_buf,sizeof(struct super_block));
 
-		cur_part->block_bitmap.bits = (uint8_t*)sys_malloc(sb_buf->block_bitmap_sects*SECTOR_SIZE);
+		cur_part->block_bitmap.bits = (uint8_t*)sys_malloc(cur_part->sb->block_bitmap_sects*SECTOR_SIZE);
 		
 		if(cur_part->block_bitmap.bits==NULL){
 			PANIC("alloc memory failed!");
 		}
-		cur_part->block_bitmap.btmp_bytes_len=sb_buf->block_bitmap_sects*SECTOR_SIZE;
+		cur_part->block_bitmap.btmp_bytes_len=cur_part->sb->block_bitmap_sects*SECTOR_SIZE;
 
-		ide_read(hd,sb_buf->block_bitmap_lba,cur_part->block_bitmap.bits,sb_buf->block_bitmap_sects);
+		ide_read(hd,cur_part->sb->block_bitmap_lba,cur_part->block_bitmap.bits,cur_part->sb->block_bitmap_sects);
 
-		cur_part->inode_bitmap.bits = (uint8_t*)sys_malloc(sb_buf->inode_bitmap_sects*SECTOR_SIZE);
+		cur_part->inode_bitmap.bits = (uint8_t*)sys_malloc(cur_part->sb->inode_bitmap_sects*SECTOR_SIZE);
 		
 		if(cur_part->inode_bitmap.bits==NULL){
 			PANIC("alloc memory failed!");
 		}
-		cur_part->inode_bitmap.btmp_bytes_len = sb_buf->inode_bitmap_sects*SECTOR_SIZE;
+		cur_part->inode_bitmap.btmp_bytes_len = cur_part->sb->inode_bitmap_sects*SECTOR_SIZE;
 
-		ide_read(hd,sb_buf->inode_bitmap_lba,cur_part->inode_bitmap.bits,sb_buf->inode_bitmap_sects);
+		ide_read(hd,cur_part->sb->inode_bitmap_lba,cur_part->inode_bitmap.bits,cur_part->sb->inode_bitmap_sects);
 
 		dlist_init(&cur_part->open_inodes);
 		
-		sys_free(sb_buf);
+		// sys_free(sb_buf);
 
 		printk("mount %s done!\n",part_name);
 		
@@ -199,11 +200,6 @@ void filesys_init(){
 
 	char default_part[MAX_DISK_NAME_LEN];
 
-	struct super_block* sb_buf = (struct super_block*)sys_malloc(SECTOR_SIZE);
-
-	if(sb_buf==NULL){
-		PANIC("alloc memory failed!!!");
-	}
 	printk("searching filesystem......\n");
 	while(channel_no<channel_cnt){
 		while (dev_no<2){
@@ -220,14 +216,22 @@ void filesys_init(){
 				}
 
 				if(part->sec_cnt!=0){
+					struct super_block* sb_buf = (struct super_block*)sys_malloc(SECTOR_SIZE);
+					if(sb_buf==NULL){
+						PANIC("filesys_init: alloc memory failed!!!");
+					}
 					memset(sb_buf,0,SECTOR_SIZE);
 					ide_read(hd,part->start_lba+1,sb_buf,1);
 					if(sb_buf->magic==FS_MAGIC_NUMBER){
 						printk("%s has filesystem\n",part->name);
+						part->sb = sb_buf;
 					} else{
 						printk("formatting %s's partition %s ......\n",hd->name,part->name);
 						partition_format(part);
+						ide_read(hd,part->start_lba+1,sb_buf,1);
+						part->sb = sb_buf;
 					}
+					
 					if(first_flag){
 						// we regard the first part as default part
 						// then, mount the default part;
@@ -244,7 +248,7 @@ void filesys_init(){
 		}
 		channel_no++;
 	}
-	sys_free(sb_buf);
+	// sys_free(sb_buf);
 	
 	// printk("name: %s\ns",default_part);
 	dlist_traversal(&partition_list,mount_partition,(int)default_part);
@@ -903,4 +907,120 @@ int32_t sys_stat(const char* path,struct stat* buf){
 	dir_close(searched_record.parent_dir);
 	return ret;
 }
+// partition formatlize 512B-blocks used avaliable
+void sys_disk_info(){
+	uint8_t channel_idx;
+	printk("disk number: %d\n",disk_num);
+	uint8_t k = 0;
+	char** granularits = sys_malloc(sizeof(char*)*disk_num);
+	uint8_t* div_cnts = sys_malloc(sizeof(uint8_t)*disk_num);
+	int i=0;
+	for(i=0;i<disk_num;i++){
+		while(disk_size[i]>1024){
+			disk_size[i]/=1024;
+			div_cnts[i]++;
+		}
+		switch (div_cnts[i]){
+			case 0:
+				granularits[i] = "B";
+				break;
+			case 1:
+				granularits[i] = "KB";
+				break;
+			case 2:
+				granularits[i] = "MB";
+				break;
+			case 3:
+				granularits[i] = "GB";
+				break;
+			case 4:
+				granularits[i] = "TB";
+				break;
+			default:
+				granularits[i] = "OVERFLOW!";
+				break;
+		}
+	}
 
+	for(channel_idx=0;channel_idx<CHANNEL_NUM;channel_idx++){
+		uint8_t ide_idx = 0;
+		for(ide_idx=0;ide_idx<DEVICE_NUM_PER_CHANNEL;ide_idx++){
+			if(!strcmp("",channels[channel_idx].devices[ide_idx].name)) continue;
+			printk("%s\t%d%s\n",channels[channel_idx].devices[ide_idx].name,disk_size[channel_idx*DISK_NUM_IN_CHANNEL+ide_idx],granularits[channel_idx*DISK_NUM_IN_CHANNEL+ide_idx]);
+		}
+	}
+
+
+	printk("partition\tformatlize\t512B-blocks\tused\tavaliable\n");
+	for(channel_idx=0;channel_idx<CHANNEL_NUM;channel_idx++){
+		uint8_t device_idx = 0;
+		bool has_partition = false;
+		for(device_idx=0;device_idx<DEVICE_NUM_PER_CHANNEL;device_idx++){
+			if(!strcmp("",channels[channel_idx].devices[device_idx].name)) continue;
+			uint8_t part_idx = 0;
+			for(part_idx=0;part_idx<PRIM_PARTS_NUM;part_idx++){
+				if(!strcmp("",channels[channel_idx].devices[device_idx].prim_parts[part_idx].name)) continue;
+				has_partition = true;
+			}
+			if(has_partition){
+				for(part_idx=0;part_idx<PRIM_PARTS_NUM;part_idx++){
+					if(!strcmp("",channels[channel_idx].devices[device_idx].prim_parts[part_idx].name)) continue;
+					uint32_t bitmap_sects = channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->block_bitmap_sects;
+					uint8_t* buf_bitmap_bits = sys_malloc(bitmap_sects*SECTOR_SIZE);
+					memset(buf_bitmap_bits,0,bitmap_sects*SECTOR_SIZE);
+
+					ide_read(&channels[channel_idx].devices[device_idx]
+						,channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->block_bitmap_lba
+						,buf_bitmap_bits
+						,bitmap_sects
+					);
+					
+					struct bitmap bitmap_buf;
+					bitmap_buf.bits = buf_bitmap_bits;
+					bitmap_buf.btmp_bytes_len = (channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->sec_cnt)/8;
+					uint32_t free_sects = bitmap_count(&bitmap_buf);
+					uint32_t used_sects = (bitmap_buf.btmp_bytes_len*8)-free_sects;
+					sys_free(buf_bitmap_bits);
+					
+					printk("%s\t%x\t%d\t%d\t%d\n"
+					,channels[channel_idx].devices[device_idx].prim_parts[part_idx].name
+					,channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->magic
+					,channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->sec_cnt
+					,used_sects
+					,free_sects);
+				}
+				for(part_idx=0;part_idx<LOGIC_PARTS_NUM;part_idx++){
+					if(!strcmp("",channels[channel_idx].devices[device_idx].logic_parts[part_idx].name)) continue;
+					uint32_t bitmap_sects = channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->block_bitmap_sects;
+					uint8_t* buf_bitmap_bits = sys_malloc(bitmap_sects*SECTOR_SIZE);
+					memset(buf_bitmap_bits,0,bitmap_sects*SECTOR_SIZE);
+
+					ide_read(&channels[channel_idx].devices[device_idx]
+						,channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->block_bitmap_lba
+						,buf_bitmap_bits
+						,bitmap_sects
+					);
+					
+					struct bitmap bitmap_buf;
+					bitmap_buf.bits = buf_bitmap_bits;
+					bitmap_buf.btmp_bytes_len = (channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->sec_cnt)/8;
+					uint32_t free_sects = bitmap_count(&bitmap_buf);
+					uint32_t used_sects = (bitmap_buf.btmp_bytes_len*8)-free_sects;
+					sys_free(buf_bitmap_bits);
+
+					// uint32_t sum = 1+1+channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->inode_bitmap_sects+channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->block_bitmap_sects+channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->inode_table_sects;
+					// printk("used: %d\n",sum);
+					
+					printk("%s\t%x\t%d\t%d\t%d\n"
+					,channels[channel_idx].devices[device_idx].logic_parts[part_idx].name
+					,channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->magic
+					,channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->sec_cnt
+					,used_sects
+					,free_sects);
+				}
+			}else{
+				printk("%s\traw\t-\t-\t%d%s\n",channels[channel_idx].devices[device_idx].name,disk_size[channel_idx*DISK_NUM_IN_CHANNEL+device_idx],granularits[channel_idx*DISK_NUM_IN_CHANNEL+device_idx]);
+			}
+		}
+	}
+}

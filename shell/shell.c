@@ -8,6 +8,7 @@
 #include "stdbool.h"
 #include "assert.h"
 #include "buildin_cmd.h"
+#include "memory.h"
 
 #define CMD_LEN 128
 #define MAX_ARG_NR 16
@@ -89,6 +90,10 @@ static cmd_execute(uint32_t argc,char** argv){
 		buildin_readraw(argc,argv);
 	}else if(!strcmp("help",argv[0])){
 		buildin_help(argc,argv);
+	}else if(!strcmp("free_mem",argv[0])){
+		buildin_free_mem(argc,argv);
+	}else if(!strcmp("df",argv[0])){
+		buildin_df(argc,argv);
 	}else{
 		printf("try external command '%s'\n",argv[0]);
 		

@@ -68,6 +68,7 @@ extern char* sys_getcwd(char* buf,uint32_t size);
 extern int32_t sys_stat(const char* path,struct stat* buf);
 extern char* path_parse(char* pathname,char* name_store);
 extern uint32_t fd_local2global(uint32_t local_fd);
+extern void sys_disk_info(void);
 
 extern struct partition* cur_part;
 

@@ -40,10 +40,12 @@
 
 // the number of the disk is stored in this addr by BIOS 
 #define BIOS_DISK_NUM_ADDR 0x475
+#define DISK_PARAM_ADDR 0x501
 
 #define BUSY_WAIT_TIME_LIMIT 30*1000
 
-
+uint32_t* disk_size;
+uint8_t disk_num;
 
 uint8_t channel_cnt;
 struct ide_channel channels[CHANNEL_NUM];
@@ -173,6 +175,21 @@ void ide_init(){
 	printk("\tall partition info\n");
 	dlist_traversal(&partition_list,partition_info,(int)NULL);
 
+	disk_num = *((uint8_t*)BIOS_DISK_NUM_ADDR);
+	disk_size = (uint32_t*)sys_malloc(disk_num * sizeof(uint32_t));
+	uint32_t* disk_param_addr = DISK_PARAM_ADDR;
+	int d_idx = 0;
+	for(d_idx=0;d_idx<disk_num;d_idx++){
+		disk_size[d_idx] = 0;
+		uint32_t ecx = *disk_param_addr++;
+		uint32_t edx = *disk_param_addr++;
+		printk("ecx: %x",ecx);
+		printk("edx: %x",edx);
+		uint32_t cylinders = (((ecx&0xc0)<<2)|((ecx&0xff00)>>8))+1;
+		uint32_t heads = ((edx&0xff00)>>8)+1;
+		uint32_t sectors = ecx&0x3f;
+		disk_size[d_idx] = cylinders*heads*sectors*SECTOR_SIZE;
+	}
 	printk("ide_init done\n");
 }
 

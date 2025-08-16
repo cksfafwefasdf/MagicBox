@@ -1,48 +1,5 @@
 %include "boot.inc"
-DISK_PARAM_ADDR equ 0x501
-DISK_NUM_PTR equ 0x475
-FIRST_DISK_NO equ 0x80
 SECTION MBR vstart=MBR_START_ADDR
-
-	; ebx: 0x00000700 1792
-	; ecx: 0x0009783f 620607
-	; edx: 0x00000f02 3842
-	; cx = [1001] 01111000 00 111111 
-	; dh 0f 16 heads
-	; dl 02    
-	; cl[5:0] 111111B=63
-	; ch 0x78
-	; 
-
-	; ecx: 0x0009a13f 631103
-	; edx: 0x00000f02 3842
-	; ebx: 0x00000700 1792
-
-	; cx  10100001 00 111111
-	; dh 0f
-	; dl 02 
-
-	xor edi,edi ; ES:DI = 0:0（avoid BIOS error）
-	mov es, di
-
-	mov byte cl,[DISK_NUM_PTR] ; get the number of the disk
-	
-	mov ebx,DISK_PARAM_ADDR
-	
-	mov esi,FIRST_DISK_NO ; set the first disk number
-get_disk_param:
-	; get the disk parameter
-	mov ah, 0x08      ; function number
-	mov dx, si        ; disk number
-	push ecx
-	int 0x13
-	mov [ebx],ecx
-	mov [ebx+4],edx
-	pop ecx
-	add ebx,8
-	inc esi
-	loop get_disk_param
-
 	mov ax,cs
 	mov ds,ax
 	mov es,ax
@@ -58,7 +15,6 @@ get_disk_param:
 	mov cx,0
 	mov dx,0x184f
 	int 0x10
-
 			; print string
 ;	mov byte [gs:0x00],'1'
 ;	mov byte [gs:0x01],0xA4

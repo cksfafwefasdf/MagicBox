@@ -14,6 +14,8 @@ extern void bitmap_init(struct bitmap* btmp);
 // check if bit_idx is 1,if so ,return true,else return false
 extern bool bitmap_bit_check(struct bitmap* btmp,uint32_t bit_idx);
 // allocate cnt consecutive bits, return 1 if successful, otherwise return -1
-int bitmap_scan(struct bitmap* btp,uint32_t cnt);
-void bitmap_set(struct bitmap* btmp,uint32_t bit_idx,int8_t value);
+extern int bitmap_scan(struct bitmap* btp,uint32_t cnt);
+extern void bitmap_set(struct bitmap* btmp,uint32_t bit_idx,int8_t value);
+// check the num of the free bit in the bitmap
+extern uint32_t bitmap_count(struct bitmap* btmp);
 #endif

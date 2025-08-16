@@ -67,3 +67,19 @@ void bitmap_set(struct bitmap* btmp,uint32_t bit_idx,int8_t value){
 		btmp->bits[byte_idx] &= ~(BITMAP_MASK<<offset_in_byte);
 	}
 }
+
+// check the num of the free bit in the bitmap
+uint32_t bitmap_count(struct bitmap* btmp){
+	uint32_t count = 0;
+	uint32_t i = 0;
+	for(; i < btmp->btmp_bytes_len; i++){
+		uint8_t byte = btmp->bits[i];
+		uint32_t j = 0;
+		for(; j < 8; j++){
+			if(!(byte & (BITMAP_MASK << j))){
+				count++;
+			}
+		}
+	}
+	return count;
+}

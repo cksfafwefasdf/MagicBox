@@ -11,5 +11,7 @@ extern char* buildin_cd(uint32_t argc,char** argv);
 extern void buildin_pwd(uint32_t argc,char** argv UNUSED);
 extern void buildin_readraw(uint32_t argc,char** argv);
 extern void buildin_help(uint32_t argc UNUSED,char** argv UNUSED);
+extern uint32_t buildin_free_mem(uint32_t argc UNUSED,char** argv UNUSED);
+extern void buildin_df(uint32_t argc UNUSED,char** argv UNUSED);
 
 #endif
