@@ -36,4 +36,5 @@ extern int32_t file_open(uint32_t inode_no,uint8_t flag);
 extern int32_t file_read(struct file* file,void* buf,uint32_t count);
 
 extern struct file file_table[MAX_FILE_OPEN_IN_SYSTEM];
+extern uint32_t prog_size; // the size of the program being executed
 #endif

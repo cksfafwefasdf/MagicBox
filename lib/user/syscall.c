@@ -193,10 +193,13 @@ void fd_redirect(uint32_t old_local_fd, uint32_t new_local_fd){
 	_syscall2(SYS_FD_REDIRECT,old_local_fd,new_local_fd);
 }
 
-uint32_t free_mem(void){
-	return _syscall0(SYS_FREE_MEM);
+void free_mem(void){
+	_syscall0(SYS_FREE_MEM);
 }
 
 void disk_info(void){
 	_syscall0(SYS_DISK_INFO);
+}
+void mount(const char* part_name){
+	_syscall1(SYS_MOUNT,part_name);
 }

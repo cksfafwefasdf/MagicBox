@@ -339,11 +339,29 @@ void buildin_readraw(uint32_t argc,char** argv){
 	printf("readraw: success!\n");
 }
 
-uint32_t buildin_free_mem(uint32_t argc UNUSED,char** argv UNUSED){
-	uint32_t free_mem_space = free_mem();
-	printf("total\tfree\tused\t\n%d\t%d\t%d\n",mem_bytes_total,free_mem_space, mem_bytes_total-free_mem_space);
+void buildin_free_mem(uint32_t argc UNUSED,char** argv UNUSED){
+	free_mem();
 }
 
 void buildin_df(uint32_t argc UNUSED,char** argv UNUSED){
 	disk_info();
+}
+
+void buildin_mount(uint32_t argc,char** argv){
+	
+	if(argc<2){
+		printf("mount: missing argument <partition name>!\n");
+		return;
+	}
+	if(argc>2){
+		printf("mount: only support one argument <partition name>!\n");
+		return;
+	}
+
+	if(strcmp(argv[1],"-h")==0){
+		printf("mount: usage: mount <partition name>\n");
+		return;
+	}
+	
+	mount(argv[1]);
 }

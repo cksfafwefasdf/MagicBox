@@ -10,10 +10,13 @@
 #include "inode.h"
 #include "dir.h"
 #include "interrupt.h"
+#include "process.h"
 
 
 // System-wide Open File Table
 struct file file_table[MAX_FILE_OPEN_IN_SYSTEM];
+uint32_t prog_size = 0; // the size of the program being executed
+
 
 int32_t get_free_slot_in_global(void){
 	uint32_t fd_idx = 3;
@@ -394,7 +397,6 @@ int32_t file_write(struct file* file,const void* buf,uint32_t count){
 
 int32_t file_read(struct file* file,void* buf,uint32_t count){
 	
-	
 	uint8_t* buf_dst = (uint8_t*) buf;
 	uint32_t size = count;
 	uint32_t size_left = size;
@@ -412,8 +414,6 @@ int32_t file_read(struct file* file,void* buf,uint32_t count){
 	} 
 	
 	uint32_t* all_blocks_addr = (uint32_t*)sys_malloc(TOTAL_BLOCK_COUNT*ADDR_BYTES_32BIT);
-	
-
 	if(all_blocks_addr==NULL){
 		printk("file_read: sys_malloc for all_blocks_addr failed!\n");
 		return -1;
@@ -478,17 +478,21 @@ int32_t file_read(struct file* file,void* buf,uint32_t count){
 		chunk_size = size_left<sec_left_bytes?size_left:sec_left_bytes;
 
 		memset(io_buf,0,BLOCK_SIZE);
+		
 		ide_read(cur_part->my_disk,sec_lba,io_buf,1);
 		memcpy(buf_dst,io_buf+sec_off_bytes,chunk_size);
-
 		buf_dst+=chunk_size;
 		file->fd_pos+=chunk_size;
 		bytes_read+=chunk_size;
 		size_left-=chunk_size;
 	}
 	
-	sys_free(all_blocks_addr);
+	if((all_blocks_addr<USER_VADDR_START||all_blocks_addr>=USER_VADDR_START+prog_size)||prog_size==0){
+		// printk("sys_free(all_blocks_addr)!\n");
+		sys_free(all_blocks_addr);
+	}
+
 	sys_free(io_buf);
-	
+
 	return bytes_read;
 }

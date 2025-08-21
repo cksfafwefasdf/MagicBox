@@ -32,5 +32,6 @@ extern bool delete_dir_entry(struct partition* part,struct dir* pdir,uint32_t in
 extern struct dir_entry* dir_read(struct dir* dir);
 extern int32_t dir_remove(struct dir* parent_dir,struct dir* child_dir);
 extern bool dir_is_empty(struct dir* dir);
+extern void close_root_dir(struct partition* part);
 
 #endif

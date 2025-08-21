@@ -16,9 +16,11 @@
 #include "keyboard.h"
 #include "pipe.h"
 #include "bitmap.h"
+#include "memory.h"
 
 
 struct partition* cur_part;
+struct dir* cur_dir;
 
 // logic formatlize 
 static void partition_format(struct partition* part){
@@ -84,6 +86,7 @@ static void partition_format(struct partition* part){
 	// use it's size as buf_size
 	uint32_t buf_size = sb.block_bitmap_sects>=sb.inode_bitmap_sects?sb.block_bitmap_sects:sb.inode_bitmap_sects;
 	buf_size = (buf_size>=sb.inode_table_sects?buf_size:sb.inode_table_sects)*SECTOR_SIZE;
+	
 	uint8_t* buf = (uint8_t*)sys_malloc(buf_size);
 
 	// init block_bitmap and write it to sb.block_bitmap_lba
@@ -161,7 +164,7 @@ static bool mount_partition(struct dlist_elem* pelem,int arg){
 		// memcpy(cur_part->sb,sb_buf,sizeof(struct super_block));
 
 		cur_part->block_bitmap.bits = (uint8_t*)sys_malloc(cur_part->sb->block_bitmap_sects*SECTOR_SIZE);
-		
+
 		if(cur_part->block_bitmap.bits==NULL){
 			PANIC("alloc memory failed!");
 		}
@@ -184,10 +187,10 @@ static bool mount_partition(struct dlist_elem* pelem,int arg){
 
 		printk("mount %s done!\n",part_name);
 		
-		printk("%s data_start_lba: %x\n",part_name,part->sb->data_start_lba);
-		printk("%s inode_bitmap_lba: %x\n",part_name,part->sb->inode_bitmap_lba);
-		printk("%s inode_table_lba: %x\n",part_name,part->sb->inode_table_lba);
-		printk("%s block_bitmap_lba: %x\n",part_name,part->sb->block_bitmap_lba);
+		// printk("%s data_start_lba: %x\n",part_name,part->sb->data_start_lba);
+		// printk("%s inode_bitmap_lba: %x\n",part_name,part->sb->inode_bitmap_lba);
+		// printk("%s inode_table_lba: %x\n",part_name,part->sb->inode_table_lba);
+		// printk("%s block_bitmap_lba: %x\n",part_name,part->sb->block_bitmap_lba);
 		return true;
 	}
 	return false;
@@ -250,10 +253,10 @@ void filesys_init(){
 	}
 	// sys_free(sb_buf);
 	
-	// printk("name: %s\ns",default_part);
+	// mount default_part, quick mount
 	dlist_traversal(&partition_list,mount_partition,(int)default_part);
-
 	open_root_dir(cur_part);
+	cur_dir = &root_dir;
 
 	uint32_t fd_idx = 0;
 	while(fd_idx<MAX_FILE_OPEN_IN_SYSTEM){
@@ -466,7 +469,6 @@ int32_t sys_write(int32_t fd,const void* buf,uint32_t count){
 }
 
 int32_t sys_read(int32_t fd,void* buf,uint32_t count){
-	
 	if(fd<0){
 		printk("sys_read: fd error! fd can not be negtive\n");
 		return -1;
@@ -561,7 +563,6 @@ int32_t sys_unlink(const char* pathname){
 	}
 	if(file_idx<MAX_FILE_OPEN_IN_SYSTEM){
 		dir_close(searched_record.parent_dir);
-		printk("aaaaaaaaaaaaaaaaaaaaaa\n");
 		printk("file %s is in use, not allow to delete!\n",pathname);
 		return -1;
 	}
@@ -981,9 +982,14 @@ void sys_disk_info(){
 					uint32_t free_sects = bitmap_count(&bitmap_buf);
 					uint32_t used_sects = (bitmap_buf.btmp_bytes_len*8)-free_sects;
 					sys_free(buf_bitmap_bits);
-					
-					printk("%s\t%x\t%d\t%d\t%d\n"
+					// P means primary part
+					char cur_flag_str[2] = {0};
+					if(!strcmp(cur_part->name,channels[channel_idx].devices[device_idx].prim_parts[part_idx].name)){
+						cur_flag_str[0] = '*';
+					}
+					printk("%s(P)%s\t%x\t%d\t%d\t%d\n"
 					,channels[channel_idx].devices[device_idx].prim_parts[part_idx].name
+					,cur_flag_str
 					,channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->magic
 					,channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->sec_cnt
 					,used_sects
@@ -1007,20 +1013,65 @@ void sys_disk_info(){
 					uint32_t free_sects = bitmap_count(&bitmap_buf);
 					uint32_t used_sects = (bitmap_buf.btmp_bytes_len*8)-free_sects;
 					sys_free(buf_bitmap_bits);
+					char cur_flag_str[2] = {0};
+					if(!strcmp(cur_part->name,channels[channel_idx].devices[device_idx].logic_parts[part_idx].name)){
+						cur_flag_str[0] = '*';
+					}
 
 					// uint32_t sum = 1+1+channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->inode_bitmap_sects+channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->block_bitmap_sects+channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->inode_table_sects;
 					// printk("used: %d\n",sum);
-					
-					printk("%s\t%x\t%d\t%d\t%d\n"
+					// L means logic part
+					printk("%s(L)%s\t%x\t%d\t%d\t%d\n"
 					,channels[channel_idx].devices[device_idx].logic_parts[part_idx].name
+					,cur_flag_str
 					,channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->magic
 					,channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->sec_cnt
 					,used_sects
 					,free_sects);
 				}
 			}else{
-				printk("%s\traw\t-\t-\t%d%s\n",channels[channel_idx].devices[device_idx].name,disk_size[channel_idx*DISK_NUM_IN_CHANNEL+device_idx],granularits[channel_idx*DISK_NUM_IN_CHANNEL+device_idx]);
+				// R means raw disk
+				printk("%s(R)\t-\t-\t-\t%d%s\n",channels[channel_idx].devices[device_idx].name,disk_size[channel_idx*DISK_NUM_IN_CHANNEL+device_idx],granularits[channel_idx*DISK_NUM_IN_CHANNEL+device_idx]);
 			}
 		}
 	}
+}
+
+bool check_disk_name(struct dlist_elem* pelem,int arg){
+	char* part_name = (char*) arg;
+	struct partition* part = member_to_entry(struct partition,part_tag,pelem);
+	if(!strcmp(part_name,part->name)){
+		return true;
+	}
+	return false;
+}
+
+void sys_mount(const char* part_name){
+	
+	struct dlist_elem* res = dlist_traversal(&partition_list,check_disk_name,(int)part_name);
+	if(res==NULL){
+		printk("sys_mount: partition %s not found!\n",part_name);
+		return;
+	}
+
+	if(cur_part!=NULL&&cur_part->block_bitmap.bits!=NULL){
+		// printk("remove block bitmap\n");
+		sys_free(cur_part->block_bitmap.bits);
+		cur_part->block_bitmap.btmp_bytes_len = 0;
+	}
+
+	if(cur_part!=NULL&&cur_part->inode_bitmap.bits!=NULL){
+		// printk("remove inode bitmap\n");
+		sys_free(cur_part->inode_bitmap.bits);
+		cur_part->inode_bitmap.btmp_bytes_len = 0;
+	}
+
+	if(cur_part!=NULL){
+		close_root_dir(cur_part);
+		printk("close root directory\n");
+	} 
+
+	dlist_traversal(&partition_list,mount_partition,(int)part_name);
+	open_root_dir(cur_part);
+	printk("partition %s mounted\n", cur_part->name);
 }

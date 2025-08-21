@@ -36,7 +36,8 @@ enum SYSCALL_NR {
 	SYS_PIPE,
 	SYS_FD_REDIRECT,
 	SYS_FREE_MEM,
-	SYS_DISK_INFO
+	SYS_DISK_INFO,
+	SYS_MOUNT
 };
 
 
@@ -74,7 +75,7 @@ extern void readraw(const char* disk_name,uint32_t lba,const char* filename,uint
 extern int32_t pipe(int32_t pipefd[2]);
 extern void fd_redirect(uint32_t old_local_fd, uint32_t new_local_fd);
 extern void help(void);
-extern uint32_t free_mem(void);
+extern void free_mem(void);
 extern void disk_info(void);
 
 #endif

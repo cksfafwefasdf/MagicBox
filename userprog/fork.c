@@ -7,6 +7,7 @@
 #include "interrupt.h"
 #include "dlist.h"
 #include "fork.h"
+#include "stdio-kernel.h"
 
 extern void intr_exit(void); // defined in  kernel.s
 static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,struct task_struct* parent_thread){

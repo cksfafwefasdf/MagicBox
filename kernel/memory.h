@@ -50,6 +50,7 @@ struct mem_block_desc{
 	struct dlist free_list;
 };
 
+
 extern struct pool kernel_pool,user_pool; // phisical mem pool
 extern void mem_init(void);
 extern uint32_t* pde_ptr(uint32_t vaddr);
@@ -66,7 +67,7 @@ extern void mfree_page(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt);
 extern void pfree(uint32_t pg_phy_addr);
 extern void* get_a_page_without_op_vaddrbitmap(enum pool_flags pf,uint32_t vaddr);
 extern void free_a_phy_page(uint32_t pg_phy_addr);
-extern uint32_t sys_free_mem(void);
+extern void sys_free_mem(void);
 
 extern uint32_t mem_bytes_total;
 #endif

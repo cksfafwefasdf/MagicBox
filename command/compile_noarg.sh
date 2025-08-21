@@ -8,7 +8,7 @@
 # 	fi
 # 	exit
 # fi
-
+# ENTRY_POINT=0x8049000
 BUILD="./build"
 BIN="prog_no_arg"
 LIB="../lib"
@@ -19,6 +19,7 @@ DD_IN=$BUILD/$BIN
 DD_OUT="/opt/bochs/hd60M.img"
 
 gcc-4.4 $CFLAGS -I $LIB -o $BUILD/$BIN".o" $BIN".c"
+# ld -m elf_i386 -Ttext $ENTRY_POINT -e main $BUILD/$BIN".o" $OBJS -o $BUILD/$BIN
 ld -m elf_i386 -e main $BUILD/$BIN".o" $OBJS -o $BUILD/$BIN
 SEC_CNT=$(ls -l $BUILD/$BIN|awk '{printf("%d",($5+511)/512)}')
 

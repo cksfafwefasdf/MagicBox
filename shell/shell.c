@@ -94,6 +94,8 @@ static cmd_execute(uint32_t argc,char** argv){
 		buildin_free_mem(argc,argv);
 	}else if(!strcmp("df",argv[0])){
 		buildin_df(argc,argv);
+	}else if(!strcmp("mount",argv[0])){
+		buildin_mount(argc,argv);
 	}else{
 		printf("try external command '%s'\n",argv[0]);
 		

@@ -183,8 +183,8 @@ void ide_init(){
 		disk_size[d_idx] = 0;
 		uint32_t ecx = *disk_param_addr++;
 		uint32_t edx = *disk_param_addr++;
-		printk("ecx: %x",ecx);
-		printk("edx: %x",edx);
+		// printk("ecx: %x",ecx);
+		// printk("edx: %x",edx);
 		uint32_t cylinders = (((ecx&0xc0)<<2)|((ecx&0xff00)>>8))+1;
 		uint32_t heads = ((edx&0xff00)>>8)+1;
 		uint32_t sectors = ecx&0x3f;

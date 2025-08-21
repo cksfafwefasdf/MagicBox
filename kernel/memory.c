@@ -33,6 +33,7 @@ struct arena{
 	bool large; // when malloc above 1024Bytes, large is true
 };
 
+
 struct mem_block_desc k_block_descs[DESC_TYPE_CNT];
 
 struct pool kernel_pool,user_pool;
@@ -406,7 +407,7 @@ void* sys_malloc(uint32_t size){
 		struct dlist_elem *tmp = dlist_pop_front(&(descs[desc_idx].free_list));
 		b = member_to_entry(struct mem_block,free_elem,tmp);
 		memset(b,0,descs[desc_idx].block_size);
-		
+
 		a= block2arena(b);
 		a->cnt--;
 		lock_release(&mem_pool->lock);
@@ -581,15 +582,24 @@ bool sum_free_list(struct dlist_elem *elem, int arg){
 	return false;
 }
 
-uint32_t sys_free_mem(){
-	uint32_t free_pages = bitmap_count(&user_pool.pool_bitmap)+bitmap_count(&kernel_pool.pool_bitmap);
+void sys_free_mem(){
+	// KF: kernel fragment memory
+	// KP: kernel free page memory
+	// UP: user free page memory
+	uint32_t up = bitmap_count(&kernel_pool.pool_bitmap)*PG_SIZE;
+	uint32_t kp = bitmap_count(&user_pool.pool_bitmap)*PG_SIZE;
 	int i;
-	uint32_t fragment_space = 0;
+	uint32_t kf = 0;
 	for(i=0;i<DESC_TYPE_CNT;i++){
 		if(dlist_empty(&k_block_descs[i].free_list)) continue;
 		uint32_t free_elem_num = 0;
 		dlist_traversal(&k_block_descs[i].free_list,sum_free_list,&free_elem_num);
-		fragment_space += free_elem_num*k_block_descs[i].block_size;
+		kf += free_elem_num*k_block_descs[i].block_size;
 	}
-	return free_pages*PG_SIZE + fragment_space;
+	uint32_t user_total = mem_bytes_total/2;
+	uint32_t kernel_total = mem_bytes_total/2;
+	printk("total\tfree\tused\t\n%d\t%d\t%d\n",mem_bytes_total,kf+kp+up, mem_bytes_total-(kf+kp+up));
+	printk("total[K]: %d\ttotal[U]: %d\nfree[KF+KP]: %d+%d\tfree[UP]: %d\nused[K]: %d\tused[U]: %d\n",kernel_total,user_total,kf,kp,up,kernel_total-kf-kp,user_total-up);
+	// printk("free[KF+KP]: %d+%d\tfree[UP]: %d\nused[K]: %d\tused[U]: %d\n",kf,kp,up,kernel_total-kf-kp,user_total-up);
+	// printk("total[K+U]\tfree[(KF+KP)+UP]\tused[K+U]\t\n%d+%d\t(%d+%d)+%d\t%d+%d\n",kernel_total,user_total,kf, kp,up,kernel_total-kf-kp,user_total-up);
 }

@@ -8,6 +8,9 @@
 #include "exec.h"
 #include "stdio.h"
 #include "syscall.h"
+#include "stdio-kernel.h"
+#include "debug.h"
+#include "file.h"
 
 extern void intr_exit;
 
@@ -27,7 +30,9 @@ static bool segment_load(int32_t fd,uint32_t offset,uint32_t filesz,uint32_t vad
 
 	uint32_t page_idx = 0;
 	uint32_t vaddr_page = vaddr_first_page;
-	
+
+	// printk("segment_load:::before res: %d\n",res);
+
 	while(page_idx<occupy_pages){
 		uint32_t* pde = pde_ptr(vaddr_page);
 		uint32_t* pte = pte_ptr(vaddr_page);
@@ -40,6 +45,12 @@ static bool segment_load(int32_t fd,uint32_t offset,uint32_t filesz,uint32_t vad
 		page_idx++;
 	}
 
+	// res = bitmap_bit_check(&cur->userprog_vaddr,bit_idx);
+	// printk("segment_load:::after res: %d\n",res);
+	// while(1);
+
+	// printk("prog_size: %d\n",prog_size);
+	// while(1);
 	sys_lseek(fd,offset,SEEK_SET);
 	sys_read(fd,(void*)vaddr,filesz);
 	
@@ -139,6 +150,10 @@ static int32_t load(const char* pathname){
 	Elf32_Half prog_header_size = elf_header.e_phentsize;
 
 	uint32_t prog_idx = 0;
+
+	int32_t global_fd = fd_local2global(fd);
+	ASSERT(global_fd!=-1);
+	prog_size = file_table[global_fd].fd_inode->i_size;
 	
 	while(prog_idx<elf_header.e_phnum){
 		
@@ -161,6 +176,7 @@ static int32_t load(const char* pathname){
 		prog_header_offset+=elf_header.e_phentsize;
 		prog_idx++;
 	}
+	prog_size = 0;
 
 	ret = elf_header.e_entry;
 
