@@ -1,6 +1,6 @@
 #ifndef __FS_SUPER_BLOCK_H
 #define __FS_SUPER_BLOCK_H
-#include "../lib/stdint.h"
+#include "stdint.h"
 
 struct super_block{
 	uint32_t magic; // the type of the file system

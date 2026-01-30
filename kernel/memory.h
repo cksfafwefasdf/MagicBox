@@ -27,6 +27,14 @@
 // so bitmap-base is 0xc009a000
 #define MEM_BITMAP_BASE 0xc009a000
 
+#define USER_PDE_NR 768
+#define USER_PTE_NR 1024
+// the size of the item in page table or page directory table
+#define TABLE_ITEM_SIZE_BYTES 4
+
+// the number of item in page directory table or page table
+#define TABLE_ITEM_NR (PG_SIZE/TABLE_ITEM_SIZE_BYTES)
+
 enum pool_flags{
 	PF_KERNEL = 1,
 	PF_USER = 2
@@ -50,6 +58,7 @@ struct mem_block_desc{
 	struct dlist free_list;
 };
 
+struct task_struct;
 
 extern struct pool kernel_pool,user_pool; // phisical mem pool
 extern void mem_init(void);
@@ -60,14 +69,25 @@ extern void* get_kernel_pages(uint32_t pg_cnt);
 extern void* get_user_pages(uint32_t pg_cnt);
 extern void* mapping_v2p(enum pool_flags pf,uint32_t vaddr);
 extern uint32_t addr_v2p(uint32_t vaddr);
-extern void* sys_malloc(uint32_t size);
 extern void block_desc_init(struct mem_block_desc* desc_array);
-extern void sys_free(void* ptr);
 extern void mfree_page(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt);
 extern void pfree(uint32_t pg_phy_addr);
 extern void* get_a_page_without_op_vaddrbitmap(enum pool_flags pf,uint32_t vaddr);
 extern void free_a_phy_page(uint32_t pg_phy_addr);
 extern void sys_free_mem(void);
+extern void copy_page_tables(struct task_struct* from,struct task_struct* to,void* page_buf);
+extern void set_page_read_only(struct task_struct* pthread);
+extern void sys_test(void);
+extern void swap_page(uint32_t err_code,void* err_vaddr);
+extern void write_protect(uint32_t err_code,void* err_vaddr);
+
+extern void* kmalloc(uint32_t size);
+extern void* umalloc(uint32_t size);
+extern void* do_alloc(uint32_t size, enum pool_flags PF);
+extern void ufree(void* ptr);
+extern void kfree(void* ptr);
+extern void do_free(void* ptr,enum pool_flags PF);
+
 
 extern uint32_t mem_bytes_total;
 #endif

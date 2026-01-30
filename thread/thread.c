@@ -97,7 +97,7 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 	pthread->cwd_inode_nr = 0;
 	pthread->parent_pid = -1;
 
-	pthread->stack_magic = 0x20030607;
+	pthread->stack_magic = STACK_MAGIC;
 }
 
 void thread_create(struct task_struct* pthread,thread_func* function,void* func_arg){
@@ -138,7 +138,7 @@ static void make_main_thread(void){
 	// 0xc009e000 ~ 0xc009efff is reserved for the kernel main thread
 	// therefore, we don't need to allocate an additional page for the kernel main thread
 	main_thread = get_running_task_struct();
-	init_thread(main_thread,"main",31);
+	init_thread(main_thread,"main",5);
 
 	ASSERT(!dlist_find(&thread_all_list,&main_thread->all_list_tag));
 	dlist_push_back(&thread_all_list,&main_thread->all_list_tag);
@@ -177,18 +177,6 @@ void schedule(){
 	switch_to(cur,next);
 }
 
-// void thread_environment_init(void){
-// 	put_str("thread_environment_init start\n");
-// 	dlist_init(&thread_ready_list);
-// 	dlist_init(&thread_all_list);
-// 	lock_init(&pid_allocate_lock);
-// 	make_main_thread();
-
-// 	idle_thread = thread_start("idle",10,idle,NULL);
-
-// 	put_str("thread_environment_init done\n");
-// }
-
 void thread_environment_init(void){
 	put_str("thread_environment_init start\n");
 	
@@ -196,12 +184,10 @@ void thread_environment_init(void){
 	dlist_init(&thread_all_list);
 	// lock_init(&pid_allocate_lock);
 	pid_pool_init();
-
-	process_execute(init,"init");
 	
 	make_main_thread();
 
-	idle_thread = thread_start("idle",10,idle,NULL);
+	idle_thread = thread_start("idle",3,idle,NULL);
 
 	put_str("thread_environment_init done\n");
 }
@@ -283,7 +269,7 @@ static void pad_print(char* buf,int32_t buf_len,void* ptr,char format){
 }
 
 
-static bool elem2thread_info(struct dlist_elem* pelem,int arg UNUSED){
+static bool elem2thread_info(struct dlist_elem* pelem,void* arg UNUSED){
 	struct task_struct* pthread = member_to_entry(struct task_struct,all_list_tag,pelem);
 
 	char out_pad[16] = {0};
@@ -320,8 +306,10 @@ static bool elem2thread_info(struct dlist_elem* pelem,int arg UNUSED){
 	pad_print(out_pad,16,&pthread->elapsed_ticks,'x');
 
 	memset(out_pad,0,16);
-	ASSERT(strlen(pthread->name)<17);
-	memcpy(out_pad,pthread->name,strlen(pthread->name));
+	// ASSERT(strlen(pthread->name)<17);
+	// memcpy(out_pad,pthread->name,strlen(pthread->name));
+	// 固定只拷15字节，多余的部分直接先截断
+	memcpy(out_pad,pthread->name,15);
 	strcat(out_pad,"\n");
 	sys_write(stdout_no,out_pad,strlen(out_pad));
 	return false;
@@ -376,7 +364,8 @@ void thread_exit(struct task_struct* thread_over,bool need_schedule){
 }
 
 
-static bool pid_check(struct dlist_elem* pelem,int32_t pid){
+static bool pid_check(struct dlist_elem* pelem,void* arg){
+	int32_t pid = (int32_t)arg;
 	struct task_struct* pthread = member_to_entry(struct task_struct,all_list_tag,pelem);
 	if(pthread->pid==pid){
 		return true;

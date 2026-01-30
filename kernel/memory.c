@@ -8,11 +8,16 @@
 #include "interrupt.h"
 #include "stdio-kernel.h"
 #include "bitmap.h"
-
+#include "thread.h"
+#include "process.h"
+#include "stdint.h"
 
 
 #define PDE_IDX(addr) ((addr&0xffc00000)>>22)
 #define PTE_IDX(addr) ((addr&0x003ff000)>>12)
+// find which start vaddr will map to this pte and pde
+#define PTE_TO_VADDR(pde_idx,pte_idx) (((pde_idx)<<22)|((pte_idx)<<12))
+#define PAGE_TABLE_VADDR(pde_idx) (0xffc00000|(pde_idx<<12))
 
 // phy-mem pool
 struct pool{
@@ -39,7 +44,11 @@ struct mem_block_desc k_block_descs[DESC_TYPE_CNT];
 struct pool kernel_pool,user_pool;
 struct virtual_addr kernel_vaddr;
 
+uint8_t* mem_map = NULL;
+
 uint32_t mem_bytes_total = 0;
+
+static void* palloc(struct pool* m_pool);
 
 
 static void mem_pool_init(uint32_t all_mem){
@@ -109,8 +118,10 @@ static void mem_pool_init(uint32_t all_mem){
 	
 	kernel_vaddr.vaddr_start = K_HEAP_START;
 	bitmap_init(&kernel_vaddr.vaddr_bitmap);
+
 	put_str("mem_pool_init done\n");
 }
+
 
 // allocate [pg_cnt] pages from [pool_flags] mem-pool
 static void* vaddr_alloc(enum pool_flags pf,uint32_t pg_cnt){
@@ -152,6 +163,7 @@ uint32_t* pde_ptr(uint32_t vaddr){
 }
 
 // allocate one phy-page from the phy_pool that m_pool points to
+// return the phy_addr
 static void* palloc(struct pool* m_pool){
 	int bit_idx = bitmap_scan(&m_pool->pool_bitmap,1);
 	if(bit_idx==-1) return NULL;
@@ -183,6 +195,13 @@ static void page_table_add(void* _vaddr,void* _page_phyaddr){
 		ASSERT(!(*pte&0x00000001));
 		*pte = (page_phyaddr|PG_US_U|PG_RW_W|PG_P_1);
 	}	
+
+
+	// 强制刷新 TLB：重新加载 CR3
+    // uint32_t pdt_paddr;
+    // asm volatile ("mov %%cr3, %0" : "=r" (pdt_paddr));
+    // asm volatile ("mov %0, %%cr3" : : "r" (pdt_paddr) : "memory");
+	asm volatile ("invlpg %0" : : "m" (*(char*)_vaddr) : "memory");
 }
 
 // allocate [pg_cnt] pages from [pf] phy-mem pool
@@ -310,29 +329,34 @@ static struct arena* block2arena(struct mem_block* b){
 	return (struct arena*)((uint32_t)b&0xfffff000);
 }
 
+// 专门给内核模块使用 (如文件系统、驱动)
+void* kmalloc(uint32_t size) {
+    return do_alloc(size, PF_KERNEL);
+}
+
+// 专门给用户进程请求内存使用 (如 sbrk 系统调用) */
+void* umalloc(uint32_t size) {
+    return do_alloc(size, PF_USER);
+}
+
+
 // the granularity of size is 1byte 
-void* sys_malloc(uint32_t size){
-	enum pool_flags PF;
+void* do_alloc(uint32_t size, enum pool_flags PF){
 	struct pool* mem_pool;
-	uint32_t pool_size;
 	struct mem_block_desc* descs;
 	struct task_struct* cur_thread = get_running_task_struct();
 
 	// which pool will we use
-	if(cur_thread->pgdir == NULL){
+	if(PF == PF_KERNEL){
 		// kernel pool
-		PF = PF_KERNEL;
-		pool_size = kernel_pool.pool_size;
 		mem_pool = &kernel_pool;
 		descs = k_block_descs;
 	}else{
-		PF = PF_USER;
-		pool_size = user_pool.pool_size;
 		mem_pool = &user_pool;
 		descs = cur_thread->u_block_desc;
 	}
 	// if mem allocated above the pool
-	if(!(size>0&&size<pool_size)){
+	if(!(size>0&&size<mem_pool->pool_size)){
 		return NULL;
 	}
 	
@@ -400,8 +424,6 @@ void* sys_malloc(uint32_t size){
 			intr_set_status(old_status);
 		}
 		
-		
-		
 		// dlist_pop_front returns  dlist_elem *
 		// mem_block has member dlist_elem
 		struct dlist_elem *tmp = dlist_pop_front(&(descs[desc_idx].free_list));
@@ -436,7 +458,8 @@ void pfree(uint32_t pg_phy_addr){
 // set P bit in pte zero 
 static void page_table_pte_remove(uint32_t vaddr){
 	uint32_t* pte = pte_ptr(vaddr);
-	*pte &= ~PG_P_1;
+	// *pte &= ~PG_P_1;
+	*pte = 0;
 	// refresh TLB
 	asm volatile ("invlpg %0"::"m"(vaddr):"memory");
 }
@@ -504,20 +527,22 @@ void mfree_page(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt){
 
 }
 
-void sys_free(void* ptr){
+void kfree(void* ptr) {
+    if (ptr == NULL) return;
+    do_free(ptr, PF_KERNEL);
+}
+
+void ufree(void* ptr) {
+    if (ptr == NULL) return;
+    do_free(ptr, PF_USER);
+}
+
+// 核心的内存释放引擎
+void do_free(void* ptr,enum pool_flags PF){
 	ASSERT(ptr!=NULL);
 	if(ptr!=NULL){
-		enum pool_flags PF;
-		struct pool* mem_pool;
 
-		if(get_running_task_struct()->pgdir==NULL){
-			ASSERT((uint32_t)ptr>=K_HEAP_START);
-			PF = PF_KERNEL;
-			mem_pool = &kernel_pool;
-		}else{
-			PF = PF_USER;
-			mem_pool = &user_pool;
-		}
+		struct pool* mem_pool = (PF == PF_KERNEL) ? &kernel_pool : &user_pool;
 
 		lock_acquire(&mem_pool->lock);
 		struct mem_block* b = ptr;
@@ -575,7 +600,7 @@ void free_a_phy_page(uint32_t pg_phy_addr){
 }
 
 // this funciotn is called by dlist_traversal
-bool sum_free_list(struct dlist_elem *elem, int arg){
+static bool sum_free_list(struct dlist_elem *elem UNUSED, void* arg){
 	uint32_t* free_elem_num = (uint32_t*) arg;
 	*free_elem_num += 1;
 	// to ensure traverse the whole list
@@ -593,7 +618,7 @@ void sys_free_mem(){
 	for(i=0;i<DESC_TYPE_CNT;i++){
 		if(dlist_empty(&k_block_descs[i].free_list)) continue;
 		uint32_t free_elem_num = 0;
-		dlist_traversal(&k_block_descs[i].free_list,sum_free_list,&free_elem_num);
+		dlist_traversal(&k_block_descs[i].free_list,sum_free_list,(int)&free_elem_num);
 		kf += free_elem_num*k_block_descs[i].block_size;
 	}
 	uint32_t user_total = mem_bytes_total/2;
@@ -602,4 +627,102 @@ void sys_free_mem(){
 	printk("total[K]: %d\ttotal[U]: %d\nfree[KF+KP]: %d+%d\tfree[UP]: %d\nused[K]: %d\tused[U]: %d\n",kernel_total,user_total,kf,kp,up,kernel_total-kf-kp,user_total-up);
 	// printk("free[KF+KP]: %d+%d\tfree[UP]: %d\nused[K]: %d\tused[U]: %d\n",kf,kp,up,kernel_total-kf-kp,user_total-up);
 	// printk("total[K+U]\tfree[(KF+KP)+UP]\tused[K+U]\t\n%d+%d\t(%d+%d)+%d\t%d+%d\n",kernel_total,user_total,kf, kp,up,kernel_total-kf-kp,user_total-up);
+}
+// un-write protect page
+static void un_wp_page(uint32_t * v_pte_ptr){
+	printk("un_wp_page:::*v_pte_ptr: %x\n", *v_pte_ptr);
+}
+
+void copy_page_tables(struct task_struct* from,struct task_struct* to,void* page_buf){
+	ASSERT(page_buf!=NULL);
+	memset(page_buf,0,PG_SIZE);
+	enum intr_status old_status = intr_disable();
+	uint32_t from_pde_idx = 0;
+	// when v_pde_ptr++, the addr +4
+	// the size of pde is 4Byte, pte is the same.
+	uint32_t* from_pgdir_vaddr =  from->pgdir;
+	uint32_t* v_pde_ptr = NULL;
+	
+	for(from_pde_idx=0;from_pde_idx<USER_PDE_NR;from_pde_idx++){
+		// printk("from_pde_idx: %d\n",from_pde_idx);
+		v_pde_ptr = from_pde_idx+from_pgdir_vaddr;
+		uint32_t pde_item =  *(v_pde_ptr);
+		if(!(pde_item&0x00000001)) continue;
+		// create pde, pde can be writen
+		uint32_t to_page_table_phy_addr = (uint32_t)palloc(&kernel_pool);
+		// printk("to_page_table_phy_addr: %x\n",to_page_table_phy_addr);
+		to->pgdir[from_pde_idx] = to_page_table_phy_addr|PG_US_U|PG_RW_W|PG_P_1;
+		// printk("pde_item high 20bits: %x\n",pde_item>>12);
+		// copy the page table
+		// construct the vaddr of the page table
+		uint32_t page_table_vaddr = 0xffc00000|(from_pde_idx<<12);
+		memcpy(page_buf,(void*)page_table_vaddr,PG_SIZE);
+		page_dir_activate(to);
+		memcpy((void*)page_table_vaddr,page_buf,PG_SIZE);
+		page_dir_activate(from);
+	}
+
+	intr_set_status(old_status);
+}
+
+void set_page_read_only(struct task_struct* pthread){
+	uint32_t* pgdir_addr =  pthread->pgdir;
+	uint32_t* v_pde_ptr = NULL;
+	uint32_t* v_pte_ptr = NULL;
+	uint32_t pde_idx = 0,pte_idx = 0;
+	for(pde_idx=0;pde_idx<USER_PDE_NR;pde_idx++){
+		v_pde_ptr = pgdir_addr+pde_idx;
+		uint32_t pde_item = *v_pde_ptr;
+		if(!pde_item&0x00000001) continue;
+		uint32_t* page_table_addr = (uint32_t*)PAGE_TABLE_VADDR(pde_idx);
+		for(pte_idx=0;pte_idx<USER_PTE_NR;pte_idx++){
+			v_pte_ptr = page_table_addr+pte_idx;
+			if(!((*v_pte_ptr)&0xfffff000)) continue;
+			if((*v_pte_ptr)&0x00000001){
+				if((*v_pte_ptr)&PG_RW_W){
+					// set RW as 0, readonly
+					(*v_pte_ptr)&=(~PG_RW_W);
+					printk("pde_idx: %d, pte_idx: %d\n", pde_idx, pte_idx);
+					printk("set_page_read_only:::after *v_pte_ptr: %x\n",*v_pte_ptr);
+					printk("set_page_read_only:::after v_pte_ptr: %x\n",v_pte_ptr);
+					// vaddr_by_pte = (uint32_t*)((pde_idx<<22)|(pte_idx<<12));
+				}
+			}else{
+				// has pte but do not in the memory, need swap
+				PANIC("need swap!\n");
+			}
+		}
+	}
+	printk("set_page_read_only:::refresh TLB start\n");
+	// refreash the TLB
+	page_dir_activate(get_running_task_struct());
+	// uint32_t* va = 0xbffff000;
+	// *va = 666;
+	// while(1);
+	printk("set_page_read_only:::refresh TLB done\n");
+}
+
+void swap_page(uint32_t err_code,void* err_vaddr){
+	printk("swap_page:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
+	while (1);
+	
+}
+
+void write_protect(uint32_t err_code,void* err_vaddr){
+	printk("kernel_vaddr.vaddr_start: %x\n", kernel_vaddr.vaddr_start);
+	if(err_vaddr>=0xC0000000){
+		PANIC("kernel write protection error");
+	}
+	
+	printk("write_protect:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
+	un_wp_page(pte_ptr(err_vaddr));
+	while(1);
+
+}
+
+
+void sys_test(){
+	set_page_read_only(get_running_task_struct());
+	// printk("sys_test:::thread name: %s\n",get_running_task_struct()->name);
+	printk("sys_test:::set_page_read_only done\n");
 }

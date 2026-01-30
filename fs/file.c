@@ -4,6 +4,7 @@
 #include "stdio-kernel.h"
 #include "thread.h"
 #include "ide.h"
+#include "ide_buffer.h"
 #include "super_block.h"
 #include "fs.h"
 #include "debug.h"
@@ -15,7 +16,6 @@
 
 // System-wide Open File Table
 struct file file_table[MAX_FILE_OPEN_IN_SYSTEM];
-uint32_t prog_size = 0; // the size of the program being executed
 
 
 int32_t get_free_slot_in_global(void){
@@ -93,14 +93,14 @@ void bitmap_sync(struct partition* part,uint32_t bit_idx,enum bitmap_type btmp_t
 			PANIC("unknown bitmap type!!!\n");
 			return;
 	}
-	ide_write(part->my_disk,sec_lba,bitmap_off,1);
+	bwrite_multi(part->my_disk,sec_lba,bitmap_off,1);
 }
 
 // create a regular file
 int32_t file_create(struct dir* parent_dir,char* filename,uint8_t flag){
-	void* io_buf = sys_malloc(SECTOR_SIZE*2);
+	void* io_buf = kmalloc(SECTOR_SIZE*2);
 	if(io_buf==NULL){
-		printk("in file_create: sys_malloc for io_buf failed!\n");
+		printk("in file_create: kmalloc for io_buf failed!\n");
 		return -1;
 	}
 
@@ -114,21 +114,19 @@ int32_t file_create(struct dir* parent_dir,char* filename,uint8_t flag){
 	
 	// malloc space for inode
 	// this space should be in the kernel heap space
-	struct task_struct* cur =  get_running_task_struct();
-	uint32_t* pgdir_bk =  cur->pgdir;
-	cur->pgdir = NULL;
-	struct inode* new_file_inode = (struct inode*)sys_malloc(sizeof(struct inode));
-	cur->pgdir = pgdir_bk;
-
+	
+	struct inode* new_file_inode = (struct inode*)kmalloc(sizeof(struct inode));
+	
 
 	if(new_file_inode==NULL){
-		printk("in file_create: sys_malloc for inode failed!\n");
+		printk("in file_create: kmalloc for inode failed!\n");
 		rollback_step = 1;
 		goto rollback;
 	}
-	inode_init(inode_no,new_file_inode);
-	// printk("file_create:::new_file_inode addr: %x\n",new_file_inode);
 
+	inode_init(inode_no,new_file_inode,FT_REGULAR);
+	
+	// printk("file_create:::new_file_inode addr: %x\n",new_file_inode);
 	int fd_idx = get_free_slot_in_global();
 	if(fd_idx==-1){
 		printk("exceed max open files!\n");
@@ -160,7 +158,7 @@ int32_t file_create(struct dir* parent_dir,char* filename,uint8_t flag){
 	dlist_push_front(&cur_part->open_inodes,&new_file_inode->inode_tag);
 	new_file_inode->i_open_cnts = 1;
 
-	sys_free(io_buf);
+	kfree(io_buf);
 	return pcb_fd_install(fd_idx);
 
 rollback:
@@ -168,16 +166,12 @@ rollback:
 		case 3:
 			memset(&file_table[fd_idx],0,sizeof(struct file));
 		case 2:
-			cur =  get_running_task_struct();
-			uint32_t* pgdir_bk =  cur->pgdir;
-			cur->pgdir = NULL;
-			sys_free(new_file_inode);
-			cur->pgdir = pgdir_bk;
+			kfree(new_file_inode);
 		case 1:
 			bitmap_set(&cur_part->inode_bitmap,inode_no,0);
 			break;
 	}
-	sys_free(io_buf);
+	kfree(io_buf);
 	return -1;
 }
 
@@ -225,14 +219,16 @@ int32_t file_write(struct file* file,const void* buf,uint32_t count){
 		printk("exceed max file_size %d bytes, write file failed!\n",BLOCK_SIZE*TOTAL_BLOCK_COUNT);
 		return -1;
 	}
-	uint8_t* io_buf = sys_malloc(SECTOR_SIZE);
+	// since the file may span 2 sectors
+	// we need allocate SECTOR_SIZE*2 bytes for io_buf
+	uint8_t* io_buf = kmalloc(SECTOR_SIZE*2);
 	if(io_buf==NULL){
-		printk("file_write: sys_malloc for io_buf failed!\n");
+		printk("file_write: kmalloc for io_buf failed!\n");
 		return -1;
 	}
-	uint32_t* all_blocks_addr = (uint32_t*) sys_malloc(TOTAL_BLOCK_COUNT*ADDR_BYTES_32BIT);
+	uint32_t* all_blocks_addr = (uint32_t*) kmalloc(TOTAL_BLOCK_COUNT*ADDR_BYTES_32BIT);
 	if(all_blocks_addr==NULL){
-		printk("file_write: sys_malloc for all blocks failed!\n");
+		printk("file_write: kmalloc for all blocks failed!\n");
 		return -1;
 	}
 
@@ -279,7 +275,7 @@ int32_t file_write(struct file* file,const void* buf,uint32_t count){
 			uint32_t tfflib = DIRECT_INDEX_BLOCK;
 			ASSERT(file->fd_inode->i_sectors[tfflib]!=0);
 			indirect_block_table = file->fd_inode->i_sectors[tfflib];
-			ide_read(cur_part->my_disk,indirect_block_table,all_blocks_addr+tfflib,1);
+			bread_multi(cur_part->my_disk,indirect_block_table,all_blocks_addr+tfflib,1);
 		}
 	}else{
 		if(file_will_use_blocks<=DIRECT_INDEX_BLOCK){
@@ -337,14 +333,14 @@ int32_t file_write(struct file* file,const void* buf,uint32_t count){
 
 				block_idx++;
 			}
-			ide_write(cur_part->my_disk,indirect_block_table,all_blocks_addr+12,1);
+			bwrite_multi(cur_part->my_disk,indirect_block_table,all_blocks_addr+12,1);
 		}else if(file_has_used_blocks>DIRECT_INDEX_BLOCK){
 			// the first first-level index block
 			int tfflib = DIRECT_INDEX_BLOCK;
 			ASSERT(file->fd_inode->i_sectors[tfflib]!=0);
 			indirect_block_table = file->fd_inode->i_sectors[tfflib];
 
-			ide_read(cur_part->my_disk,indirect_block_table,all_blocks_addr+12,1);
+			bread_multi(cur_part->my_disk,indirect_block_table,all_blocks_addr+12,1);
 
 			block_idx = file_has_used_blocks;
 
@@ -359,7 +355,7 @@ int32_t file_write(struct file* file,const void* buf,uint32_t count){
 				block_bitmap_idx = block_lba - cur_part->sb->data_start_lba;
 				bitmap_sync(cur_part,block_bitmap_idx,BLOCK_BITMAP);
 			}
-			ide_write(cur_part->my_disk,indirect_block_table,all_blocks_addr+12,1);
+			bwrite_multi(cur_part->my_disk,indirect_block_table,all_blocks_addr+12,1);
 		}
 	}
 	// To mark the last block containing valid data with free space
@@ -376,11 +372,11 @@ int32_t file_write(struct file* file,const void* buf,uint32_t count){
 
 		chunk_size = size_left<sec_left_bytes?size_left:sec_left_bytes;
 		if(last_valid_block_with_space){
-			ide_read(cur_part->my_disk,sec_lba,io_buf,1);
+			bread_multi(cur_part->my_disk,sec_lba,io_buf,1);
 			last_valid_block_with_space = false;
 		}
 		memcpy(io_buf+sec_off_bytes,src,chunk_size);
-		ide_write(cur_part->my_disk,sec_lba,io_buf,1);
+		bwrite_multi(cur_part->my_disk,sec_lba,io_buf,1);
 		printk("file write at lba 0x%x\n",sec_lba);
 		
 		src += chunk_size;
@@ -390,8 +386,8 @@ int32_t file_write(struct file* file,const void* buf,uint32_t count){
 		size_left-=chunk_size;
 	}
 	inode_sync(cur_part,file->fd_inode,io_buf);
-	sys_free(all_blocks_addr);
-	sys_free(io_buf);
+	kfree(all_blocks_addr);
+	kfree(io_buf);
 	return bytes_written;
 }
 
@@ -407,15 +403,19 @@ int32_t file_read(struct file* file,void* buf,uint32_t count){
 			return -1;
 		}
 	}
-	uint8_t *io_buf = sys_malloc(BLOCK_SIZE);
+	uint8_t *io_buf = kmalloc(BLOCK_SIZE);
+	
 	if(io_buf==NULL){
-		printk("file_raed: sys_malloc for io_buf failed!\n");
+		printk("file_read: kmalloc for io_buf failed!\n");
 		return -1;
 	} 
 	
-	uint32_t* all_blocks_addr = (uint32_t*)sys_malloc(TOTAL_BLOCK_COUNT*ADDR_BYTES_32BIT);
+	uint32_t* all_blocks_addr = (uint32_t*)kmalloc(TOTAL_BLOCK_COUNT*ADDR_BYTES_32BIT);
+
+	// printk("file_read:::all_blocks_addr addr: %x\n",all_blocks_addr);
+	
 	if(all_blocks_addr==NULL){
-		printk("file_read: sys_malloc for all_blocks_addr failed!\n");
+		printk("file_read: kmalloc for all_blocks_addr failed!\n");
 		return -1;
 	}
 
@@ -436,7 +436,7 @@ int32_t file_read(struct file* file,void* buf,uint32_t count){
 			all_blocks_addr[block_idx] = file->fd_inode->i_sectors[block_idx];
 		}else{
 			indirect_block_table = file->fd_inode->i_sectors[12];
-			ide_read(cur_part->my_disk,indirect_block_table,all_blocks_addr+12,1);
+			bread_multi(cur_part->my_disk,indirect_block_table,all_blocks_addr+12,1);
 		}
 	}else{
 		if(block_read_end_idx<DIRECT_INDEX_BLOCK){
@@ -456,7 +456,7 @@ int32_t file_read(struct file* file,void* buf,uint32_t count){
 			ASSERT(file->fd_inode->i_sectors[tfflib]!=0);
 
 			indirect_block_table = file->fd_inode->i_sectors[tfflib];
-			ide_read(cur_part->my_disk,indirect_block_table,all_blocks_addr+tfflib,1);
+			bread_multi(cur_part->my_disk,indirect_block_table,all_blocks_addr+tfflib,1);
 
 		}else{
 						// the first first-level index block
@@ -464,7 +464,7 @@ int32_t file_read(struct file* file,void* buf,uint32_t count){
 			ASSERT(file->fd_inode->i_sectors[tfflib]!=0);
 			ASSERT(file->fd_inode->i_sectors[tfflib]!=0);
 			indirect_block_table = file->fd_inode->i_sectors[tfflib];
-			ide_read(cur_part->my_disk,indirect_block_table,all_blocks_addr+tfflib,1);
+			bread_multi(cur_part->my_disk,indirect_block_table,all_blocks_addr+tfflib,1);
 		}
 	}
 
@@ -476,23 +476,21 @@ int32_t file_read(struct file* file,void* buf,uint32_t count){
 		sec_off_bytes = file->fd_pos%BLOCK_SIZE;
 		sec_left_bytes = BLOCK_SIZE-sec_off_bytes;
 		chunk_size = size_left<sec_left_bytes?size_left:sec_left_bytes;
-
+		ASSERT(sec_idx < TOTAL_BLOCK_COUNT);
 		memset(io_buf,0,BLOCK_SIZE);
 		
-		ide_read(cur_part->my_disk,sec_lba,io_buf,1);
+		bread_multi(cur_part->my_disk,sec_lba,io_buf,1);
+
 		memcpy(buf_dst,io_buf+sec_off_bytes,chunk_size);
 		buf_dst+=chunk_size;
 		file->fd_pos+=chunk_size;
 		bytes_read+=chunk_size;
 		size_left-=chunk_size;
 	}
-	
-	if((all_blocks_addr<USER_VADDR_START||all_blocks_addr>=USER_VADDR_START+prog_size)||prog_size==0){
-		// printk("sys_free(all_blocks_addr)!\n");
-		sys_free(all_blocks_addr);
-	}
 
-	sys_free(io_buf);
+	
+	kfree(all_blocks_addr);
+	kfree(io_buf);
 
 	return bytes_read;
 }

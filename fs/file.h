@@ -1,9 +1,10 @@
 #ifndef __FS_FILE_H
 #define __FS_FILE_H
 
-#include "../lib/stdint.h"
-#include "../device/ide.h"
+#include "stdint.h"
+#include "ide.h"
 #include "dir.h"
+#include "fs_types.h"
 
 #define MAX_FILE_OPEN_IN_SYSTEM 32
 
@@ -11,13 +12,10 @@ struct file{
 	uint32_t fd_pos;
 	uint32_t fd_flag;
 	struct inode* fd_inode;
+	enum file_types f_type;
 };
 
-enum std_fd{
-	stdin_no,
-	stdout_no,
-	stderr_no
-};
+
 
 enum bitmap_type{
 	INODE_BITMAP,

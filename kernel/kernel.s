@@ -50,7 +50,7 @@ intr_exit:
 	pop fs
 	pop es
 	pop ds
-	add esp,4 ;skip the ERROR_CODE or ZERO,esp point eip
+	add esp,4 ;skip the ERROR_CODE or ZERO, esp to eip
 	iretd
 
 extern syscall_table

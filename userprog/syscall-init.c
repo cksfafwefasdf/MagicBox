@@ -13,7 +13,7 @@
 #include "ide.h"
 #include "pipe.h"
 
-#define SYSCALL_NR 32
+#define SYSCALL_NR 64
 typedef void* syscall_func;
 syscall_func syscall_table[SYSCALL_NR];
 
@@ -38,8 +38,8 @@ void syscall_init(void){
 	syscall_table[SYS_GETPID] = sys_getpid;
 	syscall_table[SYS_WRITE] = sys_write;
 	// syscall_table[SYS_WRITE_INT] = sys_write_int;
-	syscall_table[SYS_MALLOC] = sys_malloc;
-	syscall_table[SYS_FREE] = sys_free;
+	syscall_table[SYS_MALLOC] = umalloc;
+	syscall_table[SYS_FREE] = ufree;
 	syscall_table[SYS_FORK] = sys_fork;
 	syscall_table[SYS_READ] = sys_read;
 	syscall_table[SYS_PUTCHAR] = console_put_char;
@@ -67,6 +67,9 @@ void syscall_init(void){
 	syscall_table[SYS_FREE_MEM] = sys_free_mem;
 	syscall_table[SYS_DISK_INFO] = sys_disk_info;
 	syscall_table[SYS_MOUNT] = sys_mount;
+	syscall_table[SYS_TEST] = sys_test;
+	syscall_table[SYS_READ_SECTORS] = sys_read_sectors;
 	
 	put_str("syscall_init done\n");
 }
+

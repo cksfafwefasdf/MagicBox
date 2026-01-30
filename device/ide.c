@@ -8,6 +8,9 @@
 #include "interrupt.h"
 #include "string.h"
 #include "fs.h"
+#include "ide_buffer.h"
+#include "global.h"
+#include "fs_types.h"
 
 #define reg_data(channel) (channel->port_base+0)
 #define reg_error(channel) (channel->port_base+1)
@@ -35,6 +38,10 @@
 #define CMD_IDENTIFY 0xec
 #define CMD_READ_SECTOR 0x20
 #define CMD_WRITE_SECTOR 0x30
+
+#define CMD_SET_MULTIPLE 0xC6 // 设置每次读取的块大小
+#define CMD_READ_MULTIPLE 0xC4 // 多扇区读取指令
+#define CMD_WRITE_MULTIPLE 0xC5  // 多扇区写入指令
 
 #define max_lba ((80*1024*1024/512)-1) // only surport 80MB disk
 
@@ -88,8 +95,20 @@ static bool busy_wait(struct disk* hd);
 static void swap_pairs_bytes(const char* dst,char* buf,uint32_t len);
 static void identify_disk(struct disk* hd);
 static void partition_scan(struct disk* hd,uint32_t ext_lba);
-static bool partition_info(struct dlist_elem* pelem,int arg UNUSED);
+static bool partition_info(struct dlist_elem* pelem,void* arg UNUSED);
 
+
+static void ide_set_multiple_mode(struct disk* hd, uint8_t sec_per_block) {
+    select_disk(hd);
+    outb(reg_sect_cnt(hd->my_channel), sec_per_block);
+    // 这里由于是在 ide_init 阶段，中断可能还没好，我们用同步方式
+    outb(reg_cmd(hd->my_channel), CMD_SET_MULTIPLE);
+    
+    // 必须等待硬盘处理完这个设置
+    if (!busy_wait(hd)) {
+        printk("Warning: disk %s does not support Multiple Mode\n", hd->name);
+    }
+}
 
 void intr_handler_hd(uint8_t irq_no){
 	ASSERT(irq_no==0x2e||irq_no==0x2f);
@@ -162,6 +181,7 @@ void ide_init(){
 			memset(hd->name,0,sizeof(hd->name));
 			sprintf(hd->name,"sd%c",'a'+channel_no*2+dev_no);
 			identify_disk(hd);
+			ide_set_multiple_mode(hd, SECTORS_PER_BLOCK); // 注入设置
 			if(dev_no!=0){
 				partition_scan(hd,0);
 			}
@@ -173,10 +193,10 @@ void ide_init(){
 	}
 
 	printk("\tall partition info\n");
-	dlist_traversal(&partition_list,partition_info,(int)NULL);
+	dlist_traversal(&partition_list,partition_info,NULL);
 
 	disk_num = *((uint8_t*)BIOS_DISK_NUM_ADDR);
-	disk_size = (uint32_t*)sys_malloc(disk_num * sizeof(uint32_t));
+	disk_size = (uint32_t*)kmalloc(disk_num * sizeof(uint32_t));
 	uint32_t* disk_param_addr = DISK_PARAM_ADDR;
 	int d_idx = 0;
 	for(d_idx=0;d_idx<disk_num;d_idx++){
@@ -190,6 +210,7 @@ void ide_init(){
 		uint32_t sectors = ecx&0x3f;
 		disk_size[d_idx] = cylinders*heads*sectors*SECTOR_SIZE;
 	}
+	
 	printk("ide_init done\n");
 }
 
@@ -203,7 +224,13 @@ static void select_disk(struct disk* hd){
 }
 
 static void select_sector(struct disk* hd,uint32_t lba,uint8_t sec_cnt){
-	ASSERT(lba<=max_lba);
+	if (lba > max_lba) {
+        struct task_struct* cur = get_running_task_struct();
+        printk("\n[IDE Error] Task:%s, CWD_Inode:%d, LBA:%x\n", 
+                cur->name, cur->cwd_inode_nr, lba);
+        // 若 CWD_Inode 还是旧的，则 sys_mount 的重置没生效
+        ASSERT(lba <= max_lba);
+    }
 	struct ide_channel* channel = hd->my_channel;
 
 	outb(reg_sect_cnt(channel),sec_cnt);
@@ -224,14 +251,16 @@ static void cmd_out(struct ide_channel* channel,uint8_t cmd){
 	outb(reg_cmd(channel),cmd);
 }
 
+
+
 static void read_from_sector(struct disk* hd,void* buf,uint8_t sec_cnt){
 	uint32_t size_in_byte;
 	if(sec_cnt==0){
 		// sec_cnt = 0 means 256 sectors
 		// otherwise sec_cnt = 0 is meanningless
-		size_in_byte = 256*SEC_SIZE;
+		size_in_byte = 256*SECTOR_SIZE;
 	}else{
-		size_in_byte = sec_cnt*SEC_SIZE;
+		size_in_byte = sec_cnt*SECTOR_SIZE;
 	}
 	// Since we write 16 bits at a time, [size_in_byte] should divide by 2
 	insw(reg_data(hd->my_channel),buf,size_in_byte/2);
@@ -240,9 +269,9 @@ static void read_from_sector(struct disk* hd,void* buf,uint8_t sec_cnt){
 static void write2sector(struct disk* hd,void* buf,uint8_t sec_cnt){
 	uint32_t size_in_byte;
 	if(sec_cnt==0){
-		size_in_byte = 256*SEC_SIZE;
+		size_in_byte = 256*SECTOR_SIZE;
 	}else{
-		size_in_byte = sec_cnt * SEC_SIZE;
+		size_in_byte = sec_cnt * SECTOR_SIZE;
 	}
 	outsw(reg_data(hd->my_channel),buf,size_in_byte/2);
 }
@@ -265,78 +294,68 @@ static bool busy_wait(struct disk* hd){
 	return false;
 }
 
-void ide_read(struct disk* hd,uint32_t lba,void* buf,uint32_t sec_cnt){
-	ASSERT(lba<=max_lba);
-	ASSERT(sec_cnt>0);
-	lock_acquire(&hd->my_channel->lock);
+void ide_read(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
+    lock_acquire(&hd->my_channel->lock);
 
-	// to indicate which disk will we use, master or slave
-	select_disk(hd);
+    // 告知起始地址和总扇区数
+    select_sector(hd, lba, sec_cnt); 
+    
+    // 发送多扇区读指令
+    cmd_out(hd->my_channel, CMD_READ_MULTIPLE);
 
-	uint32_t secs_op; // the number of sector in each operation
-	uint32_t secs_done = 0; // the sectors that we have processed.
-	while(secs_done<sec_cnt){
-		if((secs_done+256)<=sec_cnt){
-			// if the number of the sector that we haven't processed exceeds 256
-			// then the secs_op is 256
-			secs_op = 256;
-		}else{
-			secs_op = sec_cnt - secs_done;
-		}
-		// write LBA regs
-		select_sector(hd,lba+secs_done,secs_op);
-		// write command, start IO
-		cmd_out(hd->my_channel,CMD_READ_SECTOR);
-		// block this thread until the disk intr occurs
-		sema_wait(&hd->my_channel->wait_disk);
-		
-		// the operation below will be executed when this thread is awakened up by disk intr
-		if(!busy_wait(hd)){
-			char error[64];
-			sprintf(error,"%s read sector %d failed !!!\n",hd->name,lba);
-			PANIC(error);
-		}
+    uint32_t secs_done = 0;
+    while(secs_done < sec_cnt) {
+        // 标记期待中断并睡眠
+        hd->my_channel->expecting_intr = true;
+        sema_wait(&hd->my_channel->wait_disk); 
 
-		read_from_sector(hd,(void*)((uint32_t)buf+secs_done*512),secs_op);
-		secs_done+=secs_op;
-	}
-	lock_release(&hd->my_channel->lock);
+        // 计算本次中断触发后，硬盘缓冲区里准备好了多少扇区
+        // 如果剩余扇区数大于 Block 因子，则说明缓冲区里有整整一 Block
+        // 如果是最后一次中断，则读取剩下的所有扇区
+        uint32_t left_secs = sec_cnt - secs_done;
+        uint32_t secs_to_read = (left_secs < SECTORS_PER_BLOCK) ? left_secs : SECTORS_PER_BLOCK;
 
+        // 一口气用 insw 抽走这些数据（这是最快的地方）
+        read_from_sector(hd, (void*)((uint32_t)buf + secs_done * SECTOR_SIZE), secs_to_read);
+        
+        secs_done += secs_to_read;
+    }
+
+    lock_release(&hd->my_channel->lock);
 }
 
-// the procedures of ide_write are the same as ide_read
-void ide_write(struct disk* hd,uint32_t lba,void* buf,uint32_t sec_cnt){
-	ASSERT(lba<=max_lba);
-	ASSERT(sec_cnt>0);
-	lock_acquire(&hd->my_channel->lock);
 
-	select_disk(hd);
+void ide_write(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
+    lock_acquire(&hd->my_channel->lock);
 
-	uint32_t secs_op;
-	uint32_t secs_done = 0;
-	while(secs_done<sec_cnt){
-		if((secs_done+256)<=sec_cnt){
-			secs_op = 256;
-		}else{
-			secs_op =sec_cnt - secs_done;
-		}
-		select_sector(hd,lba+secs_done,secs_op);
+    // 告知起始地址和总扇区数
+    select_sector(hd, lba, sec_cnt);
+    
+    // 发送多扇区写指令
+    cmd_out(hd->my_channel, CMD_WRITE_MULTIPLE);
 
-		cmd_out(hd->my_channel,CMD_WRITE_SECTOR);
+    uint32_t secs_done = 0;
+    while (secs_done < sec_cnt) {
+        // 【重要】在开始写入第一块之前，必须确认硬盘已经准备好接收数据（BSY=0, DRQ=1）
+        if (!busy_wait(hd)) {
+            PANIC("ide_write: busy_wait timeout before write!");
+        }
 
-		if(!busy_wait(hd)){
-			char error[64];
-			sprintf(error,"%s write sector %d failed !!!\n",hd->name,lba);
-			PANIC(error);
-		}
+        // 计算本次要写入多少扇区（通常是 16 个，最后一次可能少于 16）
+        uint32_t left_secs = sec_cnt - secs_done;
+        uint32_t secs_to_write = (left_secs < SECTORS_PER_BLOCK) ? left_secs : SECTORS_PER_BLOCK;
 
-		write2sector(hd,(void*)((uint32_t)buf+secs_done*512),secs_op);
-		// block this thread while writing data to the disk
-		sema_wait(&hd->my_channel->wait_disk);
+        // 这里的 write2sector 内部会调用 outsw，一口气把数据刷进硬盘缓冲区
+        write2sector(hd, (void*)((uint32_t)buf + secs_done * SECTOR_SIZE), secs_to_write);
 
-		secs_done += secs_op;
-	}
-	lock_release(&hd->my_channel->lock);
+        // 写入一个 Block 后，硬盘会开始处理物理落盘，处理完后会发中断
+        hd->my_channel->expecting_intr = true;
+        sema_wait(&hd->my_channel->wait_disk);
+
+        secs_done += secs_to_write;
+    }
+
+    lock_release(&hd->my_channel->lock);
 }
 
 
@@ -377,8 +396,10 @@ static void identify_disk(struct disk* hd){
 }
 
 static void partition_scan(struct disk* hd,uint32_t ext_lba){
-	struct boot_sector* bs = sys_malloc(sizeof(struct boot_sector));
-	ide_read(hd,ext_lba,bs,1);
+	printk("Scanning LBA: %d\n", ext_lba); // 1. 确认递归深度
+	struct boot_sector* bs = kmalloc(sizeof(struct boot_sector));
+	printk("Malloc bs at: 0x%x\n", (uint32_t)bs); // 2. 确认堆地址是否正常
+	bread_multi(hd,ext_lba,bs,1);
 	uint8_t part_idx = 0;
 	struct partition_table_entry* p = bs->partition_table;
 
@@ -412,17 +433,17 @@ static void partition_scan(struct disk* hd,uint32_t ext_lba){
 		}
 		p++;
 	}
-	sys_free(bs);
+	kfree(bs);
 }
 
-static bool partition_info(struct dlist_elem* pelem,int arg UNUSED){
+static bool partition_info(struct dlist_elem* pelem,void* arg UNUSED){
 	struct partition* part = member_to_entry(struct partition,part_tag,pelem);
 	printk("\t\t%s start_lba:0x%x, sec_cnt:0x%x\n",part->name,part->start_lba,part->sec_cnt);
 	return false;
 }
 
 // read the disk without file system
-void sys_readraw(const char* disk_name,uint32_t lba,const char* filename,uint32_t file_size){
+void sys_readraw_old(const char* disk_name,uint32_t lba,const char* filename,uint32_t file_size){
 	struct disk* disk;
 	if(!strcmp("sda",disk_name)){
 		disk = &channels[0].devices[0];
@@ -433,12 +454,12 @@ void sys_readraw(const char* disk_name,uint32_t lba,const char* filename,uint32_
 		return ;
 	}
 	uint32_t sec_cnt =  DIV_ROUND_UP(file_size,SECTOR_SIZE);
-	void* buf =  sys_malloc(sec_cnt*SECTOR_SIZE);
+	void* buf =  kmalloc(sec_cnt*SECTOR_SIZE);
 	if(buf==NULL){
-		printf("sys_readraw: sys_malloc for buf failed!\n");
+		printf("sys_readraw: kmalloc for buf failed!\n");
 		return ;
 	}
-   	ide_read(disk,lba,buf,sec_cnt);
+   	bread_multi(disk,lba,buf,sec_cnt);
 	int32_t fd = sys_open(filename,O_CREATE|O_RDWR);
 
 	if(fd!=-1){
@@ -447,8 +468,83 @@ void sys_readraw(const char* disk_name,uint32_t lba,const char* filename,uint32_
 			while(1);
 		}
 	}
-	sys_free(buf);
+	kfree(buf);
 	sys_close(fd);
 }
 
+// 流式读取的readraw，防止文件过大导致堆空间被迅速耗尽
+void sys_readraw(const char* disk_name, uint32_t lba, const char* filename, uint32_t file_size) {
+    struct disk* disk;
+    if(!strcmp("sda", disk_name)) {
+        disk = &channels[0].devices[0];
+    } else if(!strcmp("sdb", disk_name)) {
+        disk = &channels[0].devices[1];
+    } else {
+        printk("unknown disk name!\n");
+        return;
+    }
 
+    // 动态计算缓冲区大小
+    uint32_t max_buf_size = PG_SIZE*4;
+    uint32_t buf_size;
+
+    if (file_size < max_buf_size) {
+        // 如果文件小于 16KB，按扇区大小向上对齐分配
+        // 比如文件 600 字节，分配 1024 字节，防止磁盘驱动写越界
+        buf_size = DIV_ROUND_UP(file_size, SECTOR_SIZE) * SECTOR_SIZE;
+    } else {
+        buf_size = max_buf_size;
+    }
+
+    void* buf = kmalloc(buf_size);
+    if (buf == NULL) {
+        printk("sys_readraw: kmalloc failed!\n");
+        return;
+    }
+
+    int32_t fd = sys_open(filename, O_CREATE | O_RDWR);
+    if (fd == -1) {
+        kfree(buf);
+        return;
+    }
+
+    uint32_t bytes_left = file_size;
+    uint32_t current_lba = lba;
+
+    // 循环读写
+    while (bytes_left > 0) {
+        // 本次实际要写回文件系统的字节数
+        uint32_t bytes_to_write = (bytes_left > buf_size) ? buf_size : bytes_left;
+        
+        // 本次从磁盘读取的扇区数（必须是整数个扇区）
+        uint32_t secs_to_read = DIV_ROUND_UP(bytes_to_write, SECTOR_SIZE);
+
+        bread_multi(disk, current_lba, buf, secs_to_read);
+
+        if (sys_write(fd, buf, bytes_to_write) == -1) {
+            printk("sys_readraw: write error!\n");
+            break;
+        }
+
+        bytes_left -= bytes_to_write;
+        current_lba += secs_to_read;
+    }
+
+    kfree(buf);
+    sys_close(fd);
+}
+
+// 对 bread_multi 在用户层面上的封装
+void sys_read_sectors(const char* hd_name, uint32_t lba, uint8_t* buf, uint32_t sec_cnt) {
+	struct disk* disk;
+    if(!strcmp("sda", hd_name)) {
+        disk = &channels[0].devices[0];
+    } else if(!strcmp("sdb", hd_name)) {
+        disk = &channels[0].devices[1];
+    } else {
+        printk("unknown disk name: %s!\n", hd_name);
+        return;
+    }
+
+    bread_multi(disk, lba, buf, sec_cnt);
+}

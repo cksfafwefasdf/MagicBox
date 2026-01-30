@@ -79,7 +79,7 @@ static void partition_format(struct partition* part){
 	struct disk* hd = part->my_disk; 
 
 	// write superblock to the no.1 sector (no.0 is obr)
-	ide_write(hd,part->start_lba+1,&sb,1);
+	bwrite_multi(hd,part->start_lba+1,&sb,1);
 	printk("\tsuper_block_lba:0x%x\n",part->start_lba+1);
 	
 	// find the biggest meta info
@@ -87,7 +87,7 @@ static void partition_format(struct partition* part){
 	uint32_t buf_size = sb.block_bitmap_sects>=sb.inode_bitmap_sects?sb.block_bitmap_sects:sb.inode_bitmap_sects;
 	buf_size = (buf_size>=sb.inode_table_sects?buf_size:sb.inode_table_sects)*SECTOR_SIZE;
 	
-	uint8_t* buf = (uint8_t*)sys_malloc(buf_size);
+	uint8_t* buf = (uint8_t*)kmalloc(buf_size);
 
 	// init block_bitmap and write it to sb.block_bitmap_lba
 	buf[0] |= 0x01; // 0th block is used for root dict, reserve it
@@ -101,14 +101,14 @@ static void partition_format(struct partition* part){
 	while(bit_idx<=block_bitmap_last_bit){
 		buf[block_bitmap_last_byte] &= ~(1<<bit_idx++);
 	}
-	ide_write(hd,sb.block_bitmap_lba,buf,sb.block_bitmap_sects);
+	bwrite_multi(hd,sb.block_bitmap_lba,buf,sb.block_bitmap_sects);
 
 
 	// init inode_bitmap and write it to sb.inode_bitmap_lba
 	// flush the buf
 	memset(buf,0,buf_size);
 	buf[0] |= 0x1; // reserve for root dict
-	ide_write(hd,sb.inode_bitmap_lba,buf,sb.inode_bitmap_sects);
+	bwrite_multi(hd,sb.inode_bitmap_lba,buf,sb.inode_bitmap_sects);
 
 	// init inode list and write it to sb.inode_table_lba
 	// flush the buf
@@ -117,8 +117,9 @@ static void partition_format(struct partition* part){
 	i->i_size = sb.dir_entry_size*2; // dict '.' and '..'
 	i->i_no = 0; // 0th is used for root dict 
 	i->i_sectors[0] = sb.data_start_lba;
+	i->i_type = FT_DIRECTORY;
 
-	ide_write(hd,sb.inode_table_lba,buf,sb.inode_table_sects);
+	bwrite_multi(hd,sb.inode_table_lba,buf,sb.inode_table_sects);
 
 	// write root dict to sb.data_start_lba
 	// write dict '.' and '..'
@@ -137,53 +138,41 @@ static void partition_format(struct partition* part){
 	p_de->f_type = FT_DIRECTORY;
 
 	// sb.data_start_lba has been allocated to the root dict which contains dict entries
-	ide_write(hd,sb.data_start_lba,buf,1);
+	bwrite_multi(hd,sb.data_start_lba,buf,1);
 	
-	sys_free(buf);
+	kfree(buf);
 	printk("\troot_dir_lba:0x%x\n",sb.data_start_lba);
 	printk("%s format done\n",part->name);
 }
 
-static bool mount_partition(struct dlist_elem* pelem,int arg){
+static bool mount_partition(struct dlist_elem* pelem,void* arg){
 	char* part_name = (char*) arg;
 	struct partition* part = member_to_entry(struct partition,part_tag,pelem);
 	if(!strcmp(part->name,part_name)){
 		cur_part = part;
 		struct disk* hd = cur_part->my_disk;
-
-		// struct super_block* sb_buf = (struct super_block*) sys_malloc(sizeof(struct super_block));
 		
-		// cur_part->sb = (struct super_block*) sys_malloc(sizeof(struct super_block));
-		// if(cur_part->sb == NULL||sb_buf==NULL){
-		// 	PANIC("alloc memory failed!");
-		// }
+		cur_part->block_bitmap.bits = (uint8_t*)kmalloc(cur_part->sb->block_bitmap_sects*SECTOR_SIZE);
+		cur_part->inode_bitmap.bits = (uint8_t*)kmalloc(cur_part->sb->inode_bitmap_sects*SECTOR_SIZE);
+		
 
-		// memset(sb_buf,0,SECTOR_SIZE);
-		// ide_read(hd,cur_part->start_lba+1,sb_buf,1);
-
-		// memcpy(cur_part->sb,sb_buf,sizeof(struct super_block));
-
-		cur_part->block_bitmap.bits = (uint8_t*)sys_malloc(cur_part->sb->block_bitmap_sects*SECTOR_SIZE);
-
+		
 		if(cur_part->block_bitmap.bits==NULL){
 			PANIC("alloc memory failed!");
 		}
 		cur_part->block_bitmap.btmp_bytes_len=cur_part->sb->block_bitmap_sects*SECTOR_SIZE;
-
-		ide_read(hd,cur_part->sb->block_bitmap_lba,cur_part->block_bitmap.bits,cur_part->sb->block_bitmap_sects);
-
-		cur_part->inode_bitmap.bits = (uint8_t*)sys_malloc(cur_part->sb->inode_bitmap_sects*SECTOR_SIZE);
 		
+		bread_multi(hd,cur_part->sb->block_bitmap_lba,cur_part->block_bitmap.bits,cur_part->sb->block_bitmap_sects);
+		
+	
 		if(cur_part->inode_bitmap.bits==NULL){
 			PANIC("alloc memory failed!");
 		}
 		cur_part->inode_bitmap.btmp_bytes_len = cur_part->sb->inode_bitmap_sects*SECTOR_SIZE;
-
-		ide_read(hd,cur_part->sb->inode_bitmap_lba,cur_part->inode_bitmap.bits,cur_part->sb->inode_bitmap_sects);
-
+		bread_multi(hd,cur_part->sb->inode_bitmap_lba,cur_part->inode_bitmap.bits,cur_part->sb->inode_bitmap_sects);
 		dlist_init(&cur_part->open_inodes);
 		
-		// sys_free(sb_buf);
+		// kfree(sb_buf);
 
 		printk("mount %s done!\n",part_name);
 		
@@ -219,19 +208,19 @@ void filesys_init(){
 				}
 
 				if(part->sec_cnt!=0){
-					struct super_block* sb_buf = (struct super_block*)sys_malloc(SECTOR_SIZE);
+					struct super_block* sb_buf = (struct super_block*)kmalloc(SECTOR_SIZE);
 					if(sb_buf==NULL){
 						PANIC("filesys_init: alloc memory failed!!!");
 					}
 					memset(sb_buf,0,SECTOR_SIZE);
-					ide_read(hd,part->start_lba+1,sb_buf,1);
+					bread_multi(hd,part->start_lba+1,sb_buf,1);
 					if(sb_buf->magic==FS_MAGIC_NUMBER){
 						printk("%s has filesystem\n",part->name);
 						part->sb = sb_buf;
 					} else{
 						printk("formatting %s's partition %s ......\n",hd->name,part->name);
 						partition_format(part);
-						ide_read(hd,part->start_lba+1,sb_buf,1);
+						bread_multi(hd,part->start_lba+1,sb_buf,1);
 						part->sb = sb_buf;
 					}
 					
@@ -251,10 +240,10 @@ void filesys_init(){
 		}
 		channel_no++;
 	}
-	// sys_free(sb_buf);
+	// kfree(sb_buf);
 	
 	// mount default_part, quick mount
-	dlist_traversal(&partition_list,mount_partition,(int)default_part);
+	dlist_traversal(&partition_list,mount_partition,(void*)default_part);
 	open_root_dir(cur_part);
 	cur_dir = &root_dir;
 
@@ -264,7 +253,7 @@ void filesys_init(){
 	}
 }
 
-char* path_parse(char* pathname,char* name_store){
+char* _path_parse(char* pathname,char* name_store){
 	if(pathname[0]=='/'){
 		while(*(++pathname)=='/');
 	}
@@ -286,12 +275,12 @@ int32_t path_depth_cnt(char* pathname){
 
 	uint32_t depth = 0;
 
-	p = path_parse(p,name);
+	p = _path_parse(p,name);
 	while(name[0]){
 		depth++;
 		memset(name,0,MAX_FILE_NAME_LEN);
 		if(p){
-			p=path_parse(p,name);
+			p=_path_parse(p,name);
 		}
 	}
 	return depth;
@@ -306,7 +295,6 @@ static int search_file(const char* pathname,struct path_search_record* searched_
 	}
 
 	uint32_t path_len = strlen(pathname);
-	
 	ASSERT(pathname[0]=='/'&&path_len>1&&path_len<MAX_PATH_LEN);
 	char* sub_path = (char*)pathname;
 	struct dir* parent_dir = &root_dir;
@@ -318,7 +306,7 @@ static int search_file(const char* pathname,struct path_search_record* searched_
 	searched_record->file_type = FT_UNKNOWN;
 	uint32_t parent_inode_no = 0;
 
-	sub_path = path_parse(sub_path,name);
+	sub_path = _path_parse(sub_path,name);
 
 	while(name[0]){
 		ASSERT(strlen(searched_record->searched_path)<512);
@@ -329,7 +317,7 @@ static int search_file(const char* pathname,struct path_search_record* searched_
 		if(search_dir_entry(cur_part,parent_dir,name,&dir_e)){
 			memset(name,0,MAX_FILE_NAME_LEN);
 			if(sub_path){
-				sub_path = path_parse(sub_path,name);
+				sub_path = _path_parse(sub_path,name);
 			}
 
 			if(FT_DIRECTORY==dir_e.f_type){
@@ -568,7 +556,7 @@ int32_t sys_unlink(const char* pathname){
 	}
 	ASSERT(file_idx==MAX_FILE_OPEN_IN_SYSTEM);
 
-	void* io_buf = sys_malloc(SECTOR_SIZE+SECTOR_SIZE);
+	void* io_buf = kmalloc(SECTOR_SIZE+SECTOR_SIZE);
 	if(io_buf==NULL){
 		dir_close(searched_record.parent_dir);
 		printk("sys_unlink: malloc for io_buf failed!\n");
@@ -578,16 +566,16 @@ int32_t sys_unlink(const char* pathname){
 	struct dir* parent_dir =  searched_record.parent_dir;
 	delete_dir_entry(cur_part,parent_dir,inode_no,io_buf);
 	inode_release(cur_part,inode_no);
-	sys_free(io_buf);
+	kfree(io_buf);
 	dir_close(searched_record.parent_dir);
 	return 0;
 }
 
 int32_t sys_mkdir(const char* pathname){
 	uint8_t rollback_step = 0;
-	void* io_buf = sys_malloc(SECTOR_SIZE*2);
+	void* io_buf = kmalloc(SECTOR_SIZE*2);
 	if(io_buf==NULL){
-		printk("sys_mkdir: sys_malloc for io_buf failed!\n");
+		printk("sys_mkdir: kmalloc for io_buf failed!\n");
 		return -1;
 	}
 
@@ -620,7 +608,7 @@ int32_t sys_mkdir(const char* pathname){
 	}
 
 	struct inode new_dir_inode;
-	inode_init(inode_no,&new_dir_inode);
+	inode_init(inode_no,&new_dir_inode,FT_DIRECTORY);
 
 	uint32_t block_bitmap_idx = 0;
 	int32_t block_lba = -1;
@@ -650,7 +638,7 @@ int32_t sys_mkdir(const char* pathname){
 	memcpy(p_de->filename,"..",2);
 	p_de->i_no = parent_dir->inode->i_no;
 	p_de->f_type = FT_DIRECTORY;
-	ide_write(cur_part->my_disk,new_dir_inode.i_sectors[0],io_buf,1);
+	bwrite_multi(cur_part->my_disk,new_dir_inode.i_sectors[0],io_buf,1);
 
 	new_dir_inode.i_size = 2*cur_part->sb->dir_entry_size;
 
@@ -675,7 +663,7 @@ int32_t sys_mkdir(const char* pathname){
 	bitmap_sync(cur_part,block_bitmap_idx,BLOCK_BITMAP);
 	bitmap_sync(cur_part,inode_no,INODE_BITMAP);
 
-	sys_free(io_buf);
+	kfree(io_buf);
 
 	dir_close(searched_record.parent_dir);
 	return 0;
@@ -688,50 +676,156 @@ rollback:
 			dir_close(searched_record.parent_dir);
 			break;
 	}
-	sys_free(io_buf);
+	kfree(io_buf);
 	return -1;
 }
 
-struct dir* sys_opendir(const char* name){
-	ASSERT(strlen(name)<MAX_PATH_LEN);
-	if(name[0]=='/'&&(name[1]==0||name[1]=='.')){
-		return &root_dir;
-	}
+int32_t sys_opendir(const char* name) {
+    ASSERT(strlen(name) < MAX_PATH_LEN);
+    
+    struct path_search_record searched_record;
+    // 初始化结构体
+    memset(&searched_record, 0, sizeof(struct path_search_record));
+    
+    int inode_no = -1;
 
-	struct path_search_record searched_record;
-	memset(&searched_record,0,sizeof(struct path_search_record));
-	int inode_no = search_file(name,&searched_record);
-	struct dir* ret = NULL;
-	if(inode_no==-1){
-		printk("In %s, sub path %s not exists\n",name,searched_record.searched_path);
-	}else{
-		if(searched_record.file_type==FT_REGULAR){
-			printk("%s is regular file!\n",name);
-		}else if(searched_record.file_type==FT_DIRECTORY){
-			ret = dir_open(cur_part,inode_no);
-		}
-	}
+    // 处理根目录
+    if (strcmp(name, "/") == 0 || strcmp(name, "/.") == 0 || strcmp(name, "/..") == 0) {
+        inode_no = cur_part->sb->root_inode_no;
+        searched_record.file_type = FT_DIRECTORY;
+        // 根目录没有父目录，设为 NULL 以免后面 dir_close 出错
+        searched_record.parent_dir = NULL; 
+    } else {
+        // search_file 内部会填充 searched_record
+        inode_no = search_file(name, &searched_record);
+    }
 
-	dir_close(searched_record.parent_dir);
-	return ret;
+    // 校验是否找到以及类型是否正确
+    if (inode_no == -1) {
+        printk("opendir: %s not found\n", name);
+        return -1;
+    }
+
+    if (searched_record.file_type != FT_DIRECTORY) {
+        printk("opendir: %s is not a directory, type is %d\n", name, searched_record.file_type);
+        // 如果 search_file 打开了父目录，需要关闭
+        if (searched_record.parent_dir) {
+            dir_close(searched_record.parent_dir);
+        }
+        return -1;
+    }
+
+    // 分配全局文件表槽位
+    int32_t fd_idx = get_free_slot_in_global();
+    if (fd_idx == -1) {
+        if (searched_record.parent_dir) {
+            dir_close(searched_record.parent_dir);
+        }
+        printk("exceed max open files\n");
+        return -1;
+    }
+
+    // 填写文件结构
+    file_table[fd_idx].fd_inode = inode_open(cur_part, inode_no);
+    file_table[fd_idx].fd_pos = 0;
+
+    // 安装到进程 PCB
+    int32_t ret_fd = pcb_fd_install(fd_idx);
+
+    // 释放搜索过程中打开的父目录 inode (如果有的话)
+    if (searched_record.parent_dir) {
+        dir_close(searched_record.parent_dir);
+    }
+    
+    return ret_fd;
 }
 
-int32_t sys_closedir(struct dir* dir){
-	int32_t ret = -1;
-	if(dir!=NULL){
-		dir_close(dir);
-		ret = 0;
-	}
-	return ret;
+int32_t sys_closedir(int32_t fd) {
+    // 基础检查
+    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC) {
+        return -1;
+    }
+
+    // 找到对应的全局文件表项
+    int32_t global_fd = fd_local2global(fd);
+    struct file* f = &file_table[global_fd];
+
+    if (f->fd_inode == NULL) {
+        return -1;
+    }
+
+    // 嵌入 dir_close 函数的逻辑，判断是否为根目录
+    // 根目录的 inode 是常驻内存的，不应该被关闭/释放
+    if (f->fd_inode != root_dir.inode) { 
+        inode_close(f->fd_inode);
+    }
+
+    // 清理资源，释放全局文件表槽位和进程 fd 槽位
+    f->fd_inode = NULL;
+    f->fd_pos = 0;
+    f->fd_flag = 0;
+
+    struct task_struct* cur = get_running_task_struct();
+    cur->fd_table[fd] = -1;
+
+    return 0;
 }
 
-struct dir_entry* sys_readdir(struct dir* dir){
-	ASSERT(dir!=NULL);
-	return dir_read(dir);
+
+int32_t sys_readdir(int32_t fd, struct dir_entry* de) {
+    // 基础检查
+    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC) return -1;
+
+    int32_t _fd = fd_local2global(fd);
+    struct file* f = &file_table[_fd];
+
+    // 严格的类型检查，必须是之前通过 opendir (FT_DIRECTORY) 标记的 fd
+    // 我们在 opendir 中设置了 f->fd_flag = FT_DIRECTORY
+    if (f->fd_inode == NULL || f->fd_inode->i_type != FT_DIRECTORY) {
+        return -1;
+    }
+
+    // 用于拷贝目录项
+	// tmp_dir.dir_buf 不需要初始化，dir_read 会负责填充它
+    struct dir tmp_dir;
+    tmp_dir.inode = f->fd_inode;   
+    tmp_dir.dir_pos = f->fd_pos;   
+    
+    // 读取内核级的 dir_entry
+    struct dir_entry* de_kernel = dir_read(&tmp_dir);
+
+    if (de_kernel != NULL) {
+        // 将数据安全拷贝到用户空间
+        // 暂时先用 memcpy ，以后需要添加一个专门讲内核数据拷贝到用户数据的函数
+        memcpy(de, de_kernel, sizeof(struct dir_entry));
+        
+        // 更新全局文件表的偏移量
+        f->fd_pos = tmp_dir.dir_pos; 
+        return 1;
+    }
+    
+    return 0; // 读完了
 }
 
-void sys_rewinddir(struct dir* dir){
-	dir->dir_pos = 0;
+void sys_rewinddir(int32_t fd) {
+    // 基础检查
+    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC) {
+        printk("sys_rewinddir: fd %d is invalid\n", fd);
+        return;
+    }
+
+    // 找到全局文件项
+    int32_t global_fd = fd_local2global(fd);
+    struct file* f = &file_table[global_fd];
+
+    // 我们在 sys_opendir 中已经确保了只有目录才能拥有 FT_DIRECTORY 标志
+    if (f->fd_inode->i_type != FT_DIRECTORY) {
+        printk("sys_rewinddir: fd %d is not a directory (flag: %d)\n", fd, f->fd_flag);
+        return;
+    }
+
+    // 重置偏移量
+    f->fd_pos = 0;
 }
 
 int32_t sys_rmdir(const char* pathname){
@@ -766,7 +860,7 @@ static uint32_t get_parent_dir_inode_nr(uint32_t child_inode_nr,void* io_buf){
 	uint32_t block_lba = child_dir_inode->i_sectors[0];
 	ASSERT(block_lba>=cur_part->sb->data_start_lba);
 	inode_close(child_dir_inode);
-	ide_read(cur_part->my_disk,block_lba,io_buf,1);
+	bread_multi(cur_part->my_disk,block_lba,io_buf,1);
 	struct dir_entry* dir_e = (struct dir_entry*)io_buf;
 
 	ASSERT(dir_e[1].i_no<MAX_FILES_PER_PART&&dir_e[1].f_type==FT_DIRECTORY);
@@ -784,7 +878,7 @@ static int get_child_dir_name(uint32_t p_inode_nr,uint32_t c_inode_nr,char* path
 	// the first first-level index block
 	int tfflib = DIRECT_INDEX_BLOCK;
 	if(parent_dir_inode->i_sectors[tfflib]){
-		ide_read(cur_part->my_disk,parent_dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+		bread_multi(cur_part->my_disk,parent_dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
 		block_cnt = TOTAL_BLOCK_COUNT;
 	}
 	inode_close(parent_dir_inode);
@@ -797,7 +891,7 @@ static int get_child_dir_name(uint32_t p_inode_nr,uint32_t c_inode_nr,char* path
 
 	while(block_idx<block_cnt){
 		if(all_blocks_addr[block_idx]){
-			ide_read(cur_part->my_disk,all_blocks_addr[block_idx],io_buf,1);
+			bread_multi(cur_part->my_disk,all_blocks_addr[block_idx],io_buf,1);
 			uint8_t dir_e_idx = 0;
 			while(dir_e_idx<dir_entrys_per_sec){
 				if((dir_e+dir_e_idx)->i_no==c_inode_nr){
@@ -815,7 +909,7 @@ static int get_child_dir_name(uint32_t p_inode_nr,uint32_t c_inode_nr,char* path
 
 char* sys_getcwd(char* buf,uint32_t size){
 	ASSERT(buf!=NULL);
-	void* io_buf = sys_malloc(SECTOR_SIZE);
+	void* io_buf = kmalloc(SECTOR_SIZE);
 	if(io_buf==NULL){
 		return NULL;
 	}
@@ -830,7 +924,7 @@ char* sys_getcwd(char* buf,uint32_t size){
 	if(child_inode_nr==0){
 		buf[0] = '/';
 		buf[1] = 0;
-		sys_free(io_buf);
+		kfree(io_buf);
 		return buf;
 	}
 
@@ -840,7 +934,7 @@ char* sys_getcwd(char* buf,uint32_t size){
 	while ((child_inode_nr)){
 		parent_inode_nr = get_parent_dir_inode_nr(child_inode_nr,io_buf);
 		if(get_child_dir_name(parent_inode_nr,child_inode_nr,full_path_reverse,io_buf)==-1){
-			sys_free(io_buf);
+			kfree(io_buf);
 			return NULL;
 		}
 		child_inode_nr = parent_inode_nr;
@@ -855,7 +949,7 @@ char* sys_getcwd(char* buf,uint32_t size){
 
 		*last_slash = 0;
 	}
-	sys_free(io_buf);
+	kfree(io_buf);
 	
 	return buf;
 }
@@ -913,8 +1007,8 @@ void sys_disk_info(){
 	uint8_t channel_idx;
 	printk("disk number: %d\n",disk_num);
 	uint8_t k = 0;
-	char** granularits = sys_malloc(sizeof(char*)*disk_num);
-	uint8_t* div_cnts = sys_malloc(sizeof(uint8_t)*disk_num);
+	char** granularits = kmalloc(sizeof(char*)*disk_num);
+	uint8_t* div_cnts = kmalloc(sizeof(uint8_t)*disk_num);
 	int i=0;
 	for(i=0;i<disk_num;i++){
 		while(disk_size[i]>1024){
@@ -967,10 +1061,10 @@ void sys_disk_info(){
 				for(part_idx=0;part_idx<PRIM_PARTS_NUM;part_idx++){
 					if(!strcmp("",channels[channel_idx].devices[device_idx].prim_parts[part_idx].name)) continue;
 					uint32_t bitmap_sects = channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->block_bitmap_sects;
-					uint8_t* buf_bitmap_bits = sys_malloc(bitmap_sects*SECTOR_SIZE);
+					uint8_t* buf_bitmap_bits = kmalloc(bitmap_sects*SECTOR_SIZE);
 					memset(buf_bitmap_bits,0,bitmap_sects*SECTOR_SIZE);
 
-					ide_read(&channels[channel_idx].devices[device_idx]
+					bread_multi(&channels[channel_idx].devices[device_idx]
 						,channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->block_bitmap_lba
 						,buf_bitmap_bits
 						,bitmap_sects
@@ -981,7 +1075,7 @@ void sys_disk_info(){
 					bitmap_buf.btmp_bytes_len = (channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->sec_cnt)/8;
 					uint32_t free_sects = bitmap_count(&bitmap_buf);
 					uint32_t used_sects = (bitmap_buf.btmp_bytes_len*8)-free_sects;
-					sys_free(buf_bitmap_bits);
+					kfree(buf_bitmap_bits);
 					// P means primary part
 					char cur_flag_str[2] = {0};
 					if(!strcmp(cur_part->name,channels[channel_idx].devices[device_idx].prim_parts[part_idx].name)){
@@ -998,10 +1092,10 @@ void sys_disk_info(){
 				for(part_idx=0;part_idx<LOGIC_PARTS_NUM;part_idx++){
 					if(!strcmp("",channels[channel_idx].devices[device_idx].logic_parts[part_idx].name)) continue;
 					uint32_t bitmap_sects = channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->block_bitmap_sects;
-					uint8_t* buf_bitmap_bits = sys_malloc(bitmap_sects*SECTOR_SIZE);
+					uint8_t* buf_bitmap_bits = kmalloc(bitmap_sects*SECTOR_SIZE);
 					memset(buf_bitmap_bits,0,bitmap_sects*SECTOR_SIZE);
 
-					ide_read(&channels[channel_idx].devices[device_idx]
+					bread_multi(&channels[channel_idx].devices[device_idx]
 						,channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->block_bitmap_lba
 						,buf_bitmap_bits
 						,bitmap_sects
@@ -1012,7 +1106,7 @@ void sys_disk_info(){
 					bitmap_buf.btmp_bytes_len = (channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->sec_cnt)/8;
 					uint32_t free_sects = bitmap_count(&bitmap_buf);
 					uint32_t used_sects = (bitmap_buf.btmp_bytes_len*8)-free_sects;
-					sys_free(buf_bitmap_bits);
+					kfree(buf_bitmap_bits);
 					char cur_flag_str[2] = {0};
 					if(!strcmp(cur_part->name,channels[channel_idx].devices[device_idx].logic_parts[part_idx].name)){
 						cur_flag_str[0] = '*';
@@ -1037,7 +1131,7 @@ void sys_disk_info(){
 	}
 }
 
-bool check_disk_name(struct dlist_elem* pelem,int arg){
+bool check_disk_name(struct dlist_elem* pelem,void* arg){
 	char* part_name = (char*) arg;
 	struct partition* part = member_to_entry(struct partition,part_tag,pelem);
 	if(!strcmp(part_name,part->name)){
@@ -1047,8 +1141,8 @@ bool check_disk_name(struct dlist_elem* pelem,int arg){
 }
 
 void sys_mount(const char* part_name){
-	
-	struct dlist_elem* res = dlist_traversal(&partition_list,check_disk_name,(int)part_name);
+	// printk("mount::before:::%x \n",cur_part->sb->data_start_lba);
+	struct dlist_elem* res = dlist_traversal(&partition_list,check_disk_name,(void*)part_name);
 	if(res==NULL){
 		printk("sys_mount: partition %s not found!\n",part_name);
 		return;
@@ -1056,13 +1150,13 @@ void sys_mount(const char* part_name){
 
 	if(cur_part!=NULL&&cur_part->block_bitmap.bits!=NULL){
 		// printk("remove block bitmap\n");
-		sys_free(cur_part->block_bitmap.bits);
+		kfree(cur_part->block_bitmap.bits);
 		cur_part->block_bitmap.btmp_bytes_len = 0;
 	}
 
 	if(cur_part!=NULL&&cur_part->inode_bitmap.bits!=NULL){
 		// printk("remove inode bitmap\n");
-		sys_free(cur_part->inode_bitmap.bits);
+		kfree(cur_part->inode_bitmap.bits);
 		cur_part->inode_bitmap.btmp_bytes_len = 0;
 	}
 
@@ -1071,7 +1165,17 @@ void sys_mount(const char* part_name){
 		printk("close root directory\n");
 	} 
 
-	dlist_traversal(&partition_list,mount_partition,(int)part_name);
+	dlist_traversal(&partition_list,mount_partition,(void*)part_name);
 	open_root_dir(cur_part);
-	printk("partition %s mounted\n", cur_part->name);
+	// printk("mount::after:::%x \n",cur_part->sb->data_start_lba);
+	// printk("partition %s mounted\n", cur_part->name);
+
+
+	// 同步全局 cur_dir 指向新的 root_dir 内存
+    cur_dir = &root_dir; 
+
+    // 强制让当前运行进程的路径回到根目录，防止它引用旧分区的 inode 编号
+    struct task_struct* cur = get_running_task_struct();
+    cur->cwd_inode_nr = cur_part->sb->root_inode_no;
+
 }

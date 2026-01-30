@@ -1,17 +1,17 @@
 #ifndef __THREAD_THREAD_H
 #define __THREAD_THREAD_H
-#include "../lib/stdint.h"
-#include "../lib/string.h"
-#include "../kernel/memory.h"
-#include "../lib/kernel/bitmap.h"
+#include "stdint.h"
+#include "string.h"
+#include "memory.h"
+#include "bitmap.h"
 // each process can open 8 files at most
 #define MAX_FILES_OPEN_PER_PROC 8
 #define TASK_NAME_LEN 16
 #define MAX_PID_NUM 1024
 #define MAX_PID_NUM_IN_BYTE MAX_PID_NUM/8
+#define STACK_MAGIC 0x20030000
 
 typedef void thread_func(void*);
-typedef int16_t pid_t;
 
 enum task_status{
 	TASK_RUNNING,

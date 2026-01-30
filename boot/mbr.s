@@ -60,81 +60,88 @@ get_disk_param:
 	int 0x10
 
 			; print string
-;	mov byte [gs:0x00],'1'
-;	mov byte [gs:0x01],0xA4
-;	mov byte [gs:0x02],' '
-;	mov byte [gs:0x03],0xA4
-;	mov byte [gs:0x04],'M'
-;	mov byte [gs:0x05],0xA4
-;	mov byte [gs:0x06],'B'
-;	mov byte [gs:0x07],0xA4
-;	mov byte [gs:0x08],'R'
-;	mov byte [gs:0x09],0xA4
+	mov byte [gs:0x00],'1'
+	mov byte [gs:0x01],0xA4
+	mov byte [gs:0x02],' '
+	mov byte [gs:0x03],0xA4
+	mov byte [gs:0x04],'M'
+	mov byte [gs:0x05],0xA4
+	mov byte [gs:0x06],'B'
+	mov byte [gs:0x07],0xA4
+	mov byte [gs:0x08],'R'
+	mov byte [gs:0x09],0xA4
 
 	
-	push LOADER_BASE_ADDR
-	push LOADER_SECTOR_CNT ; how many sector to write
+	; push LOADER_SECTOR_CNT ; how many sector to write
+	mov edi,LOADER_BASE_ADDR
 	mov ebx,LOADER_START_SECTOR
+	mov ecx,LOADER_SECTOR_CNT
 	call rd_disk_m_16
-	; flush the stack
-	pop ax
-	pop ax
-	mov ax,0
+
 	jmp LOADER_BASE_ADDR
 ;	jmp 0xc15 ; 0xc15 is loader_start
 
 
 rd_disk_m_16:
-	mov dx,PRIMARY_SECTOR_CNT ;how many sector to write
-	mov cx,[esp+2]
-	mov al,cl
-	out dx,al
+    ; 1. 设置读取扇区数
+    mov dx, PRIMARY_SECTOR_CNT
+    mov al, cl
+    out dx, al
 
-	mov dx,PRIMARY_LBA_LOW ;write LBA low 0-7
-	mov al,bl
-	out dx,al
-	shr ebx,8
-	
-	mov dx,PRIMARY_LBA_MID ;write LBA mid 8-15
-	mov al,bl
-	out dx,al
-	shr ebx,8
+    ; 2. 设置 LBA 地址 (ebx 中存储的是起始扇区)
+    mov dx, PRIMARY_LBA_LOW
+    mov al, bl
+    out dx, al
+    shr ebx, 8
+    
+    mov dx, PRIMARY_LBA_MID
+    mov al, bl
+    out dx, al
+    shr ebx, 8
 
-	mov dx,PRIMARY_LBA_HIGH ;write LBA high 16-23
-	mov al,bl
-	out dx,al
-	shr ebx,8
+    mov dx, PRIMARY_LBA_HIGH
+    mov al, bl
+    out dx, al
+    shr ebx, 8
 
-	mov dx,PRIMARY_DEVICE ;write device-port,high 4bit is 1110B
-	mov ax,0xe0 
-	or al,bl
-	out dx,al
+    mov dx, PRIMARY_DEVICE
+    mov al, 0xe0 
+    or al, bl
+    out dx, al
 
-	mov dx,PRIMARY_COMMAND ; write commmand 'read' to check the status of disk
-	mov ax,0x20
-	out dx,al
+    ; 3. 发送读取命令 0x20
+    mov dx, PRIMARY_COMMAND
+    mov al, 0x20
+    out dx, al
 
-not_ready:
-	nop
-	in al,dx
-	and al,0x88
-	cmp al,0x08
-	jnz not_ready
+    ; 4. 开始按扇区读取数据
+    ; 此时 cl 存的是要读的扇区总数 (LOADER_SECTOR_CNT)
+    mov bx, di               ; 目标内存地址 0x900
 
+.read_one_sector:
+    push cx                  ; 保存外层循环次数（剩余扇区数）
 
-		    ; read data
-	mov ax,cx ; 
-	mov dx,256 ; read 256 times per sector,each operate could read 2byte
-	mul dx ; [ax]*[dx]->ax get total times
-	mov cx,ax
-	mov dx,PRIMARY_DATA
-	mov bx,[esp+4]
-go_on_read:
-	in ax,dx
-	mov [bx],ax
-	add bx,2
-	loop go_on_read
-	ret
+    ; --- 关键：读取每一个扇区前都要检查状态 ---
+.not_ready:
+    mov dx, PRIMARY_COMMAND  ; 即 Status 端口 0x1f7
+    in al, dx
+    and al, 0x88             ; 检查 BSY 和 DRQ
+    cmp al, 0x08             ; 期望 BSY=0, DRQ=1
+    jnz .not_ready
+
+    ; --- 读取该扇区的 256 个字 (512 字节) ---
+    mov cx, 256              ; 内部循环 256 次，每次读 2 字节
+    mov dx, PRIMARY_DATA     ; 0x1f0 端口
+.go_on_read:
+    in ax, dx
+    mov [bx], ax
+    add bx, 2
+    loop .go_on_read         ; 这个循环读完 512 字节
+
+    pop cx                   ; 恢复外层循环次数
+    loop .read_one_sector    ; 如果还要读下一个扇区，跳回 .not_ready
+
+    ret
 
 	times 510-($-$$) db 0
 	db 0x55,0xaa

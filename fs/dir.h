@@ -1,11 +1,10 @@
 #ifndef __FS_DIR_H
 #define __FS_DIR_H
-#include "../lib/stdint.h"
-#include "../lib/stdbool.h"
+#include "stdint.h"
+#include "stdbool.h"
 #include "inode.h"
 #include "fs.h"
-
-#define MAX_FILE_NAME_LEN 16
+#include "fs_types.h"
 
 struct dir{
 	struct inode* inode;
@@ -15,11 +14,6 @@ struct dir{
 	uint8_t dir_buf[BLOCK_SIZE];
 };
 
-struct dir_entry{
-	char filename[MAX_FILE_NAME_LEN];
-	uint32_t i_no;
-	enum file_types f_type;
-};
 
 extern struct dir root_dir;
 extern bool search_dir_entry(struct partition* part,struct dir* pdir,const char* name,struct dir_entry* dir_e);

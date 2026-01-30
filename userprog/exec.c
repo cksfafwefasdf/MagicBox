@@ -57,68 +57,6 @@ static bool segment_load(int32_t fd,uint32_t offset,uint32_t filesz,uint32_t vad
 	return true;
 }
 
-// static int32_t load_new(const char* pathname){
-// 	int32_t ret = -1;
-// 	struct Elf32_Ehdr elf_header;
-// 	memset(&elf_header,0,sizeof(struct Elf32_Ehdr));
-
-// 	int32_t fd = sys_open(pathname,O_RDONLY);
-// 	if(fd == -1){
-// 		return -1;
-// 	}
-	
-// 	if(sys_read(fd,&elf_header,sizeof(struct Elf32_Ehdr))!= sizeof(struct Elf32_Ehdr)){
-// 		ret = -1;
-// 		goto done;
-// 	}
-
-// 	if(memcmp(elf_header.e_ident,"\177ELF\1\1\1",7)\
-// 	|| elf_header.e_type!= 2\
-// 	|| elf_header.e_machine!=3\
-// 	|| elf_header.e_version!=1\
-// 	|| elf_header.e_phnum>1024\
-// 	|| elf_header.e_phentsize!=sizeof(struct Elf32_Phdr)){
-// 		return -1;
-// 		goto done;
-// 	}
-
-// 	Elf32_Off prog_header_offset = elf_header.e_phoff;
-// 	Elf32_Half prog_header_size = elf_header.e_phentsize;
-// 	uint32_t load_segment_nr = 0;
-// 	struct Elf32_Phdr prog_headers[MAX_PT_LOADER_SEGMENT];
-// 	memset(prog_headers,0,MAX_PT_LOADER_SEGMENT*sizeof(struct Elf32_Phdr));
-// 	uint32_t prog_idx = 0;
-// 	struct Elf32_Phdr tmp;
-// 	while(prog_idx<elf_header.e_phnum){
-// 		memset(&tmp,0,sizeof(struct Elf32_Phdr));
-// 		sys_lseek(fd,prog_header_offset,SEEK_SET);
-// 		if(sys_read(fd,&tmp,prog_header_size)!=prog_header_size){
-// 			ret = -1;
-// 			goto done;
-// 		}
-// 		if(tmp.p_type==PT_LOAD){
-// 			memcpy(&prog_headers[load_segment_nr],&tmp,sizeof(struct Elf32_Phdr));
-// 			load_segment_nr++;
-// 		}
-// 		prog_header_offset+=elf_header.e_phentsize;
-// 		prog_idx++;
-// 	}
-// 	int i=0;
-// 	for(;i<MAX_PT_LOADER_SEGMENT;i++){
-// 		// printf("prog_idx,p_type,prog_headers:%x,%x,%x\n",i,prog_headers[i].p_type,prog_headers);
-// 		if(prog_headers[i].p_type==PT_LOAD){
-// 			if(!segment_load(fd,prog_headers[i].p_offset,prog_headers[i].p_filesz,prog_headers[i].p_vaddr)){
-// 				ret = -1;
-// 				goto done;
-// 			}
-// 		}
-// 	}
-// 	ret = elf_header.e_entry;
-// done:
-// 	sys_close(fd);
-// 	return ret;
-// }
-
 static int32_t load(const char* pathname){
 	int32_t ret = -1;
 	struct Elf32_Ehdr elf_header;
@@ -153,7 +91,6 @@ static int32_t load(const char* pathname){
 
 	int32_t global_fd = fd_local2global(fd);
 	ASSERT(global_fd!=-1);
-	prog_size = file_table[global_fd].fd_inode->i_size;
 	
 	while(prog_idx<elf_header.e_phnum){
 		
@@ -176,7 +113,6 @@ static int32_t load(const char* pathname){
 		prog_header_offset+=elf_header.e_phentsize;
 		prog_idx++;
 	}
-	prog_size = 0;
 
 	ret = elf_header.e_entry;
 
@@ -188,7 +124,8 @@ done:
 int32_t sys_execv(const char* path,const char* argv[]){
 	
 	uint32_t argc = 0;
-	while(argv[argc]){
+	
+	while(argv!=NULL&&argv[argc]){
 		argc++;
 	}
 	
@@ -209,6 +146,7 @@ int32_t sys_execv(const char* path,const char* argv[]){
 	intr_0_stack->ecx = argc;
 	intr_0_stack->eip = (void*) entry_point;
 	intr_0_stack->esp = (void*) 0xc0000000;
+
 	
 	asm volatile ("movl %0,%%esp; jmp intr_exit"::"g"(intr_0_stack):"memory");
 	return 0;

@@ -8,6 +8,7 @@
 #include "stdbool.h"
 #include "debug.h"
 #include "file.h"
+#include "ide_buffer.h"
 
 struct dir root_dir;
 
@@ -21,7 +22,7 @@ void close_root_dir(struct partition* part){
 }
 
 struct dir* dir_open(struct partition* part,uint32_t inode_no){
-	struct dir* pdir = (struct dir*)sys_malloc(sizeof(struct dir));
+	struct dir* pdir = (struct dir*)kmalloc(sizeof(struct dir));
 	pdir->inode = inode_open(part,inode_no);
 	pdir->dir_pos = 0;
 	return pdir;
@@ -32,9 +33,9 @@ bool search_dir_entry(struct partition* part,struct dir* pdir,const char* name,s
 	// 32 bits = 4 bytes, so we divide by 4  
 	uint32_t block_cnt = DIRECT_INDEX_BLOCK+FIRST_LEVEL_INDEX_BLOCK*(BLOCK_SIZE/ADDR_BYTES_32BIT);
 	// alloc memory for all [block_cnt] addresses 
-	uint32_t* all_blocks_addr = (uint32_t*)sys_malloc(block_cnt*ADDR_BYTES_32BIT);
+	uint32_t* all_blocks_addr = (uint32_t*)kmalloc(block_cnt*ADDR_BYTES_32BIT);
 	if(all_blocks_addr==NULL){
-		printk("in search_dir_entry: sys_malloc for all_blocks failed!\n");
+		printk("in search_dir_entry: kmalloc for all_blocks failed!\n");
 		return false;
 	}
 
@@ -48,11 +49,11 @@ bool search_dir_entry(struct partition* part,struct dir* pdir,const char* name,s
 	// the first first-level index block
 	uint32_t tfflib =  DIRECT_INDEX_BLOCK;
 	if(pdir->inode->i_sectors[tfflib]!=0){
-		ide_read(part->my_disk,pdir->inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+		bread_multi(part->my_disk,pdir->inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
 	}
 
 
-	uint8_t* buf = (uint8_t*)sys_malloc(SECTOR_SIZE);
+	uint8_t* buf = (uint8_t*)kmalloc(SECTOR_SIZE);
 	struct dir_entry* p_de = (struct dir_entry*)buf;
 	
 	uint32_t dir_entry_size = part->sb->dir_entry_size;
@@ -63,14 +64,14 @@ bool search_dir_entry(struct partition* part,struct dir* pdir,const char* name,s
 			block_idx++;
 			continue;
 		}
-		ide_read(part->my_disk,all_blocks_addr[block_idx],buf,1);
+		bread_multi(part->my_disk,all_blocks_addr[block_idx],buf,1);
 
 		uint32_t dir_entry_idx = 0;
 		while(dir_entry_idx<dir_entry_cnt){
 			if(!strcmp(p_de->filename,name)){
 				memcpy(dir_e,p_de,dir_entry_size);
-				sys_free(buf);
-				sys_free(all_blocks_addr);
+				kfree(buf);
+				kfree(all_blocks_addr);
 				return true;
 			}
 			dir_entry_idx++;
@@ -80,8 +81,8 @@ bool search_dir_entry(struct partition* part,struct dir* pdir,const char* name,s
 		p_de = (struct dir_entry*)buf;
 		memset(buf,0,SECTOR_SIZE);
 	}
-	sys_free(buf);
-	sys_free(all_blocks_addr);
+	kfree(buf);
+	kfree(all_blocks_addr);
 	return false;
 }
 
@@ -90,7 +91,7 @@ void dir_close(struct dir* dir){
 		return;
 	}
 	inode_close(dir->inode);
-	sys_free(dir);
+	kfree(dir);
 }
 
 void create_dir_entry(char* filename,uint32_t inode_no,uint8_t file_type,struct dir_entry* p_de){
@@ -119,13 +120,13 @@ bool sync_dir_entry(struct dir* parent_dir,struct dir_entry* p_de,void* io_buf){
 	
 	uint32_t all_blocks_addr[TOTAL_BLOCK_COUNT] = {0};
 
-	while(block_idx<FIRST_LEVEL_INDEX_BLOCK){
+	while(block_idx<DIRECT_INDEX_BLOCK){
 		all_blocks_addr[block_idx] = dir_inode->i_sectors[block_idx];
 		block_idx++;
 	}
 
 	if (dir_inode->i_sectors[tfflib] != 0){
-        ide_read(cur_part->my_disk, dir_inode->i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+        bread_multi(cur_part->my_disk, dir_inode->i_sectors[tfflib], all_blocks_addr + tfflib, 1);
     }
 
 	struct dir_entry* dir_e = (struct dir_entry*)io_buf;
@@ -142,6 +143,10 @@ bool sync_dir_entry(struct dir* parent_dir,struct dir_entry* p_de,void* io_buf){
 			if(block_lba==-1){
 				printk("alloc block bitmap for sync_dir_entry failed!!!\n");
 				return false;
+			}
+
+			if (cur_part == NULL) {
+    			PANIC("cur_part is SMASHED!");
 			}
 
 			block_bitmap_idx = block_lba - cur_part->sb->data_start_lba;
@@ -163,6 +168,11 @@ bool sync_dir_entry(struct dir* parent_dir,struct dir_entry* p_de,void* io_buf){
 					printk("alloc block bitmap for sync_dir_entry failed!!!\n");
 					return false;
 				}
+
+				if (cur_part == NULL) {
+   					PANIC("cur_part is SMASHED!");
+				}
+
 				block_bitmap_idx = block_lba - cur_part->sb->data_start_lba;
 
 				ASSERT(block_bitmap_idx!=-1);
@@ -170,27 +180,27 @@ bool sync_dir_entry(struct dir* parent_dir,struct dir_entry* p_de,void* io_buf){
 				bitmap_sync(cur_part,block_bitmap_idx,BLOCK_BITMAP);
 
 				all_blocks_addr[tfflib] = block_lba;
-				ide_write(cur_part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+				bwrite_multi(cur_part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
 			}else{
 				all_blocks_addr[block_idx] = block_lba;
-				ide_write(cur_part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+				bwrite_multi(cur_part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
 			}
 
 			memset(io_buf,0,SECTOR_SIZE);
 
 			memcpy(io_buf,p_de,dir_entry_size);
-			ide_write(cur_part->my_disk,all_blocks_addr[block_idx],io_buf,1);
+			bwrite_multi(cur_part->my_disk,all_blocks_addr[block_idx],io_buf,1);
 			dir_inode->i_size+=dir_entry_size;
 			return true;
 		}
 
-		ide_read(cur_part->my_disk,all_blocks_addr[block_idx],io_buf,1);
+		bread_multi(cur_part->my_disk,all_blocks_addr[block_idx],io_buf,1);
 
 		uint8_t dir_entry_idx = 0;
 		while(dir_entry_idx<dir_entrys_per_sec){
 			if((dir_e+dir_entry_idx)->f_type==FT_UNKNOWN){
 				memcpy(dir_e+dir_entry_idx,p_de,dir_entry_size);
-				ide_write(cur_part->my_disk,all_blocks_addr[block_idx],io_buf,1);
+				bwrite_multi(cur_part->my_disk,all_blocks_addr[block_idx],io_buf,1);
 
 				dir_inode->i_size+=dir_entry_size;
 				return true;
@@ -214,7 +224,7 @@ bool delete_dir_entry(struct partition* part,struct dir* pdir,uint32_t inode_no,
 	// the first first-level index block
 	int tfflib = DIRECT_INDEX_BLOCK;
 	if(dir_inode->i_sectors[tfflib]){
-		ide_read(part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+		bread_multi(part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
 	}
 
 	uint32_t dir_entry_size = part->sb->dir_entry_size;
@@ -235,7 +245,7 @@ bool delete_dir_entry(struct partition* part,struct dir* pdir,uint32_t inode_no,
 		dir_entry_idx = dir_entry_cnt = 0;
 		memset(io_buf,0,SECTOR_SIZE);
 
-		ide_read(part->my_disk,all_blocks_addr[block_idx],io_buf,1);
+		bread_multi(part->my_disk,all_blocks_addr[block_idx],io_buf,1);
 		while(dir_entry_idx<dir_entrys_per_sec){
 			if((dir_e+dir_entry_idx)->f_type!=FT_UNKNOWN){
 				if(!strcmp((dir_e+dir_entry_idx)->filename,".")){
@@ -276,7 +286,7 @@ bool delete_dir_entry(struct partition* part,struct dir* pdir,uint32_t inode_no,
 
 				if(indirect_blocks>1){
 					all_blocks_addr[block_idx] = 0;
-					ide_write(part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+					bwrite_multi(part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
 				}else{
 					block_bitmap_idx = dir_inode->i_sectors[tfflib] - part->sb->data_start_lba;
 					bitmap_set(&part->block_bitmap,block_bitmap_idx,0);
@@ -287,7 +297,7 @@ bool delete_dir_entry(struct partition* part,struct dir* pdir,uint32_t inode_no,
 			}
 		}else{
 			memset(dir_entry_found,0,dir_entry_size);
-			ide_write(part->my_disk,all_blocks_addr[block_idx],io_buf,1);
+			bwrite_multi(part->my_disk,all_blocks_addr[block_idx],io_buf,1);
 		}
 
 		ASSERT(dir_inode->i_size>=dir_entry_size);
@@ -313,7 +323,7 @@ struct dir_entry* dir_read(struct dir* dir){
 	// the first first-level index block
 	int tfflib = DIRECT_INDEX_BLOCK;
 	if(dir_inode->i_sectors[tfflib]!=0){
-		ide_read(cur_part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+		bread_multi(cur_part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
 		block_cnt = TOTAL_BLOCK_COUNT;
 	}
 	block_idx = 0;
@@ -330,7 +340,7 @@ struct dir_entry* dir_read(struct dir* dir){
 			continue;
 		}
 		memset(dir_e,0,SECTOR_SIZE);
-		ide_read(cur_part->my_disk,all_blocks_addr[block_idx],dir_e,1);
+		bread_multi(cur_part->my_disk,all_blocks_addr[block_idx],dir_e,1);
 		dir_entry_idx = 0;
 		while(dir_entry_idx<dir_entrys_per_sec){
 			if((dir_e+dir_entry_idx)->f_type!=FT_UNKNOWN){
@@ -367,7 +377,7 @@ int32_t dir_remove(struct dir* parent_dir,struct dir* child_dir){
 		ASSERT(child_dir_inode->i_sectors[block_idx]==0);
 		block_idx++;
 	}
-	void* io_buf = sys_malloc(SECTOR_SIZE*2);
+	void* io_buf = kmalloc(SECTOR_SIZE*2);
 	if(io_buf==NULL){
 		printk("dir_remove: malloc for io_buf failed!\n");
 		return -1;
@@ -376,6 +386,6 @@ int32_t dir_remove(struct dir* parent_dir,struct dir* child_dir){
 	delete_dir_entry(cur_part,parent_dir,child_dir_inode->i_no,io_buf);
 
 	inode_release(cur_part,child_dir_inode->i_no);
-	sys_free(io_buf);
+	kfree(io_buf);
 	return 0;
 }

@@ -10,6 +10,7 @@
 #include "interrupt.h"
 #include "stdio-kernel.h"
 #include "file.h"
+#include "ide_buffer.h"
 
 struct inode_position{
 	bool two_sec; // whether an inode spans multiple sectors
@@ -62,13 +63,14 @@ void inode_sync(struct partition* part,struct inode* inode,void* io_buf){
 	char* inode_buf = (char*)io_buf;
 
 	if(inode_pos.two_sec){
-		ide_read(part->my_disk,inode_pos.sec_lba,inode_buf,2);
+		// printk("WARNING: Inode spans two sectors! lba:%d\n", inode_pos.sec_lba);
+		bread_multi(part->my_disk,inode_pos.sec_lba,inode_buf,2);
 		memcpy((inode_buf+inode_pos.off_size),&pure_inode,sizeof(struct inode));
-		ide_write(part->my_disk,inode_pos.sec_lba,inode_buf,2);
+		bwrite_multi(part->my_disk,inode_pos.sec_lba,inode_buf,2);
 	}else{
-		ide_read(part->my_disk,inode_pos.sec_lba,inode_buf,1);
+		bread_multi(part->my_disk,inode_pos.sec_lba,inode_buf,1);
 		memcpy((inode_buf+inode_pos.off_size),&pure_inode,sizeof(struct inode));
-		ide_write(part->my_disk,inode_pos.sec_lba,inode_buf,1);
+		bwrite_multi(part->my_disk,inode_pos.sec_lba,inode_buf,1);
 	}
 
 }
@@ -95,26 +97,23 @@ struct inode* inode_open(struct partition* part,uint32_t inode_no){
 	inode_locate(part,inode_no,&inode_pos);
 
 	struct task_struct* cur = get_running_task_struct();
-	
-	uint32_t* cur_pagedir_bak = cur->pgdir;
-	cur->pgdir = NULL;
 
-	inode_found = (struct inode*)sys_malloc(sizeof(struct inode));
+	inode_found = (struct inode*)kmalloc(sizeof(struct inode));
 	
 	if (inode_found==NULL){
 		PANIC("alloc memory failed!");
 	}
 	
-	cur->pgdir = cur_pagedir_bak;
 
 	char* inode_buf;
 	
 	if(inode_pos.two_sec){
-		inode_buf = (char*)sys_malloc(SECTOR_SIZE*2);
-		ide_read(part->my_disk,inode_pos.sec_lba,inode_buf,2);
+		// printk("WARNING: Inode spans two sectors! lba:%d\n", inode_pos.sec_lba);
+		inode_buf = (char*)kmalloc(SECTOR_SIZE*2);
+		bread_multi(part->my_disk,inode_pos.sec_lba,inode_buf,2);
 	}else{
-		inode_buf = (char*)sys_malloc(SECTOR_SIZE);
-		ide_read(part->my_disk,inode_pos.sec_lba,inode_buf,1);
+		inode_buf = (char*)kmalloc(SECTOR_SIZE);
+		bread_multi(part->my_disk,inode_pos.sec_lba,inode_buf,1);
 	}
 	memcpy(inode_found,inode_buf+inode_pos.off_size,sizeof(struct inode));
 	
@@ -123,7 +122,7 @@ struct inode* inode_open(struct partition* part,uint32_t inode_no){
 	inode_found->i_open_cnts=1;
 	// ASSERT((uint32_t)inode_found>=K_HEAP_START);
 	
-	sys_free(inode_buf);
+	kfree(inode_buf);
 	// printk("inode flag::: %x\n",inode_found->write_deny);
 	intr_set_status(old_status);
 	return inode_found;
@@ -135,20 +134,18 @@ void inode_close(struct inode* inode){
 		dlist_remove(&inode->inode_tag);
 		
 		struct task_struct* cur = get_running_task_struct();
-		uint32_t* cur_pagedir_bak = cur->pgdir;
-		cur->pgdir=NULL;
 		// printk("inode_close:::inode addr: %x\n",inode);
-		sys_free(inode);
-		cur->pgdir = cur_pagedir_bak;
+		kfree(inode);
 	}
 	intr_set_status(old_status);
 }
 
-void inode_init(uint32_t inode_no,struct inode* new_inode){
+void inode_init(uint32_t inode_no,struct inode* new_inode,enum file_types ft){
 	new_inode->i_no = inode_no;
 	new_inode->i_size = 0;
 	new_inode->i_open_cnts = 0;
 	new_inode->write_deny = false;
+	new_inode->i_type = ft;
 
 	uint8_t sec_idx = 0;
 	while(sec_idx<BLOCK_PTR_NUMBER){
@@ -165,13 +162,14 @@ void inode_delete(struct partition* part,uint32_t inode_no,void* io_buf){
 
 	char* inode_buf = (char*)io_buf;
 	if(inode_pos.two_sec){
-		ide_read(part->my_disk,inode_pos.sec_lba,inode_buf,2);
+		// printk("WARNING: Inode spans two sectors! lba:%d\n", inode_pos.sec_lba);
+		bread_multi(part->my_disk,inode_pos.sec_lba,inode_buf,2);
 		memset((inode_buf+inode_pos.off_size),0,sizeof(struct inode));
-		ide_write(part->my_disk,inode_pos.sec_lba,inode_buf,2);
+		bwrite_multi(part->my_disk,inode_pos.sec_lba,inode_buf,2);
 	}else{
-		ide_read(part->my_disk,inode_pos.sec_lba,inode_buf,1);
+		bread_multi(part->my_disk,inode_pos.sec_lba,inode_buf,1);
 		memset((inode_buf+inode_pos.off_size),0,sizeof(struct inode));
-		ide_write(part->my_disk,inode_pos.sec_lba,inode_buf,1);
+		bwrite_multi(part->my_disk,inode_pos.sec_lba,inode_buf,1);
 	}
 }
 
@@ -190,7 +188,7 @@ void inode_release(struct partition* part,uint32_t inode_no){
 	// the first first-level index block
 	int tfflib = DIRECT_INDEX_BLOCK;
 	if(inode_to_del->i_sectors[tfflib]!=0){
-		ide_read(part->my_disk,inode_to_del->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+		bread_multi(part->my_disk,inode_to_del->i_sectors[tfflib],all_blocks_addr+tfflib,1);
 		block_cnt = TOTAL_BLOCK_COUNT;
 
 		block_bitmap_idx = inode_to_del->i_sectors[tfflib] - part->sb->data_start_lba;
@@ -214,9 +212,9 @@ void inode_release(struct partition* part,uint32_t inode_no){
 	bitmap_set(&part->inode_bitmap,inode_no,0);
 	bitmap_sync(cur_part,inode_no,INODE_BITMAP);
 
-	void* io_buf = sys_malloc(SECTOR_SIZE*2);
+	void* io_buf = kmalloc(SECTOR_SIZE*2);
 	inode_delete(part,inode_no,io_buf);
-	sys_free(io_buf);
+	kfree(io_buf);
 
 	inode_close(inode_to_del);
 }

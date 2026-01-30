@@ -1,12 +1,15 @@
-BUILD_DIR = ./build
+BUILD_ROOT = ./build
+BUILD_DIR = ./build/kernel
+BUILD_DIR_PROG = ./build/prog
+DISK_DIR = ./disk_env
 ENTRY_POINT = 0xc0001500
 AS = nasm
-CC = gcc-4.4
+CC = gcc
 LD = ld
-LIB = -I lib/ -I lib/kernel/ -I lib/user/ -I kernel/ -I device/ -I thread/ -I userprog/	-I fs/ -I shell/
+LIB = -I lib/ -I lib/kernel/ -I lib/user/ -I lib/common/ -I kernel/ -I device/ -I thread/ -I userprog/	-I fs/ -I shell/
 ASFLAGS = -f elf
-CFLAGS = -Wall $(LIB) -c -fno-builtin -W -Wstrict-prototypes \
-     -Wmissing-prototypes -m32 -fno-stack-protector
+CFLAGS = -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes \
+     -Wmissing-prototypes -m32 -fno-stack-protector -std=gnu89 -fgnu89-inline -fcommon -Wno-error=implicit-function-declaration
 LDFLAGS = -Ttext $(ENTRY_POINT) -e main -Map $(BUILD_DIR)/kernel.map -m elf_i386
 # LDFLAGS = -Ttext $(ENTRY_POINT) -e main -Map $(BUILD_DIR)/kernel.map -m elf_i386 -s
 
@@ -19,8 +22,10 @@ OBJS = $(BUILD_DIR)/main.o $(BUILD_DIR)/init.o $(BUILD_DIR)/interrupt.o \
 	$(BUILD_DIR)/process.o $(BUILD_DIR)/syscall-init.o $(BUILD_DIR)/syscall.o \
 	$(BUILD_DIR)/stdio.o  $(BUILD_DIR)/stdio-kernel.o $(BUILD_DIR)/ide.o \
 	$(BUILD_DIR)/fs.o $(BUILD_DIR)/dir.o $(BUILD_DIR)/inode.o $(BUILD_DIR)/file.o \
-	$(BUILD_DIR)/fork.o $(BUILD_DIR)/exec.o $(BUILD_DIR)/wait_exit.o\
-	$(BUILD_DIR)/shell.o $(BUILD_DIR)/buildin_cmd.o $(BUILD_DIR)/assert.o $(BUILD_DIR)/pipe.o 
+	$(BUILD_DIR)/fork.o $(BUILD_DIR)/exec.o $(BUILD_DIR)/wait_exit.o \
+	$(BUILD_DIR)/assert.o $(BUILD_DIR)/pipe.o \
+	$(BUILD_DIR)/page.o $(BUILD_DIR)/hashtable.o $(BUILD_DIR)/ide_buffer.o \
+	$(BUILD_DIR)/tar.o
 
 $(BUILD_DIR)/main.o:kernel/main.c lib/kernel/print.h lib/stdint.h kernel/init.h
 	$(CC) $< $(CFLAGS) -o $@
@@ -71,7 +76,7 @@ $(BUILD_DIR)/tss.o:userprog/tss.c userprog/tss.h lib/stdint.h kernel/global.h li
 $(BUILD_DIR)/process.o:userprog/process.c userprog/process.h thread/thread.h kernel/memory.h lib/stdint.h kernel/debug.h userprog/tss.h device/console.h lib/string.h kernel/global.h kernel/interrupt.h lib/kernel/dlist.h lib/kernel/print.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/syscall-init.o:userprog/syscall-init.c userprog/syscall-init.h lib/stdint.h thread/thread.h lib/kernel/print.h lib/user/syscall.h device/console.h lib/string.h fs/fs.h userprog/fork.h thread/thread.h userprog/exec.h userprog/wait_exit.h device/ide.h shell/pipe.h
+$(BUILD_DIR)/syscall-init.o:userprog/syscall-init.c userprog/syscall-init.h lib/stdint.h thread/thread.h lib/kernel/print.h lib/user/syscall.h device/console.h lib/string.h fs/fs.h userprog/fork.h thread/thread.h userprog/exec.h userprog/wait_exit.h device/ide.h fs/pipe.h
 	$(CC) $< $(CFLAGS) -o $@
  
 $(BUILD_DIR)/syscall.o:lib/user/syscall.c lib/user/syscall.h lib/stdint.h thread/thread.h lib/kernel/print.h device/console.h
@@ -86,7 +91,7 @@ $(BUILD_DIR)/stdio-kernel.o:lib/kernel/stdio-kernel.c lib/kernel/stdio-kernel.h 
 $(BUILD_DIR)/ide.o:device/ide.c device/ide.h lib/stdint.h lib/kernel/stdio-kernel.h kernel/debug.h lib/stdio.h lib/kernel/io.h device/timer.h kernel/interrupt.h lib/string.h fs/fs.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/fs.o:fs/fs.c fs/fs.h fs/inode.h fs/super_block.h fs/dir.h kernel/debug.h lib/string.h device/ide.h lib/kernel/stdio-kernel.h lib/stdbool.h lib/stdint.h lib/kernel/dlist.h fs/file.h device/console.h thread/thread.h device/ioqueue.h device/keyboard.h shell/pipe.h
+$(BUILD_DIR)/fs.o:fs/fs.c fs/fs.h fs/inode.h fs/super_block.h fs/dir.h kernel/debug.h lib/string.h device/ide.h lib/kernel/stdio-kernel.h lib/stdbool.h lib/stdint.h lib/kernel/dlist.h fs/file.h device/console.h thread/thread.h device/ioqueue.h device/keyboard.h fs/pipe.h
 	$(CC) $< $(CFLAGS) -o $@
 
 $(BUILD_DIR)/inode.o:fs/inode.c fs/inode.h fs/fs.h fs/super_block.h fs/file.h device/ide.h lib/stdint.h kernel/debug.h lib/kernel/dlist.h lib/string.h thread/thread.h kernel/interrupt.h lib/kernel/stdio-kernel.h
@@ -101,12 +106,6 @@ $(BUILD_DIR)/dir.o:fs/dir.c fs/dir.h fs/inode.h fs/file.h device/ide.h fs/super_
 $(BUILD_DIR)/fork.o:userprog/fork.c userprog/fork.h lib/stdint.h thread/thread.h lib/string.h userprog/process.h kernel/debug.h fs/file.h kernel/interrupt.h lib/kernel/dlist.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/shell.o:shell/shell.c shell/shell.h lib/stdio.h fs/fs.h kernel/debug.h lib/user/syscall.h fs/file.h lib/string.h lib/stdbool.h lib/assert.h shell/buildin_cmd.h
-	$(CC) $< $(CFLAGS) -o $@
-
-$(BUILD_DIR)/buildin_cmd.o:shell/buildin_cmd.c shell/buildin_cmd.h kernel/debug.h fs/file.h fs/fs.h lib/string.h lib/user/syscall.h shell/buildin_cmd.h lib/stdio.h fs/dir.h lib/assert.h
-	$(CC) $< $(CFLAGS) -o $@
-
 $(BUILD_DIR)/exec.o:userprog/exec.c userprog/exec.h lib/stdint.h lib/stdbool.h kernel/global.h fs/fs.h kernel/memory.h lib/string.h thread/thread.h lib/stdio.h lib/user/syscall.h
 	$(CC) $< $(CFLAGS) -o $@
 
@@ -116,7 +115,16 @@ $(BUILD_DIR)/assert.o:lib/assert.c lib/assert.h lib/stdio.h
 $(BUILD_DIR)/wait_exit.o:userprog/wait_exit.c userprog/wait_exit.h thread/thread.h lib/stdint.h lib/stdbool.h fs/fs.h lib/kernel/dlist.h fs/file.h kernel/debug.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/pipe.o:shell/pipe.c shell/pipe.h lib/stdbool.h lib/stdint.h fs/fs.h fs/file.h device/ioqueue.h thread/thread.h lib/stdio.h lib/kernel/stdio-kernel.h
+$(BUILD_DIR)/pipe.o:fs/pipe.c fs/pipe.h lib/stdbool.h lib/stdint.h fs/fs.h fs/file.h device/ioqueue.h thread/thread.h lib/stdio.h lib/kernel/stdio-kernel.h
+	$(CC) $< $(CFLAGS) -o $@
+
+$(BUILD_DIR)/hashtable.o:lib/kernel/hashtable.c lib/kernel/hashtable.h lib/kernel/dlist.h lib/stdint.h lib/stdbool.h kernel/memory.h
+	$(CC) $< $(CFLAGS) -o $@
+
+$(BUILD_DIR)/ide_buffer.o:device/ide_buffer.c device/ide_buffer.h device/ide.h lib/stdint.h lib/stdbool.h lib/kernel/dlist.h lib/kernel/hashtable.h thread/sync.h lib/kernel/stdio-kernel.h
+	$(CC) $< $(CFLAGS) -o $@
+
+$(BUILD_DIR)/tar.o:lib/common/tar.c lib/common/tar.h lib/stdio.h lib/stdio.h lib/string.h lib/user/syscall.h kernel/global.h
 	$(CC) $< $(CFLAGS) -o $@
 
 # ASM code
@@ -130,6 +138,8 @@ $(BUILD_DIR)/print.o:lib/kernel/print.s
 $(BUILD_DIR)/switch.o:thread/switch.s
 	$(AS) $< $(ASFLAGS) -o $@
 
+$(BUILD_DIR)/page.o:kernel/page.s
+	$(AS) $< $(ASFLAGS) -o $@
 # link file
 $(BUILD_DIR)/kernel.bin:$(OBJS)
 	$(LD) $^ $(LDFLAGS) -o $@
@@ -144,19 +154,26 @@ $(BUILD_DIR)/loader.bin:boot/loader.s
 	$(AS) -I boot/inc/ -o $(BUILD_DIR)/loader.bin boot/loader.s
 
 mk_dir:
+	if [ ! -d $(BUILD_ROOT) ]; then mkdir $(BUILD_ROOT); fi
 	if [ ! -d $(BUILD_DIR) ]; then mkdir $(BUILD_DIR); fi
+	if [ ! -d $(BUILD_DIR_PROG) ]; then mkdir $(BUILD_DIR_PROG); fi
 
 hd:
-	dd if=$(BUILD_DIR)/mbr.bin of=/opt/bochs/hd60M.img count=1 bs=512 conv=notrunc
-	dd if=$(BUILD_DIR)/loader.bin of=/opt/bochs/hd60M.img count=4 bs=512 conv=notrunc seek=2
-	dd if=$(BUILD_DIR)/kernel.bin of=/opt/bochs/hd60M.img bs=512 count=200 seek=9 conv=notrunc 
+	dd if=$(BUILD_DIR)/mbr.bin of=$(DISK_DIR)/hd60M.img count=1 bs=512 conv=notrunc
+	dd if=$(BUILD_DIR)/loader.bin of=$(DISK_DIR)/hd60M.img count=4 bs=512 conv=notrunc seek=2
+	dd if=$(BUILD_DIR)/kernel.bin of=$(DISK_DIR)/hd60M.img bs=512 count=500 seek=9 conv=notrunc 
 
 clean: 
-	cd $(BUILD_DIR) && rm -f *.o *.bin
+	cd $(BUILD_DIR) && rm -f *.o *.bin disasm_mbr disasm_loader
+	rm -rf $(BUILD_DIR_PROG)
 
 build:$(BUILD_DIR)/kernel.bin
 
 gdb_symbol:
 	objcopy --only-keep-debug $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/kernel.sym
 
-all:mk_dir boot build hd gdb_symbol
+disasm:
+	cd $(BUILD_DIR) && objdump -b binary -m i8086 -D mbr.bin>> disasm_mbr && objdump -b binary -m i386 -D loader.bin>> disasm_loader
+	
+
+all:mk_dir boot build hd gdb_symbol disasm

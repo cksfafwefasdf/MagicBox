@@ -5,8 +5,17 @@ CH_LF equ 0xa ; line feed
 CH_BS equ 0x8 ; backspace
 CH_TAB equ 0x9 ; tab
 CH_SPACE equ 0x20
-CH_STYLE equ 0x07
 CH_STR_END equ 0x0
+CH_ESC equ 0x1b
+
+COLOR_BLACK equ 0x00
+COLOR_BLUE equ 0x0B
+COLOR_GREEN equ 0x0A
+COLOR_CYAN equ 0x03
+COLOR_RED equ 0x0C
+COLOR_MAGENTA equ 0x05
+COLOR_YELLOW equ 0x0e
+COLOR_WHITE equ 0x0f ; 默认的输出风格为白色
 
 TAB_SPACE_SIZE equ 0x4 ; tab means 4 spaces
 
@@ -21,8 +30,20 @@ SELECTOR_GRAPHIC equ (0x0003<<3)+TI_GDT+RPL0
 [bits 32]
 
 section .data
+	; ANSI 30-37 对应的 VGA 属性值表
+    ; 索引: 0    1    2    3               4    5    6    7
+    ; 颜色: 黑   红   绿   黄（高亮棕色）   蓝   紫   青   白
+    color_table db COLOR_BLACK, COLOR_RED, COLOR_GREEN, COLOR_YELLOW, COLOR_BLUE, COLOR_MAGENTA, COLOR_CYAN, COLOR_WHITE
 
-put_int_buff dq 0 ;buffer for char-int conversion
+	put_int_buff dq 0 ;buffer for char-int conversion
+	; 存储当前字符颜色的变量，默认为 0x07 (白字)
+	current_char_style db COLOR_WHITE
+
+	; 状态机状态定义
+	; 0: 普通字符, 1: 接收到 ESC, 2: 接收到 [, 3: 接收到参数
+	out_status db 0
+
+	ansi_param_val dw 0    ; 用于累加当前的参数值
 
 section .text
 
@@ -52,7 +73,24 @@ put_char: ; write a char that from the stack to the position of cursor
 	; after pushad's 32byte is return-addr which is 4byte
 	; so first argument is esp+32+4=esp+36
 	mov ecx,[esp+36] ; get char to print 
-	
+	mov al, [out_status] ; get current status
+
+	cmp al, 0
+    jz .status_normal
+    cmp al, 1
+    jz .status_esc
+    cmp al, 2
+    jz .status_bracket
+    
+	jmp .put_char_done	
+
+
+; status 0
+.status_normal:	
+
+	cmp cl, CH_ESC
+    jz .go_to_s1
+
 	cmp cl,CH_CR ; char type is 1byte=1bit,so cl is enough
 	jz .is_carriage_return
 	
@@ -67,6 +105,106 @@ put_char: ; write a char that from the stack to the position of cursor
 
 	jmp .put_other
 
+.go_to_s1:
+    mov byte [out_status], 1
+    jmp .put_char_done
+
+; status 1, get ESC, waiting for '['
+.status_esc:
+    cmp cl, '['
+    jz .go_to_s2
+    mov byte [out_status], 0 ; illegal sequence，reset status
+    jmp .put_char_done
+
+.go_to_s2:
+    mov byte [out_status], 2
+    jmp .put_char_done
+
+; status 2, get '[', waiting for arguments
+.status_bracket:
+    ; 当前处于 [ 之后的状态，ecx 中是当前字符
+    
+    ; 判断是否是结束符 'm' 
+    cmp cl, 'm'
+    jz .handle_m_command
+
+    ; 判断是否是分号 ';' (多参数分隔符，为以后可能的多参数扩展预留)
+    cmp cl, ';'
+    jz .handle_semicolon
+
+    ; 判断是否是数字 '0'-'9'
+    cmp cl, '0'
+    jl .not_digit
+    cmp cl, '9'
+    jg .not_digit
+
+    ; 数字累加逻辑：ansi_param_val = ansi_param_val * 10 + (cl - '0')
+    push eax
+    push edx
+    
+    movzx eax, word [ansi_param_val]
+    mov edx, 10
+    mul edx                ; eax = eax * 10
+    
+    sub cl, '0'            ; 将字符转换为数值
+    movzx edx, cl
+    add eax, edx           ; 加上当前个位数
+    
+    mov [ansi_param_val], ax ; 存回内存
+    
+    pop edx
+    pop eax
+    jmp .put_char_done     ; 解析完一位数字，等待下一个字符
+
+.handle_semicolon:
+    ; 如果遇到分号，通常意味着第一个参数结束，我们可以根据需要把参数存入数组
+    ; 但是目前我们只处理一个参数的情况，可以简单地清零准备读下一个，或者忽略它
+    mov word [ansi_param_val], 0
+    jmp .put_char_done
+
+.not_digit:
+    ; 收到既不是数字也不是 'm' 的非法字符，强制复位状态机防止卡死
+    mov byte [out_status], 0
+    mov word [ansi_param_val], 0
+    jmp .put_char_done
+
+.handle_m_command:
+    ; 根据解析出来的数值切换颜色
+    push eax
+	push ebx
+	; movzx(Move with Zero-Extend) 带零扩展的传送指令
+    movzx eax, word [ansi_param_val]
+
+    ;  重置颜色的情况
+    cmp eax, 0
+    jz .set_default
+
+    ; 设置颜色 (30-37) 
+    cmp eax, 30
+    jl .m_done ; 小于 30，不支持
+    cmp eax, 37
+    jg .m_done ; 大于 37，不支持
+
+    ; 计算索引: index = eax - 30
+    sub eax, 30
+    
+    ; 查表取值
+    movzx ebx, ax ; 将索引转入 ebx，高位清零
+    mov al, [color_table + ebx] ; 使用 ebx 作为偏移
+    mov [current_char_style], al
+    jmp .m_done
+
+.set_default:
+    mov byte [current_char_style], COLOR_WHITE ; 白字
+    jmp .m_done
+
+.m_done:
+	pop ebx
+    pop eax
+    mov word [ansi_param_val], 0 ; 处理完命令，计数器清零
+    mov byte [out_status], 0      ; 状态机回到正常模式
+    jmp .put_char_done
+
 
 .is_tab:
 	mov cx,TAB_SPACE_SIZE
@@ -74,7 +212,12 @@ put_char: ; write a char that from the stack to the position of cursor
 	shl bx,1
 	mov byte [gs:bx],CH_SPACE
 	inc bx
-	mov byte [gs:bx],CH_STYLE
+
+	push eax                      
+    mov al, [current_char_style]  
+    mov byte [gs:bx], al ; low 1byte is ASCII of char,high 1byte is style of char
+    pop eax  
+	
 	shr bx,1
 	inc bx
 	loop .print_tab
@@ -94,7 +237,12 @@ put_char: ; write a char that from the stack to the position of cursor
 	
 	mov byte [gs:bx],CH_SPACE ;0x20 is space-character
 	inc bx
-	mov byte [gs:bx],CH_STYLE ; low 1byte is ASCII of char,high 1byte is style of char
+	
+	push eax                      
+    mov al, [current_char_style]  
+    mov byte [gs:bx], al ; low 1byte is ASCII of char,high 1byte is style of char
+    pop eax                       
+	
 	shr bx,1 ;equals bx/2,let offset become cursor's position
 	jmp .set_cursor
 
@@ -103,7 +251,12 @@ put_char: ; write a char that from the stack to the position of cursor
 	
 	mov byte [gs:bx],cl
 	inc bx
-	mov byte [gs:bx],CH_STYLE
+	
+	push eax                      
+    mov al, [current_char_style]  
+    mov byte [gs:bx], al ; low 1byte is ASCII of char,high 1byte is style of char
+    pop eax  
+
 	shr bx,1
 	inc bx
 	cmp bx,NUM_FULL_SCREEN_CH ; if screen is full,then start a new line
@@ -148,7 +301,12 @@ put_char: ; write a char that from the stack to the position of cursor
 .cls:
 	mov byte [gs:ebx],CH_SPACE
 	inc ebx
-	mov byte [gs:ebx],CH_STYLE
+	
+	push eax                      
+    mov al, [current_char_style]  
+    mov byte [gs:bx], al ; low 1byte is ASCII of char,high 1byte is style of char
+    pop eax  
+
 	inc ebx
 	loop .cls
 	mov bx,LAST_LINE_BEGINNING ; cursor move to the beginning of the last line
@@ -303,7 +461,12 @@ cls_screen:
 cls_loop:
 	mov byte [gs:ebx],CH_SPACE
 	inc ebx
-	mov byte [gs:ebx],CH_STYLE
+	
+	push eax                      
+    mov al, [current_char_style]  
+    mov byte [gs:bx], al ; low 1byte is ASCII of char,high 1byte is style of char
+    pop eax  
+
 	inc ebx
 	loop cls_loop
 	mov ebx,0 ; cursor move to the beginning of the screen
@@ -326,3 +489,13 @@ cls_screen_set_cursor:
 
 	popad
 	ret
+
+
+global set_appearance
+set_appearance:
+    push ebp
+    mov ebp, esp
+    mov al, [ebp + 8]          ; 获取参数 color
+    mov [current_char_style], al ; 更新全局颜色变量
+    pop ebp
+    ret

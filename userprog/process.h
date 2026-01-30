@@ -3,7 +3,7 @@
 #include "../thread/thread.h"
 #define USER_VADDR_START 0x8048000
 #define USER_STACK3_VADDR (0xc0000000-0x1000)
-#define DEFAULT_PRIO 5
+#define DEFAULT_PRIO 31
 extern void start_process(void* filename_);
 extern void page_dir_activate(struct task_struct* pthread);
 extern void process_activate(struct task_struct* pthread);

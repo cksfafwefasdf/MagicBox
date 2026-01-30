@@ -71,7 +71,7 @@ uint32_t dlist_len(struct dlist* plist){
 	return length;
 }
 
-struct dlist_elem* dlist_traversal(struct dlist* plist,func_condition condition,int arg){
+struct dlist_elem* dlist_traversal(struct dlist* plist,func_condition condition,void* arg){
 	struct dlist_elem* elem = plist->head.next;
 	if(dlist_empty(plist)){
 		return NULL;

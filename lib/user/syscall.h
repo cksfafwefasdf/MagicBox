@@ -1,8 +1,8 @@
 #ifndef __LIB_USER_SYSCALL_H
 #define __LIB_USER_SYSCALL_H
-#include "../stdint.h"
-#include "../thread/thread.h"
-#include "../../fs/fs.h"
+#include "stdint.h"
+#include "fs_types.h"
+
 // syscall.h includes interface for user
 
 enum SYSCALL_NR {
@@ -37,15 +37,13 @@ enum SYSCALL_NR {
 	SYS_FD_REDIRECT,
 	SYS_FREE_MEM,
 	SYS_DISK_INFO,
-	SYS_MOUNT
+	SYS_MOUNT,
+	SYS_TEST,
+	SYS_READ_SECTORS
 };
-
 
 // user interface
 extern uint32_t getpid(void);
-// extern uint32_t write(char* str);
-// extern uint32_t write_int(int num);
-
 extern uint32_t write(int32_t fd,const void* buf,uint32_t count);
 extern void* malloc(uint32_t size);
 extern void free(void *ptr);
@@ -60,11 +58,11 @@ extern int32_t close(int32_t fd);
 extern int32_t lseek(int32_t fd,int32_t offset,uint8_t whence);
 extern int32_t unlink(const char* pathname);
 extern int32_t mkdir(const char* pathname);
-extern struct dir* opendir(const char* name);
-extern int32_t closedir(struct dir* dir);
+extern int32_t opendir(const char* name);
+extern int32_t closedir(int32_t fd_dir);
+extern int32_t readdir(int32_t fd, struct dir_entry* de);
+extern void rewinddir(int32_t fd_dir);
 extern int32_t rmdir(const char* pathname);
-extern struct dir_entry* readdir(struct dir* dir);
-extern void rewinddir(struct dir* dir);
 extern int32_t stat(const char* path,struct stat* buf);
 extern int32_t chdir(const char* path);
 extern void ps(void);
@@ -77,5 +75,7 @@ extern void fd_redirect(uint32_t old_local_fd, uint32_t new_local_fd);
 extern void help(void);
 extern void free_mem(void);
 extern void disk_info(void);
-
+extern void test_func(void);
+extern void read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uint32_t sec_cnt);
+extern void mount(const char* part_name);
 #endif

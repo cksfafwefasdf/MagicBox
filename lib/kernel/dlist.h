@@ -22,7 +22,7 @@ struct dlist{
 	struct dlist_elem tail;
 };
 
-typedef bool (func_condition)(struct dlist_elem*,int arg);
+typedef bool (*func_condition)(struct dlist_elem*,void* arg);
 
 void dlist_init(struct dlist* plist);
 // insert [elem] in front of the [front]
@@ -39,5 +39,5 @@ uint32_t dlist_len(struct dlist* plist);
 bool dlist_find(struct dlist* plist,struct dlist_elem* obj_elem);
 // traverse the dlist and check if each element satisfies the condition provided by [condition] 
 // if satisfy, return this elem. ohterwise, return NULL
-struct dlist_elem* dlist_traversal(struct dlist* plist,func_condition condition,int arg);
+struct dlist_elem* dlist_traversal(struct dlist* plist,func_condition condition,void* arg);
 #endif

@@ -1,6 +1,0 @@
-nasm ../lib/kernel/print.s -f elf -o ../lib/kernel/print.o 
-gcc main.c -m32 -c -o main.o
-ld ./main.o ../lib/kernel/print.o -m elf_i386 -e main -Ttext 0xc0001500  -o kernel.bin
-rm main.o
-rm ../lib/kernel/print.o
-

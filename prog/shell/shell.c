@@ -1,14 +1,11 @@
 #include "shell.h"
 #include "stdio.h"
-#include "fs.h"
-#include "debug.h"
 #include "syscall.h"
-#include "file.h"
 #include "string.h"
 #include "stdbool.h"
 #include "assert.h"
 #include "buildin_cmd.h"
-#include "memory.h"
+#include "fs_types.h"
 
 #define CMD_LEN 128
 #define MAX_ARG_NR 16
@@ -24,10 +21,15 @@ int32_t argc = -1;
 static char cmd_line[MAX_PATH_LEN] = {0};
 char final_path[MAX_PATH_LEN] = {0};
 
-char cwd_cache[MAX_PATH_LEN] = {0};
 
 void print_prompt(void){
-	printf(PROMPT_STR,cwd_cache);
+	// 动态获取当前路径，不依赖缓存变量
+    char current_path[MAX_PATH_LEN] = {0};
+    if (getcwd(current_path, MAX_PATH_LEN) != NULL) {
+        printf(PROMPT_STR, current_path);
+    } else {
+        printf(PROMPT_STR, "unknown");
+    }
 }
 
 static void readline(char* buf,int32_t count){
@@ -66,14 +68,11 @@ static void readline(char* buf,int32_t count){
 	printf("readline: can\t find enter_key in the cmd_line. max num of char is 128\n");
 }
 
-static cmd_execute(uint32_t argc,char** argv){
+static void cmd_execute(uint32_t argc,char** argv){
 	if(!strcmp("ls",argv[0])){
 		buildin_ls(argc,argv);
 	}else if(!strcmp("cd",argv[0])){
-		if(buildin_cd(argc,argv)!=NULL){
-			memset(cwd_cache,0,MAX_PATH_LEN);
-			strcpy(cwd_cache,final_path);
-		}
+		buildin_cd(argc,argv);
 	}else if(!strcmp("pwd",argv[0])){
 		buildin_pwd(argc,argv);
 	}else if(!strcmp("ps",argv[0])){
@@ -96,42 +95,56 @@ static cmd_execute(uint32_t argc,char** argv){
 		buildin_df(argc,argv);
 	}else if(!strcmp("mount",argv[0])){
 		buildin_mount(argc,argv);
-	}else{
-		printf("try external command '%s'\n",argv[0]);
-		
-		int32_t pid = fork();
-		
-		if(pid){ // if it is parent proc
-			int32_t status;
-			int32_t child_pid = wait(&status);
-			if(child_pid==-1){
-				panic("my_shell: no child\n");
-			}
-			printf("child_pid %d, it's status: %d\n",child_pid,status);
-		}else{
-			make_clear_abs_path(argv[0],final_path);
-			argv[0] = final_path;
-			struct stat file_stat;
-			memset(&file_stat,0,sizeof(struct stat));
-			if(stat(argv[0],&file_stat)==-1){
-				printf("my_shell: cannot access %s: No such file or directory\n",argv[0]);
-				exit(-1);
-			}else{
-				execv(argv[0],argv);
-			}
-		}
-	}
+	} else {
+        int32_t pid = fork();
+        if (pid) { 
+            // 父进程
+            int32_t status;
+            int32_t child_pid = wait(&status);
+            if (child_pid == -1) panic("shell: no child\n");
+            // printf("child_pid %d, it's status: %d\n", child_pid, status);
+        } else {
+            // 子进程，搜索程序并执行
+			// 先到当前路径下找，要找不到再到bin目录下找，要再找不到再报错
+            char exec_path[MAX_PATH_LEN];
+            struct stat file_stat;
+
+            // 如果输入的是绝对路径，直接处理
+            if (argv[0][0] == '/') {
+                strcpy(exec_path, argv[0]);
+            } else {
+                // 尝试在当前目录下查找
+                make_clear_abs_path(argv[0], exec_path);
+                memset(&file_stat, 0, sizeof(struct stat));
+                if (stat(exec_path, &file_stat) == -1) {
+                    
+                    // 当前目录没找到，尝试在 /bin 目录下查找
+                    memset(exec_path, 0, MAX_PATH_LEN);
+                    strcpy(exec_path, "/bin/");
+                    strcat(exec_path, argv[0]);
+                    
+                    memset(&file_stat, 0, sizeof(struct stat));
+                    if (stat(exec_path, &file_stat) == -1) {
+                        printf("shell: command not found: %s\n", argv[0]);
+                        exit(-1);
+                    }
+                }
+            }
+
+            // 执行程序
+            execv(exec_path, argv);
+            // 如果 execv 返回，说明出错了
+            printf("shell: execv failed for %s\n", exec_path);
+            exit(-1);
+        }
+    }
 }
 
-void my_shell(void){
-	cwd_cache[0] = '/';
-	cwd_cache[1] = 0;
-	bool first_in = true;
+int main(void){
+	clear();
+	printf("Welcome to MagicBox! Type 'help' for a list of commands.\n\n");
 	while(1){
-		if(!first_in){
-			print_prompt();
-		}
-		first_in = false;
+		print_prompt();
 		memset(final_path,0,MAX_PATH_LEN);
 		memset(cmd_line,0,MAX_PATH_LEN);
 		readline(cmd_line,MAX_PATH_LEN);
@@ -191,7 +204,7 @@ void my_shell(void){
 			arg_idx++;
 		}
 	}
-	panic("my_shell: should not be here!\n");
+	panic("shell: should not be here!\n");
 }
 
 static int32_t cmd_parse(char* cmd_str,char** argv, char token){

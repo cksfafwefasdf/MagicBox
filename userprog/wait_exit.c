@@ -6,32 +6,37 @@
 #include "wait_exit.h"
 #include "file.h"
 #include "debug.h"
+#include "memory.h"
 
 static void release_prog_resource(struct task_struct* release_thread){
 	uint32_t* pgdir_vaddr = release_thread->pgdir;
-	uint16_t user_pde_nr = 768,pde_idx = 0;
+	uint16_t pde_idx = 0;
 	uint32_t pde = 0;
 	uint32_t* v_pde_ptr = NULL;
 
-	uint16_t user_pte_nr = 1024,pte_idx=0;
+	uint16_t pte_idx=0;
 	uint32_t pte = 0;
 	uint32_t* v_pte_ptr = NULL;
 
 	uint32_t* first_pte_vaddr_in_pde = NULL;
 	uint32_t pg_phy_addr = 0;
 
-	while(pde_idx<user_pde_nr){
+	while(pde_idx<USER_PDE_NR){
 		v_pde_ptr = pgdir_vaddr+pde_idx;
 		pde = *v_pde_ptr;
 		if(pde&0x00000001){
 			first_pte_vaddr_in_pde = pte_ptr(pde_idx*0x400000);
 			pte_idx = 0;
-			while (pte_idx<user_pte_nr){
+			while (pte_idx<USER_PTE_NR){
 				v_pte_ptr = first_pte_vaddr_in_pde+pte_idx;
 				pte = *v_pte_ptr;
-				if(pte&0x00000001){
-					pg_phy_addr = pte&0xfffff000;
-					free_a_phy_page(pg_phy_addr);
+				if(pte&0xfffff000){
+					if(pte&0x00000001){
+						pg_phy_addr = pte&0xfffff000;
+						free_a_phy_page(pg_phy_addr);
+					}else{
+						PANIC("need swap!\n");
+					}
 				}
 				pte_idx++;
 			}
@@ -62,7 +67,8 @@ static void release_prog_resource(struct task_struct* release_thread){
 	}
 }
 
-static bool find_child(struct dlist_elem* pelem,int32_t ppid){
+static bool find_child(struct dlist_elem* pelem,void* arg){
+	int32_t ppid = (int32_t)arg;
 	struct task_struct* pthread = member_to_entry(struct task_struct,all_list_tag,pelem);
 	if(pthread->parent_pid==ppid){
 		return true;
@@ -70,7 +76,8 @@ static bool find_child(struct dlist_elem* pelem,int32_t ppid){
 	return false;
 }
 
-static bool find_hanging_child(struct dlist_elem* pelem,int32_t ppid){
+static bool find_hanging_child(struct dlist_elem* pelem,void* arg){
+	int32_t ppid = (int32_t)arg;
 	struct task_struct* pthraed = member_to_entry(struct task_struct,all_list_tag,pelem);
 	if(pthraed->parent_pid==ppid&&pthraed->status==TASK_HANGING){
 		return true;
@@ -79,7 +86,8 @@ static bool find_hanging_child(struct dlist_elem* pelem,int32_t ppid){
 }
 
 
-static bool init_adopt_a_child(struct dlist_elem* pelem,int32_t pid){
+static bool init_adopt_a_child(struct dlist_elem* pelem,void* arg){
+	int32_t pid = (int32_t)arg;
 	struct task_struct* pthread = member_to_entry(struct task_struct,all_list_tag,pelem);
 	if(pthread->parent_pid==pid){
 		pthread->parent_pid = 1;

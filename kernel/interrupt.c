@@ -3,6 +3,7 @@
 #include "global.h"
 #include "print.h"
 #include "io.h"
+#include "page.h"
 
 #define IDT_DESC_CNT 0x81
 
@@ -12,8 +13,6 @@
 #define PIC_S_DATA 0xa1 // slave-data-port => ICW2 ICW3 ICW4  OCW1
 
 #define EFLAGS_IF 0x00000200
-
-#define SCREEN_POS(row,col) (row*NUM_FULL_LINE_CH+col) 
 
 #define GET_EFLAGS(EFLAGS_VAR) asm volatile ("pushfl;popl %0":"=g"(EFLAGS_VAR));
 
@@ -108,6 +107,7 @@ static void intr_handler_general(uint8_t intr_vec){
         int page_fault_vaddr = 0;
         asm("movl %%cr2,%0":"=r"(page_fault_vaddr));
         put_str("\n\t\tpage fault addr is ");put_int(page_fault_vaddr);
+
     }
     put_str("\n!!!!!!!!!! exception message end !!!!!!!!!!\n");
     while (1);
@@ -142,6 +142,7 @@ static void exception_init(void){
 	intr_name[18] = "#MC Machine-Check Exception"; 
 	intr_name[19] = "#XF SIMD Floating-Point Exception";     
 
+    register_handler(14,intr_handler_page_fault);
 }
 
 
@@ -149,8 +150,10 @@ void intr_init(void){
     put_str("idt items init\n");
     idt_item_init();
     put_str("idt items init done\n");
+    //while(1);
     exception_init();
     pic_init();
+
 
     //load idt
     uint64_t idtr_data = (((uint64_t)(uint32_t)idt)<<16)|(sizeof(idt)-1); 

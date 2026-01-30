@@ -8,9 +8,11 @@
 #include "dlist.h"
 #include "fork.h"
 #include "stdio-kernel.h"
+#include "print.h"
 
 extern void intr_exit(void); // defined in  kernel.s
 static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,struct task_struct* parent_thread){
+	
 	memcpy(child_thread,parent_thread,PG_SIZE);
 
 	child_thread->pid = fork_pid();
@@ -24,9 +26,13 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 
 	uint32_t bitmap_pg_cnt = DIV_ROUND_UP((0xc0000000-USER_VADDR_START)/PG_SIZE/8,PG_SIZE);
 	void* vaddr_btmp = get_kernel_pages(bitmap_pg_cnt);
+	
+	// printk("Child PCB: %x, Bitmp Vaddr: %x, Phys: %x\n", 
+    //    child_thread, vaddr_btmp, addr_v2p(vaddr_btmp));
+	
 	memcpy(vaddr_btmp,child_thread->userprog_vaddr.vaddr_bitmap.bits,bitmap_pg_cnt*PG_SIZE);
 	child_thread->userprog_vaddr.vaddr_bitmap.bits = vaddr_btmp;
-	ASSERT(strlen(child_thread->name)<11);
+	// ASSERT(strlen(child_thread->name)<11);
 	strcat(child_thread->name,"_fork");
 	return 0;
 }
@@ -94,6 +100,8 @@ static void update_inode_open_cnts(struct task_struct* thread){
 	}
 }
 
+uint32_t test_global_data = 0;
+
 static int32_t copy_process(struct task_struct* child_thread,struct task_struct* parent_thread){
 	
 	void* buf_page = get_kernel_pages(1);
@@ -114,19 +122,26 @@ static int32_t copy_process(struct task_struct* child_thread,struct task_struct*
 	}
 	
 	copy_body_stack3(child_thread,parent_thread,buf_page);
+	// printk("set_page_read_only start!\n");
+	// set_page_read_only(parent_thread);
+	// printk("set_page_read_only done!\n");
 	
+	// printk("copy_page_table start!\n");
+	// copy_page_tables(parent_thread,child_thread,buf_page);
+	// printk("copy_page_table done!\n");
+	
+	// while(1);
 	build_child_stack(child_thread);
-
 	update_inode_open_cnts(child_thread);
-
 	mfree_page(PF_KERNEL,buf_page,1);
-
+	printk("copy_process::: copy_process done!\n");
 	return 0;
 }
 
 pid_t sys_fork(){
 	
 	struct task_struct* parent_thread = get_running_task_struct();
+	
 	struct task_struct* child_thread = get_kernel_pages(1);
 
 	if(child_thread==NULL){
@@ -134,16 +149,15 @@ pid_t sys_fork(){
 	}
 
 	ASSERT(INTR_OFF == intr_get_status()&&parent_thread->pgdir!=NULL);
-
 	if(copy_process(child_thread,parent_thread)==-1){
 		return -1;
 	}
+	
 
 	ASSERT(!dlist_find(&thread_ready_list,&child_thread->general_tag));
 	dlist_push_back(&thread_ready_list,&child_thread->general_tag);
 	ASSERT(!dlist_find(&thread_all_list,&child_thread->all_list_tag));
 	dlist_push_back(&thread_all_list,&child_thread->all_list_tag);
-	
 	return child_thread->pid;
 }
 

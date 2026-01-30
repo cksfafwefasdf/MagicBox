@@ -88,6 +88,9 @@
 #define SYS_MEM_SIZE_PTR 0xb03
 #define DISK_NUM_PTR 0x475
 
+#define SHELL_PATH  "/bin/shell"
+#define BIN_DIR  "/bin"
+
 #define UNUSED __attribute__((unused))
 
 // items in gdt

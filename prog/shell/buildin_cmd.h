@@ -1,5 +1,7 @@
 #ifndef __SHELL_BUILDIN_CMD_H
 #define __SHELL_BUILDIN_CMD_H
+
+#include "fs_types.h"
 extern void make_clear_abs_path(char* path,char* final_path);
 extern int32_t buildin_rm(uint32_t argc,char** argv);
 extern int32_t buildin_rmdir(uint32_t argc,char** argv);
@@ -14,5 +16,6 @@ extern void buildin_help(uint32_t argc UNUSED,char** argv UNUSED);
 extern void buildin_free_mem(uint32_t argc UNUSED,char** argv UNUSED);
 extern void buildin_df(uint32_t argc UNUSED,char** argv UNUSED);
 extern void buildin_mount(uint32_t argc,char** argv);
+extern char* path_parse(char* pathname,char* name_store);
 
 #endif

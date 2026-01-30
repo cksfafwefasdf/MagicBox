@@ -38,7 +38,7 @@ static void intr_handler_timer(void){
     struct task_struct* cur_thread = get_running_task_struct();
     //put_str(cur_thread->name);put_str(" timer!!!\n");put_int(cur_thread->ticks);
     // check if stack overflouw
-    ASSERT(cur_thread->stack_magic == 0x20030607);
+    ASSERT(cur_thread->stack_magic == STACK_MAGIC);
 
     cur_thread->elapsed_ticks++;
     ticks++;

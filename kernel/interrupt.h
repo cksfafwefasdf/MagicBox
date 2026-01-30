@@ -1,6 +1,10 @@
 #ifndef __KERNEL__INTERRUPT_H
 #define __KERNEL__INTERRUPT_H
-#include "../lib/stdint.h"
+#include "stdint.h"
+
+
+#define SCREEN_POS(row,col) (row*NUM_FULL_LINE_CH+col) 
+
 typedef void* intr_handler_addr;
 
 enum intr_status{

@@ -1,7 +1,6 @@
 #include "syscall.h"
-#include "thread.h"
-#include "print.h"
-#include "console.h"
+#include "stdio.h"
+#include "fs_types.h"
 
 // eax for int_no
 // ebx for arg1
@@ -137,24 +136,24 @@ int32_t mkdir(const char* pathname){
 	return _syscall1(SYS_MKDIR,pathname);
 }
 
-struct dir* opendir(const char* name){
+int32_t opendir(const char* name){
 	return (struct dir*)_syscall1(SYS_OPENDIR,name);
 }
 
-int32_t closedir(struct dir* dir){
-	return _syscall1(SYS_CLOSEDIR,dir);
+int32_t closedir(int32_t fd_dir){
+	return _syscall1(SYS_CLOSEDIR,fd_dir);
 }
 
 int32_t rmdir(const char* pathname){
-	return _syscall1(SYS_MKDIR,pathname);
+	return _syscall1(SYS_RMDIR,pathname);
 }
 
-struct dir_entry* readdir(struct dir* dir){
-	return (struct dir_entry*) _syscall1(SYS_READDIR,dir);
+int32_t readdir(int32_t fd, struct dir_entry* de){
+	return _syscall2(SYS_READDIR,fd,de);
 }
 
-void rewinddir(struct dir* dir){
-	_syscall1(SYS_REWINDDIR,dir);
+void rewinddir(int32_t fd_dir){
+	_syscall1(SYS_REWINDDIR,fd_dir);
 }
 
 int32_t stat(const char* path,struct stat* buf){
@@ -202,4 +201,14 @@ void disk_info(void){
 }
 void mount(const char* part_name){
 	_syscall1(SYS_MOUNT,part_name);
+}
+
+void test_func(){
+	printf("test_func:::test_func start!\n");
+	_syscall0(SYS_TEST);
+	printf("test_func:::test_func done!\n");
+}
+
+void read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uint32_t sec_cnt){
+	_syscall4(SYS_READ_SECTORS,hd_name,lba,buf,sec_cnt);
 }

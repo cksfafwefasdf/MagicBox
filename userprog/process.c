@@ -43,7 +43,6 @@ void page_dir_activate(struct task_struct* pthread){
 		// vaddr convert into paddr
 		pagedir_phy_addr = addr_v2p((uint32_t)pthread->pgdir);
 	}
-	
 	// update PDTR, activate the new PDT
 	asm volatile ("movl %0,%%cr3"::"r"(pagedir_phy_addr):"memory");
 }
@@ -90,8 +89,13 @@ void create_user_vaddr_bitmap(struct task_struct* user_prog){
 void process_execute(void* filename,char* name){
 	// all PCB is in the kernel space
 	struct task_struct* thread = get_kernel_pages(1);
-	int default_prio = DEFAULT_PRIO;
-	init_thread(thread,name,default_prio);
+	uint32_t prio = 0;
+	if(strcmp(name,SHELL_PATH)){
+		prio = 63;
+	}else{
+		prio = DEFAULT_PRIO;
+	}
+	init_thread(thread,name,prio);
 	create_user_vaddr_bitmap(thread);
 	// start_process(filename) will be called by kernel_thread 
 	thread_create(thread,start_process,filename);

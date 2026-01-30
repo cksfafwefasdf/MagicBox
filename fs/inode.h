@@ -1,9 +1,10 @@
 #ifndef __FS_INODE_H
 #define __FS_INODE_H
-#include "../lib/stdint.h"
-#include "../lib/stdbool.h"
-#include "../lib/kernel/dlist.h"
+#include "stdint.h"
+#include "stdbool.h"
+#include "dlist.h"
 #include "fs.h"
+#include "fs_types.h"
 
 #define DIRECT_INDEX_BLOCK 12
 #define FIRST_LEVEL_INDEX_BLOCK 1
@@ -12,6 +13,7 @@
 
 #define TOTAL_BLOCK_COUNT (DIRECT_INDEX_BLOCK+FIRST_LEVEL_INDEX_BLOCK*(BLOCK_SIZE/ADDR_BYTES_32BIT))
 
+// 内存inode
 struct inode{
 	uint32_t i_no;
 	// when inode points to file, i_size is the size of the file
@@ -27,9 +29,12 @@ struct inode{
 	// this tag is used for the 'already opened inode queue'
 	// to prevent redundant reads of inodes from the disk.
 	struct dlist_elem inode_tag;
+	// to record file type
+	enum file_types i_type;
 };
 
-extern void inode_init(uint32_t inode_no,struct inode* new_inode);
+
+extern void inode_init(uint32_t inode_no,struct inode* new_inode,enum file_types ft);
 extern void inode_close(struct inode* inode);
 extern struct inode* inode_open(struct partition* part,uint32_t inode_no);
 extern void inode_sync(struct partition* part,struct inode* inode,void* io_buf);

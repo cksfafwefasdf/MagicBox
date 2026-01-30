@@ -47,6 +47,7 @@ error_hlt:
 	hlt ; if an error occurs, suspend CPU
 
 loader_start:
+	cli
 	xor ebx,ebx
 	mov edx,0x534d4150
 	mov di,ards_buf
@@ -114,24 +115,28 @@ mem_get_ok:
 	mov [total_mem_bytes],edx ;store the result
 
 ;------- print message ----------
-	;mov sp,LOADER_BASE_ADDR
-	;mov bp,loadermsg
-	;mov cx,17	
-	;mov ax,0x1301
-	;mov bx,0x001f
-	;mov dx,0x1800
-	;int 0x10
+	mov sp,LOADER_BASE_ADDR
+	mov bp,loadermsg
+	mov cx,17	
+	mov ax,0x1301
+	mov bx,0x001f
+	mov dx,0x1800
+	int 0x10
+	
 ;------- open A20Gate ----------
 	in al,0x92
 	or al,0000_0010B
 	out 0x92,al
+	
 ;------- load GDT ----------
+	
 	lgdt [gdt_ptr]
 ;------- set cr0 ----------
+	
 	mov eax,cr0
 	or eax,0x00000001
 	mov cr0,eax
-
+	
 ; refresh the pipeline,flush the pipeline and update the selector in es
 	jmp SELECTOR_CODE:p_mode_start
 
@@ -152,10 +157,7 @@ p_mode_start:
 	; rd_disk_m_32(KERNEL_START_SECTOR,KERNEL_BIN_BASE_ADDR,200)
 	; 0x000000000d1c
 	call rd_disk_m_32 ;read kernel from disk
-	pop eax
-	pop eax
-	pop eax
-	xor eax,eax
+	add esp, 12
 
 ;------- init pagetable and turn on PG ----------
 	call setup_page
@@ -232,61 +234,100 @@ create_kernel_pde:
 ; rd_disk_m_32(KERNEL_START_SECTOR,KERNEL_BIN_ADDR,200)
 ; [esp+4] get 200
 rd_disk_m_32:
-	; set sector num
-	mov dx,PRIMARY_SECTOR_CNT
-	mov eax,[esp+4] ;get sector cnt
-	out dx,al
+    push ebp
+    mov ebp, esp
+    pushad              ; 压入pushad后，参数偏移分别是 ebp+8, ebp+12, ebp+16
+
+    mov ecx, [ebp + 8]  ; ecx = 总扇区数 (KERNEL_SECTOR_CNT)
+    mov edi, [ebp + 12] ; edi = 目标内存地址 (KERNEL_BIN_BASE_ADDR)
+    mov esi, [ebp + 16] ; esi = LBA 起始地址 (KERNEL_START_SECTOR)
+
+.main_loop:
+    cmp ecx, 0
+    jle .done           ; 读完了则退出
+
+    ; 计算本次要读的扇区数 (eax = min(ecx, 255))
+    mov eax, ecx
+    cmp eax, 255
+    jbe .read_now
+    mov eax, 255        ; 限制单次最大读 255
+
+.read_now:
+    ; --- 1. 设置扇区数 ---
+    push eax            ; 备份本次要读的数量
+    mov dx, 0x1f2
+    out dx, al          
+
+    ; --- 2. 设置 LBA 地址 ---
+    mov eax, esi        ; 当前起始 LBA
+    mov dx, 0x1f3
+    out dx, al
+
+    mov dx, 0x1f4
+    shr eax, 8
+    out dx, al
+
+    mov dx, 0x1f5
+    shr eax, 8
+    out dx, al
+
+    mov dx, 0x1f6
+    shr eax, 8
+    and al, 0x0f
+    or al, 0xe0
+    out dx, al
+
+    ; --- 3. 发送读命令 ---
+    mov dx, 0x1f7
+    mov al, 0x20
+    out dx, al
+
+    ; --- 4. 真正读取数据 ---
+    pop eax             ; 弹出本次要读的扇区数
+    push eax            ; 再次备份用于更新 esi 和 edi
+    mov edx, eax        ; edx 为内层循环计数值（扇区数）
+
+.read_sector_loop:
+    push edx
+
+    ; 等待磁盘就绪
+.not_ready:
+    nop
+    mov dx, 0x1f7
+    in al, dx
+    and al, 0x88        ; 检查 BSY 和 DRQ
+    cmp al, 0x08
+    jnz .not_ready
+
+    ; 读取一个扇区
+    mov ecx, 256
+    mov dx, 0x1f0
+.keep_read:
+    in ax, dx
+    mov [edi], ax
+    add edi, 2
+    loop .keep_read
+
+    pop edx
+    dec edx
+    jnz .read_sector_loop
+
+    ; --- 5. 更新参数准备下一轮批处理 ---
+    pop eax             ; 弹出刚才读完的扇区数
+    add esi, eax        ; LBA 推进
+    ; 注意：这里不要修改 [ebp+8]，直接修改寄存器 ecx 即可
+    mov ebx, [ebp + 8]
+    sub ebx, eax
+    mov [ebp + 8], ebx  ; 更新栈里的剩余总数（可选，但安全）
+    mov ecx, ebx        ; 更新 ecx 进入下一次 main_loop 判断
+    jmp .main_loop
+
+.done:
+    popad
+    pop ebp
+    ret
+
 	
-	mov eax,[esp+12] ;get START_SECTOR
-	;set LBA_LOW 0~7
-	mov dx,PRIMARY_LBA_LOW
-	out dx,al
-	mov cl,8
-	shr eax,cl
-	;set LBA_MID 8~15
-	mov dx,PRIMARY_LBA_MID
-	out dx,al
-	shr eax,cl
-	;set LBA_HIGH 16~23
-	mov dx,PRIMARY_LBA_HIGH
-	out dx,al
-	shr eax,cl
-	;set LBA_DEVICE 24~27,and set DEVICE
-	and al,0x0f
-	or al,1110_0000b
-	;or al,0xe0
-	mov dx,PRIMARY_DEVICE
-	out dx,al
-
-	;set command
-	mov al,0x20
-	mov dx,PRIMARY_COMMAND
-	out dx,al
-	
-	mov dx,PRIMARY_STATUS
-not_ready: 
-	nop
-	; first operand must be al !!! can not be ax !!!
-	; beacuse status-port is 8bit ,use ax instead of al may cause hardware fault!!!
-	in al,dx
-	and al,0x88
-	cmp al,0x08
-	jnz not_ready
-
-	; sector is ready to transmit
-	mov eax,256; data-port is 16bit,a block is 512Byte 512*8/16=256 times
-	mov ecx,[esp+4] ; get sector cnt
-	mul ecx ; 256times/sector * 200sector
-	mov ecx,eax ; result put into ecx
-	mov edx,PRIMARY_DATA
-	mov ebx,[esp+8] ;get kernel.bin base addr
-keep_read:
-	in ax,dx
-	mov [ebx],ax
-	add ebx,2
-	loop keep_read	
-	ret
-
 enter_kernel:
 	call kernel_init
 	; 0xe58
