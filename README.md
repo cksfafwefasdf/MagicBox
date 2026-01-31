@@ -3,7 +3,7 @@
 
 > **Note**: This project is intended for learning purposes only, utilizing the traditional 32-bit Protected Mode tech stack.
 
-
+![MagicBox Preview](./doc/pic/preview.png)
 
 ## 📚 Learning Objectives
 
@@ -19,7 +19,7 @@
 - **Interrupts & Sync**: Handles hardware interrupts via the **8259A PIC** and implements thread synchronization using **mutexes and semaphores**.
 - **Memory Management**: A dual-pool (Kernel/User) system using **bitmaps** for page allocation, featuring an **Arena-based allocator** for fine-grained memory requests and recursive page table mapping.
 - **Unix-like File System**: An **Inode-based** FS supporting hierarchical directories, file descriptors, and IPC via **Pipes**.
-- **Task Scheduling**: A **preemptive Round-Robin scheduler** where task priority determines the duration of its **time slice**. Tasks are preempted once their allocated clock ticks expire.
+- **Task Scheduling**: A **none-preemptive Round-Robin scheduler** where task priority determines the duration of its **time slice**. Tasks are preempted once their allocated clock ticks expire.
 
 
 
@@ -112,3 +112,66 @@ qemu-system-i386 \
 >
 > - `hd60M.img` contains the MBR, Loader, and the Kernel.
 > - `hd80M.img` is the data disk where your file system and Tar-packaged apps reside.
+
+
+
+## ⏰ TODO List
+
+### **Project Status**
+
+This is a personal learning project currently in its early experimental stages. The following plans represent preliminary goals for functional exploration:
+
+- **P0**: Foundational compatibility. Attempting to provide basic support for early utilities like **BusyBox v0.60**.
+- **P1**: Architectural refinement. Trying to establish a simple environment to support self-hosting experiments with **GCC 1.40 / 2.7.2**.
+- **P2**: Feature exploration. Preliminary attempts at simple networking and basic interface improvements.
+
+------
+
+### 🧠 Memory Management (MM)
+
+- ~~**Internal Arena Allocator**: Basic kernel-space memory allocation implemented.~~
+- ~~**Legacy `malloc` Syscall**: Simple direct kernel-to-user memory allocation implemented.~~
+- **[P0] Heap Management (`brk`)**: Implement a simple `sys_brk` for basic user-space heap boundary control.
+- **[P1] Copy-On-Write (COW)**: Attempt to implement simple COW logic to mitigate physical memory overhead during `fork()`.
+- **[P1] Memory Mapping (`mmap`)**: Preliminary support for basic file-backed and anonymous memory mapping.
+- **[P2] Buddy System**: Try to implement a simple page-level allocator to explore physical memory management.
+- **[P2] Slab Allocator**: Attempt to implement a basic object-level cache for common kernel structures.
+
+### 📁 File System (FS) & I/O
+
+- ~~**Basic VFS**: Preliminary implementation of `open`, `read`, `write`, `close`, `lseek`.~~
+- ~~**Directory Operations**: Basic support for `mkdir`, `rmdir`, and `mount`.~~
+- ~~**Buffer Cache**: Simple block-level caching mechanism implemented.~~
+- ~~**Basic Pipe**: Support for unidirectional pipes and simple I/O redirection.~~
+- **[P0] POSIX FS Refinement**:
+  - Expand `struct stat` to include basic members like `st_mode` and `st_nlink`.
+  - Implement a basic `sys_getdents` for simple directory traversal.
+  - Handle basic `i_nlink` synchronization for directories and files.
+- **[P1] FS Robustness & Scaling**:
+  - **Indirect Block Validation**: Verify and refine the logic for `i_sectors[12]` to support larger files (>6KB).
+  - Implement a basic `sys_dup2` for common file descriptor duplication.
+- **[P2] DMA Driver**: Preliminary attempt at a simple DMA driver for disk I/O to reduce CPU involvement.
+
+### ⚡ Process & Scheduling
+
+- ~~**Task Control**: Basic `fork`, `execv`, and `exit` flow implemented.~~
+- ~~**Scheduler**: Simple priority-based Round-Robin (non-preemptive).~~
+- **[P0] Process Synchronization**: Refine `sys_waitpid` (or the existing `wait`) to collect basic child exit status.
+- **[P0] Signal Mechanism**: Support for basic signal handling (e.g., simple `SIGINT`, `SIGCHLD`).
+- **[P1] Environment Support**: Support passing basic environment variables (e.g., `PATH`) during `execve`.
+- **[P1] Preemptive Scheduling**: Attempt a basic preemption logic within the timer interrupt for better responsiveness.
+
+### 💻 Console & UX
+
+- ~~**Basic Console**: Simple VGA text mode input and output implemented.~~
+- **[P1] Interactive UX**: Support for basic ANSI escape sequences to enable arrow keys and simple command history.
+- **[P1] Scrollback Support**: Implementation of a basic VGA buffer scrollback for `PgUp`/`PgDn` support.
+- **[P2] Network Stack**: Preliminary exploration of basic network protocols (e.g., ARP, ICMP, and UDP).
+
+------
+
+### 🏁 Milestones (Experimental Goals)
+
+1. **Milestone 1**: Attempt to execute unmodified **BusyBox v0.60** core binaries.
+2. **Milestone 2**: **Self-hosting Experiment** - Try to compile basic MagicBox kernel source code using **GCC/Make** within the OS environment.
+

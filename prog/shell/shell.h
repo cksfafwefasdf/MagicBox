@@ -4,7 +4,7 @@
 #include "fs_types.h"
 #include "color.h"
 
-#define PROMPT_STR BLUE "ccc@magic-box" RESET ":" BLUE "%s" RESET "$ "
+#define PROMPT_STR GREEN "ccc@magic-box" RESET ":" BLUE "%s" RESET "$ "
 
 extern char final_path[MAX_PATH_LEN];
 #endif
