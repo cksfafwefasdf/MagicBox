@@ -4,7 +4,7 @@
 > **Note**: This project is intended for learning purposes only, utilizing the traditional 32-bit Protected Mode tech stack.
 
 <p align="center">
-  <img src="./doc/pic/preview.png" width="50%" title="MagicBox OS Preview">
+  <img src="./doc/pic/preview.png" width="80%" title="MagicBox OS Preview">
 </p>
 
 ## 📚 Learning Objectives
