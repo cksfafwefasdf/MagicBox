@@ -618,7 +618,7 @@ void sys_free_mem(){
 	for(i=0;i<DESC_TYPE_CNT;i++){
 		if(dlist_empty(&k_block_descs[i].free_list)) continue;
 		uint32_t free_elem_num = 0;
-		dlist_traversal(&k_block_descs[i].free_list,sum_free_list,(int)&free_elem_num);
+		dlist_traversal(&k_block_descs[i].free_list,sum_free_list,(void*)&free_elem_num);
 		kf += free_elem_num*k_block_descs[i].block_size;
 	}
 	uint32_t user_total = mem_bytes_total/2;
@@ -710,7 +710,7 @@ void swap_page(uint32_t err_code,void* err_vaddr){
 
 void write_protect(uint32_t err_code,void* err_vaddr){
 	printk("kernel_vaddr.vaddr_start: %x\n", kernel_vaddr.vaddr_start);
-	if(err_vaddr>=0xC0000000){
+	if((uint32_t)err_vaddr>=0xC0000000){
 		PANIC("kernel write protection error");
 	}
 	

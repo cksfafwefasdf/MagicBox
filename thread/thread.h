@@ -96,6 +96,7 @@ extern pid_t fork_pid(void);
 extern void sys_ps(void);
 extern void thread_exit(struct task_struct* thread_over,bool need_schedule);
 extern struct task_struct* pid2thread(int32_t pid);
+extern void release_pid(pid_t pid);
 
 extern struct dlist thread_ready_list;
 extern struct dlist thread_all_list; // queue of all tasks

@@ -1,7 +1,7 @@
 #ifndef __USERPROG_EXEC_H
 #define __USERPROG_EXEC_H
 
-#include "../lib/stdint.h"
+#include "stdint.h"
 
 #define MAX_PT_LOADER_SEGMENT 10 // the max number of the PT_LOAD segment is 10 (Linux standard)
 

@@ -83,12 +83,9 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 	pthread->elapsed_ticks = 0;
 	pthread->pgdir = NULL;
 
-	// reserve for stdin, stdout, stderr
-	pthread->fd_table[0] = 0; // stdin
-	pthread->fd_table[1] = 1; // stdout
-	pthread->fd_table[2] = 2; // stderr
+
 	// the others set as -1
-	uint8_t fd_idx = 3;
+	uint8_t fd_idx = 0;
 	while(fd_idx<MAX_FILES_OPEN_PER_PROC){
 		pthread->fd_table[fd_idx] = -1;
 		fd_idx++;

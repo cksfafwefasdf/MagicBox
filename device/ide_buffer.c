@@ -2,13 +2,10 @@
 #include "ide.h"
 #include "stdint.h"
 #include "stdbool.h"
-#include "dlist.h"
-#include "sync.h"
 #include "stdio-kernel.h"
-#include "hashtable.h"
 #include "debug.h"
-#include "fs_types.h"
-
+#include "sync.h"
+#include "hashtable.h"
 
 static struct ide_buffer global_ide_buffer; 
 
@@ -224,7 +221,7 @@ void bread_multi(struct disk* dev, uint32_t start_lba, void* out_buf, uint32_t s
 
             uint32_t bulk_start_idx = i;
             // 限制单次批量大小，16个扇区(8KB)是一个比较平衡的数值
-            uint32_t bulk_cnt = (sec_cnt - i > 16) ? 16 : (sec_cnt - i);
+            uint32_t bulk_cnt = (sec_cnt - i > SECTORS_PER_OP_BLOCK) ? SECTORS_PER_OP_BLOCK : (sec_cnt - i);
             uint32_t j =0 ;
 
             // 向后探测：如果在 bulk 范围内遇到了已经缓存的块，就截断本次批量读取

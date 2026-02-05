@@ -1,8 +1,8 @@
 #ifndef __LIB_KERNEL_DLIST_H
 #define __LIB_KERNEL_DLIST_H
-#include "../../kernel/global.h"
-#include "../stdbool.h"
-#include "../stdint.h"
+#include "global.h"
+#include "stdbool.h"
+#include "stdint.h"
 
 // offset() is used to compute the offset of the member in struct
 // ((struct_type*)0)->member_name is meaningless, but compiler can compute the offset correctly

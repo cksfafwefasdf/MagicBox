@@ -1,8 +1,8 @@
 #ifndef __KERNEL_MEMORY_H
 #define __KERNEL_MEMORY_H
-#include "../lib/stdint.h"
-#include "../lib/kernel/bitmap.h"
-#include "../lib/kernel/dlist.h"
+#include "stdint.h"
+#include "bitmap.h"
+#include "dlist.h"
 
 #define PG_P_1 1 
 #define PG_P_0 0 

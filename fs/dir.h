@@ -2,20 +2,13 @@
 #define __FS_DIR_H
 #include "stdint.h"
 #include "stdbool.h"
-#include "inode.h"
-#include "fs.h"
+#include "unistd.h"
 #include "fs_types.h"
 
-struct dir{
-	struct inode* inode;
-	// Used to record the offset of the 'cursor' 
-	// in the directory while traversing the directory.
-	uint32_t dir_pos;
-	uint8_t dir_buf[BLOCK_SIZE];
-};
-
+struct partition;
 
 extern struct dir root_dir;
+
 extern bool search_dir_entry(struct partition* part,struct dir* pdir,const char* name,struct dir_entry* dir_e);
 extern void dir_close(struct dir* dir);
 extern struct dir* dir_open(struct partition* part,uint32_t inode_no);

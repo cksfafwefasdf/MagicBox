@@ -253,12 +253,12 @@ rd_disk_m_32:
     mov eax, 255        ; 限制单次最大读 255
 
 .read_now:
-    ; --- 1. 设置扇区数 ---
+    ; 设置扇区数
     push eax            ; 备份本次要读的数量
     mov dx, 0x1f2
     out dx, al          
 
-    ; --- 2. 设置 LBA 地址 ---
+    ; 设置 LBA 地址
     mov eax, esi        ; 当前起始 LBA
     mov dx, 0x1f3
     out dx, al
@@ -277,12 +277,12 @@ rd_disk_m_32:
     or al, 0xe0
     out dx, al
 
-    ; --- 3. 发送读命令 ---
+    ; 发送读命令
     mov dx, 0x1f7
     mov al, 0x20
     out dx, al
 
-    ; --- 4. 真正读取数据 ---
+    ; 真正读取数据
     pop eax             ; 弹出本次要读的扇区数
     push eax            ; 再次备份用于更新 esi 和 edi
     mov edx, eax        ; edx 为内层循环计数值（扇区数）
@@ -312,13 +312,13 @@ rd_disk_m_32:
     dec edx
     jnz .read_sector_loop
 
-    ; --- 5. 更新参数准备下一轮批处理 ---
+    ; 更新参数准备下一轮批处理
     pop eax             ; 弹出刚才读完的扇区数
     add esi, eax        ; LBA 推进
-    ; 注意：这里不要修改 [ebp+8]，直接修改寄存器 ecx 即可
+    ; 这里不要修改 [ebp+8]，直接修改寄存器 ecx 即可
     mov ebx, [ebp + 8]
     sub ebx, eax
-    mov [ebp + 8], ebx  ; 更新栈里的剩余总数（可选，但安全）
+    mov [ebp + 8], ebx  ; 更新栈里的剩余总数，为了安全而做此操作
     mov ecx, ebx        ; 更新 ecx 进入下一次 main_loop 判断
     jmp .main_loop
 

@@ -3,10 +3,12 @@
 
 #include "stdint.h"
 #include "stdbool.h"
+#include "unistd.h"
 #include "dlist.h"
 #include "sync.h"
-#include "ide.h"
 #include "hashtable.h"
+
+struct disk;
 
 #define BUFFER_NUM 2048
 // 由于要使用黄金分割乘法hash，因此选取2的幂次作为hash_size
@@ -15,7 +17,7 @@
 // 128*16=2KB，刚好占用一个页的一半，我们留出另一半来作为一点余裕
 // 防止后面出现莫名其妙的问题
 #define HASH_SIZE 128  
-#define WRITE_BATCH_SIZE 32 // 用于在bread_multi进行批量写入的控制
+#define WRITE_BATCH_SIZE SECTORS_PER_OP_BLOCK // 用于在bread_multi进行批量写入的控制
 struct buffer_head {
     uint32_t b_blocknr;     // 对应的磁盘 LBA 地址（扇区号）
     struct disk* b_dev;     // 属于哪个磁盘设备
@@ -26,7 +28,6 @@ struct buffer_head {
 
     uint8_t *b_data;           // 指向 512 字节内存空间的指针
 
-    /* 4. 管理链表 */
     // 我们希望每一次对元素在LRU链表中的操作都不要影响到其在hash表中的位置
     // 因此我们需要将hash_tag和lru_tag分开
     struct dlist_elem lru_tag; // 哈希表节点：用于根据 (dev, lba) 快速找到块

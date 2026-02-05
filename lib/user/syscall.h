@@ -1,7 +1,7 @@
 #ifndef __LIB_USER_SYSCALL_H
 #define __LIB_USER_SYSCALL_H
 #include "stdint.h"
-#include "fs_types.h"
+#include "unistd.h"
 
 // syscall.h includes interface for user
 
@@ -34,12 +34,13 @@ enum SYSCALL_NR {
 	SYS_EXIT,
 	SYS_READRAW,
 	SYS_PIPE,
-	SYS_FD_REDIRECT,
 	SYS_FREE_MEM,
 	SYS_DISK_INFO,
 	SYS_MOUNT,
 	SYS_TEST,
-	SYS_READ_SECTORS
+	SYS_READ_SECTORS,
+	SYS_MKNOD,
+	SYS_DUP2
 };
 
 // user interface
@@ -71,11 +72,12 @@ extern pid_t wait(int32_t* status);
 extern void exit(int32_t status);
 extern void readraw(const char* disk_name,uint32_t lba,const char* filename,uint32_t file_size);
 extern int32_t pipe(int32_t pipefd[2]);
-extern void fd_redirect(uint32_t old_local_fd, uint32_t new_local_fd);
 extern void help(void);
 extern void free_mem(void);
 extern void disk_info(void);
 extern void test_func(void);
 extern void read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uint32_t sec_cnt);
 extern void mount(const char* part_name);
+extern int32_t mknod(const char* pathname, enum file_types type, uint32_t dev);
+extern int32_t dup2(uint32_t old_local_fd, uint32_t new_local_fd);
 #endif

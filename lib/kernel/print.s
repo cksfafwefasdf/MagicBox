@@ -128,6 +128,10 @@ put_char: ; write a char that from the stack to the position of cursor
     cmp cl, 'm'
     jz .handle_m_command
 
+	; 判断是否是结束符 'J' (屏幕处理)
+    cmp cl, 'J'
+    jz .handle_J_command
+
     ; 判断是否是分号 ';' (多参数分隔符，为以后可能的多参数扩展预留)
     cmp cl, ';'
     jz .handle_semicolon
@@ -155,6 +159,26 @@ put_char: ; write a char that from the stack to the position of cursor
     pop edx
     pop eax
     jmp .put_char_done     ; 解析完一位数字，等待下一个字符
+
+.handle_J_command:
+    ; ANSI 标准中，[2J 表示清空全屏
+    movzx eax, word [ansi_param_val]
+    cmp eax, 2
+    jne .J_done             ; 如果不是 2，暂时不处理（ANSI 还有 0J, 1J）
+
+    ; 因为此时已经在 put_char 内部，bx 寄存器存着当前光标，我们需要重置它
+    pushad                  ; 保护当前 put_char 的现场
+    call cls_screen         ; 调用全局清屏函数
+    popad                   ; 恢复现场
+
+    ; 清屏后，我们需要同步更新当前 put_char 里的 bx 寄存器
+    ; 否则 put_char 结尾的 set_cursor 会把光标设置回老地方
+    xor bx, bx              ; bx 置 0，回到左上角
+
+.J_done:
+    mov word [ansi_param_val], 0
+    mov byte [out_status], 0
+    jmp .set_cursor         ; 强制跳转到设置光标处，让光标归位
 
 .handle_semicolon:
     ; 如果遇到分号，通常意味着第一个参数结束，我们可以根据需要把参数存入数组

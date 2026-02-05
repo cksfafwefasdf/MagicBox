@@ -4,7 +4,7 @@
 #include "io.h"
 #include "global.h"
 #include "stdbool.h"
-#include "ioqueue.h"
+#include "tty.h"
 
 #define KBD_BUF_PORT 0x60 // keyboard buff port
 
@@ -36,8 +36,6 @@
 // use to check if the key is pressed
 // use [ext_scancode] to check if makecode is begin with 0xe0
 static bool ctrl_status,shift_status,alt_status,capslock_status,ext_scancode;
-
-struct ioqueue kbd_buf;
 
 // use makecode to index the array
 char keymap[][2] = {
@@ -164,15 +162,12 @@ static void intr_handler_keyboard(void){
 		char cur_char = keymap[index][is_upper_case];
 
 		if((ctrl_down_last&&cur_char=='l')||(ctrl_down_last&&cur_char=='u')){
-			cur_char-='a';
+			cur_char = cur_char - 'a' + 1;
 		}
 
 		// check if cur_char is visible
 		if(cur_char){
-			if(!ioq_full(&kbd_buf)){
-				// put_char(cur_char);
-				ioq_putchar(&kbd_buf,cur_char);
-			}
+			tty_input_handler(cur_char);
 			return;
 		}
 
@@ -195,7 +190,6 @@ static void intr_handler_keyboard(void){
 
 void keyboard_init(void){
 	put_str("keyboard_init start \n");
-	ioqueue_init(&kbd_buf);
 	register_handler(0x21,intr_handler_keyboard);
 	put_str("keyboard_init done \n");
 }

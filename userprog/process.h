@@ -1,6 +1,10 @@
 #ifndef __USERPROG_PROCESS_H
 #define __USERPROG_PROCESS_H
-#include "../thread/thread.h"
+
+#include "stdint.h"
+
+struct task_struct;
+
 #define USER_VADDR_START 0x8048000
 #define USER_STACK3_VADDR (0xc0000000-0x1000)
 #define DEFAULT_PRIO 31

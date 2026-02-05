@@ -23,9 +23,9 @@ OBJS = $(BUILD_DIR)/main.o $(BUILD_DIR)/init.o $(BUILD_DIR)/interrupt.o \
 	$(BUILD_DIR)/stdio.o  $(BUILD_DIR)/stdio-kernel.o $(BUILD_DIR)/ide.o \
 	$(BUILD_DIR)/fs.o $(BUILD_DIR)/dir.o $(BUILD_DIR)/inode.o $(BUILD_DIR)/file.o \
 	$(BUILD_DIR)/fork.o $(BUILD_DIR)/exec.o $(BUILD_DIR)/wait_exit.o \
-	$(BUILD_DIR)/assert.o $(BUILD_DIR)/pipe.o \
+	$(BUILD_DIR)/assert.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/tty.o \
 	$(BUILD_DIR)/page.o $(BUILD_DIR)/hashtable.o $(BUILD_DIR)/ide_buffer.o \
-	$(BUILD_DIR)/tar.o
+	$(BUILD_DIR)/tar.o $(BUILD_DIR)/char_dev.o $(BUILD_DIR)/block_dev.o
 
 $(BUILD_DIR)/main.o:kernel/main.c lib/kernel/print.h lib/stdint.h kernel/init.h
 	$(CC) $< $(CFLAGS) -o $@
@@ -91,16 +91,16 @@ $(BUILD_DIR)/stdio-kernel.o:lib/kernel/stdio-kernel.c lib/kernel/stdio-kernel.h 
 $(BUILD_DIR)/ide.o:device/ide.c device/ide.h lib/stdint.h lib/kernel/stdio-kernel.h kernel/debug.h lib/stdio.h lib/kernel/io.h device/timer.h kernel/interrupt.h lib/string.h fs/fs.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/fs.o:fs/fs.c fs/fs.h fs/inode.h fs/super_block.h fs/dir.h kernel/debug.h lib/string.h device/ide.h lib/kernel/stdio-kernel.h lib/stdbool.h lib/stdint.h lib/kernel/dlist.h fs/file.h device/console.h thread/thread.h device/ioqueue.h device/keyboard.h fs/pipe.h
+$(BUILD_DIR)/fs.o:fs/fs.c fs/fs.h fs/inode.h fs/dir.h kernel/debug.h lib/string.h device/ide.h lib/kernel/stdio-kernel.h lib/stdbool.h lib/stdint.h lib/kernel/dlist.h fs/file.h device/console.h thread/thread.h device/ioqueue.h device/keyboard.h fs/pipe.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/inode.o:fs/inode.c fs/inode.h fs/fs.h fs/super_block.h fs/file.h device/ide.h lib/stdint.h kernel/debug.h lib/kernel/dlist.h lib/string.h thread/thread.h kernel/interrupt.h lib/kernel/stdio-kernel.h
+$(BUILD_DIR)/inode.o:fs/inode.c fs/inode.h fs/fs.h fs/file.h device/ide.h lib/stdint.h kernel/debug.h lib/kernel/dlist.h lib/string.h thread/thread.h kernel/interrupt.h lib/kernel/stdio-kernel.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/file.o:fs/file.c fs/file.h fs/fs.h fs/inode.h  fs/super_block.h fs/dir.h kernel/debug.h lib/string.h device/ide.h lib/kernel/stdio-kernel.h lib/stdbool.h lib/kernel/dlist.h lib/stdint.h lib/string.h thread/thread.h kernel/debug.h kernel/interrupt.h
+$(BUILD_DIR)/file.o:fs/file.c fs/file.h fs/fs.h fs/inode.h  fs/dir.h kernel/debug.h lib/string.h device/ide.h lib/kernel/stdio-kernel.h lib/stdbool.h lib/kernel/dlist.h lib/stdint.h lib/string.h thread/thread.h kernel/debug.h kernel/interrupt.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/dir.o:fs/dir.c fs/dir.h fs/inode.h fs/file.h device/ide.h fs/super_block.h lib/kernel/stdio-kernel.h lib/string.h lib/stdint.h lib/stdbool.h kernel/debug.h 
+$(BUILD_DIR)/dir.o:fs/dir.c fs/dir.h fs/inode.h fs/file.h device/ide.h lib/kernel/stdio-kernel.h lib/string.h lib/stdint.h lib/stdbool.h kernel/debug.h 
 	$(CC) $< $(CFLAGS) -o $@
 
 $(BUILD_DIR)/fork.o:userprog/fork.c userprog/fork.h lib/stdint.h thread/thread.h lib/string.h userprog/process.h kernel/debug.h fs/file.h kernel/interrupt.h lib/kernel/dlist.h
@@ -125,6 +125,15 @@ $(BUILD_DIR)/ide_buffer.o:device/ide_buffer.c device/ide_buffer.h device/ide.h l
 	$(CC) $< $(CFLAGS) -o $@
 
 $(BUILD_DIR)/tar.o:lib/common/tar.c lib/common/tar.h lib/stdio.h lib/stdio.h lib/string.h lib/user/syscall.h kernel/global.h
+	$(CC) $< $(CFLAGS) -o $@
+
+$(BUILD_DIR)/tty.o:device/tty.c device/tty.h lib/kernel/print.h device/ioqueue.h lib/stdint.h thread/sync.h 
+	$(CC) $< $(CFLAGS) -o $@
+
+$(BUILD_DIR)/char_dev.o:device/char_dev.c device/char_dev.h device/tty.h fs/fs.h 
+	$(CC) $< $(CFLAGS) -o $@
+
+$(BUILD_DIR)/block_dev.o:device/block_dev.c device/block_dev.h device/ide.h fs/fs.h 
 	$(CC) $< $(CFLAGS) -o $@
 
 # ASM code
@@ -161,7 +170,7 @@ mk_dir:
 hd:
 	dd if=$(BUILD_DIR)/mbr.bin of=$(DISK_DIR)/hd60M.img count=1 bs=512 conv=notrunc
 	dd if=$(BUILD_DIR)/loader.bin of=$(DISK_DIR)/hd60M.img count=4 bs=512 conv=notrunc seek=2
-	dd if=$(BUILD_DIR)/kernel.bin of=$(DISK_DIR)/hd60M.img bs=512 count=500 seek=9 conv=notrunc 
+	dd if=$(BUILD_DIR)/kernel.bin of=$(DISK_DIR)/hd60M.img bs=512 count=600 seek=9 conv=notrunc 
 
 clean: 
 	cd $(BUILD_DIR) && rm -f *.o *.bin disasm_mbr disasm_loader

@@ -1,7 +1,7 @@
 #ifndef __SHELL_BUILDIN_CMD_H
 #define __SHELL_BUILDIN_CMD_H
 
-#include "fs_types.h"
+#include "unistd.h"
 extern void make_clear_abs_path(char* path,char* final_path);
 extern int32_t buildin_rm(uint32_t argc,char** argv);
 extern int32_t buildin_rmdir(uint32_t argc,char** argv);

@@ -1,6 +1,6 @@
 #include "syscall.h"
 #include "stdio.h"
-#include "fs_types.h"
+#include "unistd.h"
 
 // eax for int_no
 // ebx for arg1
@@ -84,9 +84,6 @@ uint32_t getpid(void){
 uint32_t write(int32_t fd,const void* buf,uint32_t count){
 	return _syscall3(SYS_WRITE,fd,buf,count);
 }
-// uint32_t write_int(int num){
-// 	return _syscall1(SYS_WRITE_INT,num);
-// }
 
 void* malloc(uint32_t size){
 	return (void*)_syscall1(SYS_MALLOC,size);
@@ -137,7 +134,7 @@ int32_t mkdir(const char* pathname){
 }
 
 int32_t opendir(const char* name){
-	return (struct dir*)_syscall1(SYS_OPENDIR,name);
+	return _syscall1(SYS_OPENDIR,name);
 }
 
 int32_t closedir(int32_t fd_dir){
@@ -188,10 +185,6 @@ int32_t pipe(int32_t pipefd[2]){
 	return _syscall1(SYS_PIPE,pipefd);
 }
 
-void fd_redirect(uint32_t old_local_fd, uint32_t new_local_fd){
-	_syscall2(SYS_FD_REDIRECT,old_local_fd,new_local_fd);
-}
-
 void free_mem(void){
 	_syscall0(SYS_FREE_MEM);
 }
@@ -211,4 +204,12 @@ void test_func(){
 
 void read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uint32_t sec_cnt){
 	_syscall4(SYS_READ_SECTORS,hd_name,lba,buf,sec_cnt);
+}
+
+int32_t dup2(uint32_t old_local_fd, uint32_t new_local_fd){
+	return _syscall3(SYS_DUP2,old_local_fd,new_local_fd,new_local_fd);
+}
+
+int32_t mknod(const char* pathname, enum file_types type, uint32_t dev){
+	return _syscall3(SYS_MKNOD,pathname,type,dev);
 }

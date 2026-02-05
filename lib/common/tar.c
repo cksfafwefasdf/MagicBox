@@ -44,7 +44,7 @@ void untar_all(uint32_t base_lba) {
         // 读取 Header 扇区
         memset(&hdr, 0, SECTOR_SIZE);
 		// 将磁盘扇区读取到内存缓冲区中
-        read_sectors("sda", current_lba, &hdr, 1);
+        read_sectors("sda", current_lba, (uint8_t*)&hdr, 1);
         // 终止条件，tar 标准规定结束符是连续两个全 0 扇区
         // 为了简单，判断文件名首字节是否为空即可
         if (hdr.name[0] == '\0') {

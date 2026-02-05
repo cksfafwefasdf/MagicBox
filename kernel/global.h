@@ -1,6 +1,6 @@
 #ifndef __KERNEL_GLOBAL_H
 #define __KERNEL_GLOBAL_H
-#include "../lib/stdint.h"
+#include "stdint.h"
 
 #define RPL0 0
 #define RPL1 1

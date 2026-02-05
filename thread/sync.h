@@ -1,7 +1,7 @@
 #ifndef __THREAD_SYNC_H
 #define __THREAD_SYNC_H
-#include "../lib/kernel/dlist.h"
-#include "../lib/stdint.h"
+#include "dlist.h"
+#include "stdint.h"
 #include "thread.h"
 
 struct semaphore{

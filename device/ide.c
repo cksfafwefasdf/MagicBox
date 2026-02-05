@@ -1,5 +1,4 @@
 #include "ide.h"
-#include "stdint.h"
 #include "stdio-kernel.h"
 #include "debug.h"
 #include "stdio.h"
@@ -7,10 +6,12 @@
 #include "timer.h"
 #include "interrupt.h"
 #include "string.h"
-#include "fs.h"
 #include "ide_buffer.h"
 #include "global.h"
-#include "fs_types.h"
+#include "unistd.h"
+#include "device.h"
+#include "block_dev.h"
+#include "fs.h"
 
 #define reg_data(channel) (channel->port_base+0)
 #define reg_error(channel) (channel->port_base+1)
@@ -98,6 +99,14 @@ static void partition_scan(struct disk* hd,uint32_t ext_lba);
 static bool partition_info(struct dlist_elem* pelem,void* arg UNUSED);
 
 
+// 定义 IDE 块设备的 file_operations
+struct file_operations ide_dev_fops = {
+    .read = ide_dev_read,
+    .write = ide_dev_write,
+    .open = NULL,  // 块设备 open 通常在 sys_open 统一处理
+    .close = NULL
+};
+
 static void ide_set_multiple_mode(struct disk* hd, uint8_t sec_per_block) {
     select_disk(hd);
     outb(reg_sect_cnt(hd->my_channel), sec_per_block);
@@ -178,10 +187,15 @@ void ide_init(){
 			struct disk* hd = &channel->devices[dev_no];
 			hd->my_channel = channel;
 			hd->dev_no = dev_no;
+
+			// 分配逻辑设备号给磁盘
+			int hd_idx = channel_no * 2 + dev_no;
+            hd->i_rdev = MAKEDEV(3, hd_idx * 16);
+
 			memset(hd->name,0,sizeof(hd->name));
 			sprintf(hd->name,"sd%c",'a'+channel_no*2+dev_no);
 			identify_disk(hd);
-			ide_set_multiple_mode(hd, SECTORS_PER_BLOCK); // 注入设置
+			ide_set_multiple_mode(hd, SECTORS_PER_OP_BLOCK); // 注入设置
 			if(dev_no!=0){
 				partition_scan(hd,0);
 			}
@@ -210,6 +224,8 @@ void ide_init(){
 		uint32_t sectors = ecx&0x3f;
 		disk_size[d_idx] = cylinders*heads*sectors*SECTOR_SIZE;
 	}
+
+	register_block_dev(IDE_MAJOR, &ide_dev_fops, "ide_disk");
 	
 	printk("ide_init done\n");
 }
@@ -313,7 +329,7 @@ void ide_read(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
         // 如果剩余扇区数大于 Block 因子，则说明缓冲区里有整整一 Block
         // 如果是最后一次中断，则读取剩下的所有扇区
         uint32_t left_secs = sec_cnt - secs_done;
-        uint32_t secs_to_read = (left_secs < SECTORS_PER_BLOCK) ? left_secs : SECTORS_PER_BLOCK;
+        uint32_t secs_to_read = (left_secs < SECTORS_PER_OP_BLOCK) ? left_secs : SECTORS_PER_OP_BLOCK;
 
         // 一口气用 insw 抽走这些数据（这是最快的地方）
         read_from_sector(hd, (void*)((uint32_t)buf + secs_done * SECTOR_SIZE), secs_to_read);
@@ -336,14 +352,14 @@ void ide_write(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
 
     uint32_t secs_done = 0;
     while (secs_done < sec_cnt) {
-        // 【重要】在开始写入第一块之前，必须确认硬盘已经准备好接收数据（BSY=0, DRQ=1）
+        // 在开始写入第一块之前，必须确认硬盘已经准备好接收数据（BSY=0, DRQ=1）
         if (!busy_wait(hd)) {
             PANIC("ide_write: busy_wait timeout before write!");
         }
 
         // 计算本次要写入多少扇区（通常是 16 个，最后一次可能少于 16）
         uint32_t left_secs = sec_cnt - secs_done;
-        uint32_t secs_to_write = (left_secs < SECTORS_PER_BLOCK) ? left_secs : SECTORS_PER_BLOCK;
+        uint32_t secs_to_write = (left_secs < SECTORS_PER_OP_BLOCK) ? left_secs : SECTORS_PER_OP_BLOCK;
 
         // 这里的 write2sector 内部会调用 outsw，一口气把数据刷进硬盘缓冲区
         write2sector(hd, (void*)((uint32_t)buf + secs_done * SECTOR_SIZE), secs_to_write);
@@ -396,35 +412,41 @@ static void identify_disk(struct disk* hd){
 }
 
 static void partition_scan(struct disk* hd,uint32_t ext_lba){
-	printk("Scanning LBA: %d\n", ext_lba); // 1. 确认递归深度
 	struct boot_sector* bs = kmalloc(sizeof(struct boot_sector));
-	printk("Malloc bs at: 0x%x\n", (uint32_t)bs); // 2. 确认堆地址是否正常
 	bread_multi(hd,ext_lba,bs,1);
 	uint8_t part_idx = 0;
 	struct partition_table_entry* p = bs->partition_table;
 
-	while (part_idx++<4){
-		if(p->fs_type==0x5){
+	while (part_idx++<4){ 
+		if(p->fs_type==0x5){ // 扩展分区
 			if(ext_lba_base!=0){
 				partition_scan(hd,p->start_lba+ext_lba_base);
 			}else{
 				ext_lba_base = p->start_lba;
 				partition_scan(hd,p->start_lba);
 			}
-		}else if(p->fs_type!=0){
-			if(ext_lba==0){
+		}else if(p->fs_type!=0){ // 有效分区
+			if(ext_lba==0){ // 主分区
 				hd->prim_parts[p_no].start_lba = ext_lba+p->start_lba;
 				hd->prim_parts[p_no].sec_cnt = p->sec_cnt;
 				hd->prim_parts[p_no].my_disk = hd;
+				
+				// 分配逻辑设备号：母盘设备号 + (1~4)
+                hd->prim_parts[p_no].i_rdev = hd->i_rdev + p_no + 1;
+				
 				dlist_push_back(&partition_list,&hd->prim_parts[p_no].part_tag);
 				sprintf(hd->prim_parts[p_no].name,"%s%d",hd->name,p_no+1);
 				p_no++;
 				ASSERT(p_no<4);
 
-			}else{
+			}else{ // 逻辑分区
 				hd->logic_parts[l_no].start_lba = ext_lba + p->start_lba;
 				hd->logic_parts[l_no].sec_cnt = p->sec_cnt;
 				hd->logic_parts[l_no].my_disk = hd;
+				
+				// 分配设备号：母盘设备号 + (5~12)
+                hd->logic_parts[l_no].i_rdev = hd->i_rdev + l_no + 5;
+				
 				dlist_push_back(&partition_list,&hd->logic_parts[l_no].part_tag);
 				sprintf(hd->logic_parts[l_no].name,"%s%d",hd->name,l_no+5);
 				l_no++;
@@ -443,34 +465,34 @@ static bool partition_info(struct dlist_elem* pelem,void* arg UNUSED){
 }
 
 // read the disk without file system
-void sys_readraw_old(const char* disk_name,uint32_t lba,const char* filename,uint32_t file_size){
-	struct disk* disk;
-	if(!strcmp("sda",disk_name)){
-		disk = &channels[0].devices[0];
-	}else if(!strcmp("sdb",disk_name)){
-		disk = &channels[0].devices[1];
-	}else{
-		printf("unknown disk name!\n");
-		return ;
-	}
-	uint32_t sec_cnt =  DIV_ROUND_UP(file_size,SECTOR_SIZE);
-	void* buf =  kmalloc(sec_cnt*SECTOR_SIZE);
-	if(buf==NULL){
-		printf("sys_readraw: kmalloc for buf failed!\n");
-		return ;
-	}
-   	bread_multi(disk,lba,buf,sec_cnt);
-	int32_t fd = sys_open(filename,O_CREATE|O_RDWR);
+// void sys_readraw_old(const char* disk_name,uint32_t lba,const char* filename,uint32_t file_size){
+// 	struct disk* disk;
+// 	if(!strcmp("sda",disk_name)){
+// 		disk = &channels[0].devices[0];
+// 	}else if(!strcmp("sdb",disk_name)){
+// 		disk = &channels[0].devices[1];
+// 	}else{
+// 		printf("unknown disk name!\n");
+// 		return ;
+// 	}
+// 	uint32_t sec_cnt =  DIV_ROUND_UP(file_size,SECTOR_SIZE);
+// 	void* buf =  kmalloc(sec_cnt*SECTOR_SIZE);
+// 	if(buf==NULL){
+// 		printf("sys_readraw: kmalloc for buf failed!\n");
+// 		return ;
+// 	}
+//    	bread_multi(disk,lba,buf,sec_cnt);
+// 	int32_t fd = sys_open(filename,O_CREATE|O_RDWR);
 
-	if(fd!=-1){
-		if(sys_write(fd,buf,file_size)==-1){
-			printk("file write error!\n");
-			while(1);
-		}
-	}
-	kfree(buf);
-	sys_close(fd);
-}
+// 	if(fd!=-1){
+// 		if(sys_write(fd,buf,file_size)==-1){
+// 			printk("file write error!\n");
+// 			while(1);
+// 		}
+// 	}
+// 	kfree(buf);
+// 	sys_close(fd);
+// }
 
 // 流式读取的readraw，防止文件过大导致堆空间被迅速耗尽
 void sys_readraw(const char* disk_name, uint32_t lba, const char* filename, uint32_t file_size) {
@@ -547,4 +569,132 @@ void sys_read_sectors(const char* hd_name, uint32_t lba, uint8_t* buf, uint32_t 
     }
 
     bread_multi(disk, lba, buf, sec_cnt);
+}
+
+// 磁盘设备 VFS 读取接口
+// file VFS 文件结构
+// buf 用户缓冲区
+// count 读取字节数
+int32_t ide_dev_read(struct file* file, void* buf, uint32_t count) {
+    struct m_inode* inode = file->fd_inode;
+    struct partition* part = get_part_by_rdev(inode->i_dev);
+    uint32_t part_size_bytes = part->sec_cnt * SECTOR_SIZE;
+
+	// 边界检查
+	// 在磁盘中，fd_pos就表示现在要操作磁盘的第几个字节
+	// 我们要操作的位置不能超过整个分区的大小
+    if (file->fd_pos >= part_size_bytes) return -1;
+	// 如果读的字节数太多，超过分区大小了，那么就进行截断，只读到分区的最后一个字节处
+    if (file->fd_pos + count > part_size_bytes) {
+        count = part_size_bytes - file->fd_pos;
+    }
+
+    uint8_t* dst = (uint8_t*)buf;
+    uint32_t bytes_left = count;
+    uint8_t* io_buf = NULL; // 仅用于处理非对齐碎块
+
+	// 5个字节一个扇区00111对应 offset_in_sec != 0分支
+	// 11100 对应 bytes_left < SECTOR_SIZE 分支
+	// 00110 对应两者同时成立的分支
+	// 00111 11111 11111 11100 
+	// 00000 00110 00000 00000
+    while (bytes_left > 0) {
+        uint32_t lba = part->start_lba + (file->fd_pos / SECTOR_SIZE);
+        uint32_t offset_in_sec = file->fd_pos % SECTOR_SIZE;
+
+        // 先处理非对齐读取（处理起始位置不在 512 字节边界，或者最后一个扇区剩余长度不足一扇区）
+        if (offset_in_sec != 0 || bytes_left < SECTOR_SIZE) {
+            if (!io_buf) io_buf = kmalloc(SECTOR_SIZE);
+            
+            // 由于并不足一扇区，一次就处理一扇区
+            bread_multi(part->my_disk, lba, io_buf, 1);
+            
+			// 从第一个有效字节偏移地址往高地址走（从左往右走），剩下的字节数
+            uint32_t left_in_sec = SECTOR_SIZE - offset_in_sec;
+
+            // bytes_left 用于判断当前的情况是最开始的其实位置不在 512 字节边界
+			// 还是最后一个扇区待读的数据不足 512 字节
+			// 若 bytes_left >= left_in_sec ，则说明是前一种情况，起始位置不在 512 字节边界，本次读取的数据大小是 left_in_sec
+			// 若 bytes_left < left_in_sec 则说是后一种情况，最后一个扇区待读数据不足 512 字节，本次读取的数据大小是 bytes_left
+			uint32_t chunk_size = (bytes_left < left_in_sec) ? bytes_left : left_in_sec;
+            
+            memcpy(dst, io_buf + offset_in_sec, chunk_size);
+            
+            file->fd_pos += chunk_size;
+            bytes_left -= chunk_size;
+            dst += chunk_size;
+        } else { // 对齐读取（光标在边界，且剩余长度至少有一个整扇区）
+            // 计算目前能进行的最大批量读取扇区数
+            uint32_t secs_to_read = bytes_left / SECTOR_SIZE;
+
+            bread_multi(part->my_disk, lba, dst, secs_to_read);
+            
+            uint32_t total_size = secs_to_read * SECTOR_SIZE;
+            file->fd_pos += total_size;
+            bytes_left -= total_size;
+            dst += total_size;
+        }
+    }
+
+    if (io_buf) kfree(io_buf);
+    return (int32_t)count;
+}
+
+// 磁盘设备 VFS 读取接口
+// 参数含义同 ide_dev_read
+int32_t ide_dev_write(struct file* file, const void* buf, uint32_t count) {
+    struct m_inode* inode = file->fd_inode;
+    struct partition* part = get_part_by_rdev(inode->i_dev);
+    uint32_t part_size_bytes = part->sec_cnt * SECTOR_SIZE;
+
+    // 边界检查
+    if (file->fd_pos >= part_size_bytes) return -1;
+	// 同样截断多余的部分
+    if (file->fd_pos + count > part_size_bytes) {
+        count = part_size_bytes - file->fd_pos;
+    }
+
+    const uint8_t* src = (const uint8_t*)buf;
+    uint32_t bytes_left = count;
+    uint8_t* io_buf = NULL; // 用于处理非对齐部分
+
+    while (bytes_left > 0) {
+        uint32_t lba = part->start_lba + (file->fd_pos / SECTOR_SIZE);
+        uint32_t offset_in_sec = file->fd_pos % SECTOR_SIZE;
+
+        // 非对齐写入（起始位置不对齐，或剩余数据不足一扇区）
+        // 此时必须执行 RMW (Read-Modify-Write)，否则会破坏扇区内的其他数据
+        if (offset_in_sec != 0 || bytes_left < SECTOR_SIZE) {
+            if (!io_buf) io_buf = kmalloc(SECTOR_SIZE);
+
+            // Read，先把旧数据读出来
+            bread_multi(part->my_disk, lba, io_buf, 1);
+
+            // Modify，覆盖 io_buf 中的特定部分
+            uint32_t left_in_sec = SECTOR_SIZE - offset_in_sec;
+            uint32_t chunk_size = (bytes_left < left_in_sec) ? bytes_left : left_in_sec;
+            memcpy(io_buf + offset_in_sec, src, chunk_size);
+
+            // Write，写回整扇区 (利用你的 bwrite_multi 物理写 + 缓存更新)
+            bwrite_multi(part->my_disk, lba, io_buf, 1);
+
+            file->fd_pos += chunk_size;
+            bytes_left -= chunk_size;
+            src += chunk_size;
+        } else { // 对齐写入（光标在边界，且待写数据至少包含一个整扇区）
+            // 计算目前能进行的最大批量对齐写入扇区数
+            uint32_t secs_to_write = bytes_left / SECTOR_SIZE;
+
+            // 直接批量写入
+            bwrite_multi(part->my_disk, lba, (void*)src, secs_to_write);
+
+            uint32_t total_size = secs_to_write * SECTOR_SIZE;
+            file->fd_pos += total_size;
+            bytes_left -= total_size;
+            src += total_size;
+        }
+    }
+
+    if (io_buf) kfree(io_buf);
+    return (int32_t)count;
 }

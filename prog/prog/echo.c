@@ -1,6 +1,7 @@
 #include "syscall.h"
 #include "stdio.h"
 #include "string.h"
+#include "unistd.h"
 // echo hello_world_this_is_my_os -f /test.txt
 
 int main(int argc, char** argv) {
@@ -32,11 +33,11 @@ int main(int argc, char** argv) {
         }
 
         // 第一次尝试：直接打开 (O_WRONLY)
-        fd = open(abs_path, 1); 
+        fd = open(abs_path, O_WRONLY); 
 
         if (fd == -1) {
             // 第二次尝试：创建 (O_WRONLY | O_CREATE)
-            fd = open(abs_path, 1 | 4);
+            fd = open(abs_path, O_WRONLY | O_CREATE);
         }
 
         if (fd == -1) {

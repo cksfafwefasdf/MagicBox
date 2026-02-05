@@ -9,6 +9,7 @@
 #include "fork.h"
 #include "stdio-kernel.h"
 #include "print.h"
+#include "pipe.h"
 
 extern void intr_exit(void); // defined in  kernel.s
 static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,struct task_struct* parent_thread){
@@ -84,20 +85,36 @@ static int32_t build_child_stack(struct task_struct* child_thread){
 	return 0;
 }
 
-static void update_inode_open_cnts(struct task_struct* thread){
-	int32_t local_fd = 3,global_fd = 0;
-	while(local_fd<MAX_FILES_OPEN_PER_PROC){
-		global_fd = thread->fd_table[local_fd];
-		ASSERT(global_fd<MAX_FILE_OPEN_IN_SYSTEM);
-		if(global_fd!=-1){
-			if(is_pipe(local_fd)){
-				file_table[global_fd].fd_pos++;
-			}else{
-				file_table[global_fd].fd_inode->i_open_cnts++;
-			}
-		}
-		local_fd++;
-	}
+// 原本我们的这个函数是 update_inode_open_cnts，修改的是inode的打开计数
+// 但是当我们引入 f_count 后，这个函数显然就不合理了
+// 因为 fork 后的子进程会继承父进程的局部打开文件表
+// 这意味着子进程和父进程相应的局部打开文件表表项会指向同一个全局打开文件表的表项
+// 根据 f_count 的定义我们知道，它用于标志有多少个局部打开文件表项指向它
+// 因此 fork 中，我们需要增加的不是 i_open_cnt 而是 f_count
+// i_open_cnt 标志着有多少个全局打开文件表项指向同一个 inode
+// fork 操作并没有新增全局打开文件表项，因此增加 i_open_cnt 是不合理的
+static void update_f_cnts(struct task_struct* thread) {
+    // 原来的代码是从3开始的！
+	// 现在我们要改成从 0 开始，因为 stdin, stdout, stderr 也是需要增加引用计数的！
+	// 我们将 console 和 tty 都给文件话了，不能再像原来那样略过它们了
+    int32_t local_fd = 0, global_fd = 0; 
+    while(local_fd < MAX_FILES_OPEN_PER_PROC) {
+        global_fd = thread->fd_table[local_fd];
+        if(global_fd != -1) {
+            struct file* f = &file_table[global_fd];
+            // 必须增加引用计数，否则父子进程共享 FD 会出大问题
+            f->f_count++;
+
+			// 管道特有逻辑，维护端点存活计数
+            // 如果是管道，必须根据读写标志位增加对应的 reader/writer 计数
+            if (f->fd_inode->di.i_type == FT_PIPE) {
+                struct pipe* p = (struct pipe*)f->fd_inode->di.i_pipe_ptr;
+                if (f->fd_flag & O_RDONLY) p->reader_count++;
+                if (f->fd_flag & O_WRONLY) p->writer_count++;
+            }
+        }
+        local_fd++;
+    }
 }
 
 uint32_t test_global_data = 0;
@@ -132,7 +149,7 @@ static int32_t copy_process(struct task_struct* child_thread,struct task_struct*
 	
 	// while(1);
 	build_child_stack(child_thread);
-	update_inode_open_cnts(child_thread);
+	update_f_cnts(child_thread);
 	mfree_page(PF_KERNEL,buf_page,1);
 	printk("copy_process::: copy_process done!\n");
 	return 0;

@@ -83,12 +83,12 @@ get_disk_param:
 
 
 rd_disk_m_16:
-    ; 1. 设置读取扇区数
+    ; 设置读取扇区数
     mov dx, PRIMARY_SECTOR_CNT
     mov al, cl
     out dx, al
 
-    ; 2. 设置 LBA 地址 (ebx 中存储的是起始扇区)
+    ; 设置 LBA 地址，ebx 中存储的是起始扇区
     mov dx, PRIMARY_LBA_LOW
     mov al, bl
     out dx, al
@@ -109,19 +109,19 @@ rd_disk_m_16:
     or al, bl
     out dx, al
 
-    ; 3. 发送读取命令 0x20
+    ; 发送读取命令 0x20
     mov dx, PRIMARY_COMMAND
     mov al, 0x20
     out dx, al
 
-    ; 4. 开始按扇区读取数据
+    ; 开始按扇区读取数据
     ; 此时 cl 存的是要读的扇区总数 (LOADER_SECTOR_CNT)
     mov bx, di               ; 目标内存地址 0x900
 
 .read_one_sector:
     push cx                  ; 保存外层循环次数（剩余扇区数）
 
-    ; --- 关键：读取每一个扇区前都要检查状态 ---
+    ; 读取每一个扇区前都要检查状态
 .not_ready:
     mov dx, PRIMARY_COMMAND  ; 即 Status 端口 0x1f7
     in al, dx
@@ -129,7 +129,7 @@ rd_disk_m_16:
     cmp al, 0x08             ; 期望 BSY=0, DRQ=1
     jnz .not_ready
 
-    ; --- 读取该扇区的 256 个字 (512 字节) ---
+    ; 读取该扇区的 256 个字 (512 字节)
     mov cx, 256              ; 内部循环 256 次，每次读 2 字节
     mov dx, PRIMARY_DATA     ; 0x1f0 端口
 .go_on_read:

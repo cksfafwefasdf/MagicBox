@@ -5,7 +5,7 @@
 #include "stdbool.h"
 #include "assert.h"
 #include "buildin_cmd.h"
-#include "fs_types.h"
+#include "unistd.h"
 
 #define CMD_LEN 128
 #define MAX_ARG_NR 16
@@ -32,40 +32,32 @@ void print_prompt(void){
     }
 }
 
-static void readline(char* buf,int32_t count){
-	assert(buf!=NULL&&count>0);
-	char* pos = buf;
-	while(read(stdin_no,pos,1)!=-1&&(pos - buf) < count){
-		switch (*pos){
-			case '\n':
-			case '\r':
-				*pos = 0;
-				putchar('\n');
-				return;
-			case '\b':
-				if(buf[0]!='\b'){
-					--pos;
-					putchar('\b');
-				}
-				break;
-			case 'l'-'a': //Ctrl+l
-				*pos = 0;
-				clear();
-				print_prompt();
-				printf("%s",buf);
-				break;
-			case 'u'-'a': // Ctrl+u
-				while(buf!=pos){
-					putchar('\b');
-					*(pos--) = 0;
-				}
-				break;
-			default:
-				putchar(*pos);
-				pos++;
-		}
-	}
-	printf("readline: can\t find enter_key in the cmd_line. max num of char is 128\n");
+// 我们将字符处理相关的逻辑已经放到tty中了
+// 因此此函数的代码可以精简一些了
+static void readline(char* buf, int32_t count) {
+    assert(buf != NULL && count > 0);
+    
+    // 内核 TTY 发现没有回车时，会让 Shell 进程在信号量上休眠。
+    // 用户按下回车后，TTY 会处理好所有的退格、Ctrl+U，并将最终结果一次性返回。并唤醒shell
+	// 因此我们直接调用一次 read即可。
+    
+	int32_t bytes_read = read(stdin_no, buf, count);
+    
+	if (bytes_read <= 0) return;
+
+    // TTY 返回的数据最后通常带着 '\n'，我们需要把它去掉，方便后续 cmd_parse
+    char* newline = strchr(buf, '\n');
+    if (newline) {
+        *newline = 0;
+    }
+
+    // 处理特殊的 Ctrl+L 转义逻辑
+    if (buf[0] == ('l' - 'a' + 1)) {
+        clear();
+        // print_prompt();
+        // 如果 Ctrl+L 后面还带了命令内容，可以递归或者简单处理
+        buf[0] = 0; // 暂时清空，让 Shell 重新来过
+    }
 }
 
 static void cmd_execute(uint32_t argc,char** argv){
@@ -144,50 +136,58 @@ int main(void){
 	clear();
 	printf("Welcome to MagicBox! Type 'help' for a list of commands.\n\n");
 	while(1){
-		print_prompt();
 		memset(final_path,0,MAX_PATH_LEN);
 		memset(cmd_line,0,MAX_PATH_LEN);
+		print_prompt();
 		readline(cmd_line,MAX_PATH_LEN);
 		if(cmd_line[0]==0){
 			continue;
 		}
 
+		// 如果只是一个单纯的 Ctrl+L 产生的唤醒
+		if (cmd_line[0] == 12) {
+			// readline 内部已经处理了 clear() 和 print_prompt()
+			// 因此我们不用再执行后面的指令了
+			continue; 
+		}
+
 		char* pipe_symbol = strchr(cmd_line,'|');
-		if(pipe_symbol){
-			// ls -l|cat
-			int32_t fd[2] = {-1};
-			pipe(fd);
-			fd_redirect(1,fd[1]);
-			char* each_cmd = cmd_line;
-			pipe_symbol = strchr(each_cmd,'|');
-			*pipe_symbol = 0;
+		if (pipe_symbol) {
+			int32_t fd[2];
+			pipe(fd); // 此调用会分配两个全局 file 和一个 pipe 结构
 
-			argc = -1;
-			argc = cmd_parse(each_cmd,argv,' ');
-			cmd_execute(argc,argv);
-			
-			each_cmd = pipe_symbol + 1;
-
-			fd_redirect(0,fd[0]);
-			while((pipe_symbol=strchr(each_cmd,'|'))){
+			int32_t pid1 = fork();
+			if (pid1 == 0) { // 子进程 1，生产者 (如 ls)
+				dup2(fd[1], 1);  // 将标准输出指向管道写端
+				close(fd[0]);    // 子进程不需要读
+				close(fd[1]);    // 已经 dup2 了，原来的可以关了
+				
+				// 解析第一段命令并执行
 				*pipe_symbol = 0;
-				argc = -1;
-				argc = cmd_parse(each_cmd,argv,' ');
-				cmd_execute(argc,argv);
-				each_cmd = pipe_symbol + 1;
+				argc = cmd_parse(cmd_line, argv, ' ');
+				cmd_execute(argc, argv); // 这里内部会调 exec，ls 就带着重定向好的 stdout 跑起来了
+				exit(0); 
 			}
-		
-			
-			fd_redirect(1,1);
-			argc = -1;
-			argc = cmd_parse(each_cmd,argv,' ');
-			
-			cmd_execute(argc,argv);
 
-			fd_redirect(0,0);
+			int32_t pid2 = fork();
+			if (pid2 == 0) { // 子进程 2，消费者 (如 cat)
+				dup2(fd[0], 0); // 将标准输入指向管道读端
+				close(fd[1]); // 子进程不需要写
+				close(fd[0]); // 原来的可以关了
 
-			close(fd[0]);
-			close(fd[1]);
+				// 解析第二段命令
+				char* next_cmd = pipe_symbol + 1;
+				argc = cmd_parse(next_cmd, argv, ' ');
+				cmd_execute(argc, argv); // cat 带着重定向好的 stdin 跑起来了
+				exit(0);
+			}
+
+			// 父进程（Shell）的任务：
+			close(fd[0]); // 父进程必须关掉这两个端点！
+			close(fd[1]); // 否则管道的 reader/writer 计数永远不会清零，cat 会永远阻塞读
+			// 参数为 NULL 表示不接受状态返回值 shell 进程等待两个子进程退出后回收，wait会进行回收过程
+			wait(NULL);
+			wait(NULL);
 		}else{
 			argc = -1;
 			argc = cmd_parse(cmd_line,argv,' ');

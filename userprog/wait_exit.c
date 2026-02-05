@@ -50,18 +50,11 @@ static void release_prog_resource(struct task_struct* release_thread){
 
 	mfree_page(PF_KERNEL,user_vaddr_pool_bitmap,bitmap_pg_cnt);
 
-	uint8_t local_fd = 3;
+	uint8_t local_fd = 0;
 	while(local_fd<MAX_FILES_OPEN_PER_PROC){
 		if(release_thread->fd_table[local_fd]!=-1){
-			if(is_pipe(local_fd)){
-				uint32_t global_fd = fd_local2global(local_fd);
-				if(--file_table[global_fd].fd_pos == 0){
-					mfree_page(PF_KERNEL,file_table[global_fd].fd_inode,1);
-					file_table[global_fd].fd_inode = NULL;
-				}
-			}else{
-				sys_close(local_fd);
-			}
+			// 无论是不是管道，sys_close都可以统一处理
+			sys_close(local_fd);
 		}
 		local_fd++;
 	}
@@ -102,7 +95,8 @@ pid_t sys_wait(int32_t* status){
 		struct dlist_elem* child_elem = dlist_traversal(&thread_all_list,find_hanging_child,parent_thread->pid);
 		if(child_elem!=NULL){
 			struct task_struct* child_thread = member_to_entry(struct task_struct,all_list_tag,child_elem);
-			*status = child_thread->exit_status;
+			if(status!=NULL)
+				*status = child_thread->exit_status;
 
 			uint16_t child_pid = child_thread->pid;
 

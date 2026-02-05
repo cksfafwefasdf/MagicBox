@@ -1,8 +1,8 @@
 #ifndef __LIB_KERNEL_BITMAP_H
 #define __LIB_KERNEL_BITMAP_H
-#include "../../kernel/global.h"
-#include "../stdint.h"
-#include "../stdbool.h"
+#include "global.h"
+#include "stdint.h"
+#include "stdbool.h"
 #define BITMAP_MASK 1
 
 struct bitmap{

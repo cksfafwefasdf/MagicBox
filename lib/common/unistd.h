@@ -1,5 +1,5 @@
-#ifndef __LIB_COMMON_FS_TYPES_H
-#define __LIB_COMMON_FS_TYPES_H
+#ifndef __LIB_COMMON_UNISTD_H
+#define __LIB_COMMON_UNISTD_H
 
 #include "stdint.h"
 
@@ -15,18 +15,21 @@
 #define SECTOR_SIZE 512
 #define BLOCK_SIZE SECTOR_SIZE
 
-
 enum file_types{
 	FT_UNKNOWN, // unsupported type
 	FT_REGULAR, // regular file
-	FT_DIRECTORY // directory file
+	FT_DIRECTORY, // directory file
+	FT_CHAR_SPECIAL, // 字符设备
+	FT_BLOCK_SPECIAL, // 块设备
+	FT_PIPE, // 匿名管道，inode都不写回磁盘
+	FT_FIFO // 具名管道，不占磁盘数据块但inode要写回磁盘
 };
 
 enum oflags{ // operation flags
-	O_RDONLY, // read only
-	O_WRONLY, // write only
-	O_RDWR, // read and write
-	O_CREATE=4 // only create 
+	O_RDONLY=1, // read only
+	O_WRONLY=2, // write only
+	O_RDWR=4, // read and write
+	O_CREATE=8, // only create
 };
 
 enum whence{
@@ -55,6 +58,5 @@ struct stat{
 	uint32_t st_size;
 	enum file_types st_filetype;
 };
-
 
 #endif

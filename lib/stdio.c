@@ -3,22 +3,7 @@
 #include "stdint.h"
 #include "string.h"
 #include "syscall.h"
-#include "file.h"
-
-
-// integer to ascii
-// static void itoa_recur(uint32_t value,char** buf_ptr_addr,uint8_t base){
-// 	uint32_t m = value%base;
-// 	uint32_t i = value/base;
-// 	if(i){
-// 		itoa_recur(i,buf_ptr_addr,base);
-// 	}
-// 	if(m<10){
-// 		*((*buf_ptr_addr)++) = m+'0';
-// 	}else{
-// 		*((*buf_ptr_addr)++) = m-10+'A';
-// 	}
-// }
+#include "unistd.h"
 
 int itoa(uint32_t value,char* buf_ptr,uint8_t base){
 	if(value==0){

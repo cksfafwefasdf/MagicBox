@@ -1,13 +1,11 @@
 #include "dir.h"
 #include "inode.h"
 #include "ide.h"
-#include "super_block.h"
 #include "stdio-kernel.h"
 #include "string.h"
-#include "stdint.h"
-#include "stdbool.h"
 #include "debug.h"
 #include "file.h"
+#include "fs.h"
 #include "ide_buffer.h"
 
 struct dir root_dir;
@@ -41,15 +39,15 @@ bool search_dir_entry(struct partition* part,struct dir* pdir,const char* name,s
 
 	uint32_t block_idx = 0;
 	while(block_idx<DIRECT_INDEX_BLOCK){
-		all_blocks_addr[block_idx] = pdir->inode->i_sectors[block_idx];
+		all_blocks_addr[block_idx] = pdir->inode->di.i_sectors[block_idx];
 		block_idx++;
 	}
 
 	block_idx = 0;
 	// the first first-level index block
 	uint32_t tfflib =  DIRECT_INDEX_BLOCK;
-	if(pdir->inode->i_sectors[tfflib]!=0){
-		bread_multi(part->my_disk,pdir->inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+	if(pdir->inode->di.i_sectors[tfflib]!=0){
+		bread_multi(part->my_disk,pdir->inode->di.i_sectors[tfflib],all_blocks_addr+tfflib,1);
 	}
 
 
@@ -104,9 +102,12 @@ void create_dir_entry(char* filename,uint32_t inode_no,uint8_t file_type,struct 
 
 
 bool sync_dir_entry(struct dir* parent_dir,struct dir_entry* p_de,void* io_buf){
-	struct inode* dir_inode = parent_dir->inode;
-	uint32_t dir_size = dir_inode->i_size;
-	uint32_t dir_entry_size = cur_part->sb->dir_entry_size;
+	struct m_inode* dir_inode = parent_dir->inode;
+	uint32_t dir_size = dir_inode->di.i_size;
+
+	struct partition* part = get_part_by_rdev(dir_inode->i_dev);
+
+	uint32_t dir_entry_size = part->sb->dir_entry_size;
 	// the first first-level index block
 	uint32_t tfflib =  DIRECT_INDEX_BLOCK;
 
@@ -121,12 +122,12 @@ bool sync_dir_entry(struct dir* parent_dir,struct dir_entry* p_de,void* io_buf){
 	uint32_t all_blocks_addr[TOTAL_BLOCK_COUNT] = {0};
 
 	while(block_idx<DIRECT_INDEX_BLOCK){
-		all_blocks_addr[block_idx] = dir_inode->i_sectors[block_idx];
+		all_blocks_addr[block_idx] = dir_inode->di.i_sectors[block_idx];
 		block_idx++;
 	}
 
-	if (dir_inode->i_sectors[tfflib] != 0){
-        bread_multi(cur_part->my_disk, dir_inode->i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+	if (dir_inode->di.i_sectors[tfflib] != 0){
+        bread_multi(part->my_disk, dir_inode->di.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
     }
 
 	struct dir_entry* dir_e = (struct dir_entry*)io_buf;
@@ -139,70 +140,71 @@ bool sync_dir_entry(struct dir* parent_dir,struct dir_entry* p_de,void* io_buf){
 	while(block_idx<TOTAL_BLOCK_COUNT){
 		block_bitmap_idx = -1;
 		if(all_blocks_addr[block_idx]==0){
-			block_lba = block_bitmap_alloc(cur_part);
+			block_lba = block_bitmap_alloc(part);
 			if(block_lba==-1){
 				printk("alloc block bitmap for sync_dir_entry failed!!!\n");
 				return false;
 			}
 
-			if (cur_part == NULL) {
-    			PANIC("cur_part is SMASHED!");
+			if (part == NULL) {
+    			PANIC("part is SMASHED!");
 			}
 
-			block_bitmap_idx = block_lba - cur_part->sb->data_start_lba;
+			block_bitmap_idx = block_lba - part->sb->data_start_lba;
 			ASSERT(block_bitmap_idx!=-1);
-			bitmap_sync(cur_part,block_bitmap_idx,BLOCK_BITMAP);
+			bitmap_sync(part,block_bitmap_idx,BLOCK_BITMAP);
 			
 			block_bitmap_idx = -1;
 			if(block_idx<tfflib){
-				dir_inode->i_sectors[block_idx] = all_blocks_addr[block_idx] = block_lba;
+				dir_inode->di.i_sectors[block_idx] = all_blocks_addr[block_idx] = block_lba;
 			}else if(block_idx==tfflib){
-				dir_inode->i_sectors[tfflib] = block_lba;
+				dir_inode->di.i_sectors[tfflib] = block_lba;
 				block_lba = -1;
-				block_lba = block_bitmap_alloc(cur_part);
+				block_lba = block_bitmap_alloc(part);
 
 				if(block_lba==-1){
-					block_bitmap_idx = dir_inode->i_sectors[tfflib]-cur_part->sb->data_start_lba;
-					bitmap_set(&cur_part->block_bitmap,block_bitmap_idx,0);
-					dir_inode->i_sectors[tfflib]=0;
+					block_bitmap_idx = dir_inode->di.i_sectors[tfflib]-part->sb->data_start_lba;
+					bitmap_set(&part->block_bitmap,block_bitmap_idx,0);
+					dir_inode->di.i_sectors[tfflib]=0;
 					printk("alloc block bitmap for sync_dir_entry failed!!!\n");
 					return false;
 				}
 
-				if (cur_part == NULL) {
-   					PANIC("cur_part is SMASHED!");
+				if (part == NULL) {
+   					PANIC("part is SMASHED!");
 				}
 
-				block_bitmap_idx = block_lba - cur_part->sb->data_start_lba;
+				block_bitmap_idx = block_lba - part->sb->data_start_lba;
 
 				ASSERT(block_bitmap_idx!=-1);
 
-				bitmap_sync(cur_part,block_bitmap_idx,BLOCK_BITMAP);
+				bitmap_sync(part,block_bitmap_idx,BLOCK_BITMAP);
 
 				all_blocks_addr[tfflib] = block_lba;
-				bwrite_multi(cur_part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+				bwrite_multi(part->my_disk,dir_inode->di.i_sectors[tfflib],all_blocks_addr+tfflib,1);
+				bwrite_multi(part->my_disk,dir_inode->di.i_sectors[tfflib],all_blocks_addr+tfflib,1);
 			}else{
 				all_blocks_addr[block_idx] = block_lba;
-				bwrite_multi(cur_part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+				bwrite_multi(part->my_disk,dir_inode->di.i_sectors[tfflib],all_blocks_addr+tfflib,1);
 			}
 
 			memset(io_buf,0,SECTOR_SIZE);
 
 			memcpy(io_buf,p_de,dir_entry_size);
-			bwrite_multi(cur_part->my_disk,all_blocks_addr[block_idx],io_buf,1);
-			dir_inode->i_size+=dir_entry_size;
+			bwrite_multi(part->my_disk,all_blocks_addr[block_idx],io_buf,1);
+			dir_inode->di.i_size+=dir_entry_size;
 			return true;
 		}
 
-		bread_multi(cur_part->my_disk,all_blocks_addr[block_idx],io_buf,1);
+		bread_multi(part->my_disk,all_blocks_addr[block_idx],io_buf,1);
 
 		uint8_t dir_entry_idx = 0;
 		while(dir_entry_idx<dir_entrys_per_sec){
 			if((dir_e+dir_entry_idx)->f_type==FT_UNKNOWN){
 				memcpy(dir_e+dir_entry_idx,p_de,dir_entry_size);
-				bwrite_multi(cur_part->my_disk,all_blocks_addr[block_idx],io_buf,1);
+				bwrite_multi(part->my_disk,all_blocks_addr[block_idx],io_buf,1);
 
-				dir_inode->i_size+=dir_entry_size;
+				dir_inode->di.i_size+=dir_entry_size;
 				return true;
 			}
 
@@ -215,16 +217,16 @@ bool sync_dir_entry(struct dir* parent_dir,struct dir_entry* p_de,void* io_buf){
 }
 
 bool delete_dir_entry(struct partition* part,struct dir* pdir,uint32_t inode_no,void* io_buf){
-	struct inode* dir_inode = pdir->inode;
+	struct m_inode* dir_inode = pdir->inode;
 	uint32_t block_idx = 0,all_blocks_addr[TOTAL_BLOCK_COUNT] = {0};
 	while(block_idx<DIRECT_INDEX_BLOCK){
-		all_blocks_addr[block_idx] = dir_inode->i_sectors[block_idx];
+		all_blocks_addr[block_idx] = dir_inode->di.i_sectors[block_idx];
 		block_idx++;
 	}
 	// the first first-level index block
 	int tfflib = DIRECT_INDEX_BLOCK;
-	if(dir_inode->i_sectors[tfflib]){
-		bread_multi(part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+	if(dir_inode->di.i_sectors[tfflib]){
+		bread_multi(part->my_disk,dir_inode->di.i_sectors[tfflib],all_blocks_addr+tfflib,1);
 	}
 
 	uint32_t dir_entry_size = part->sb->dir_entry_size;
@@ -270,10 +272,10 @@ bool delete_dir_entry(struct partition* part,struct dir* pdir,uint32_t inode_no,
 		if(dir_entry_cnt==1&&!is_dir_first_block){
 			uint32_t block_bitmap_idx = all_blocks_addr[block_idx]-part->sb->data_start_lba;
 			bitmap_set(&part->block_bitmap,block_bitmap_idx,0);
-			bitmap_sync(cur_part,block_bitmap_idx,BLOCK_BITMAP);
+			bitmap_sync(part,block_bitmap_idx,BLOCK_BITMAP);
 
 			if(block_idx<DIRECT_INDEX_BLOCK){
-				dir_inode->i_sectors[block_idx] = 0;
+				dir_inode->di.i_sectors[block_idx] = 0;
 			}else{
 				uint32_t indirect_blocks = 0;
 				uint32_t indirect_block_idx = tfflib;
@@ -286,13 +288,13 @@ bool delete_dir_entry(struct partition* part,struct dir* pdir,uint32_t inode_no,
 
 				if(indirect_blocks>1){
 					all_blocks_addr[block_idx] = 0;
-					bwrite_multi(part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+					bwrite_multi(part->my_disk,dir_inode->di.i_sectors[tfflib],all_blocks_addr+tfflib,1);
 				}else{
-					block_bitmap_idx = dir_inode->i_sectors[tfflib] - part->sb->data_start_lba;
+					block_bitmap_idx = dir_inode->di.i_sectors[tfflib] - part->sb->data_start_lba;
 					bitmap_set(&part->block_bitmap,block_bitmap_idx,0);
-					bitmap_sync(cur_part,block_bitmap_idx,BLOCK_BITMAP);
+					bitmap_sync(part,block_bitmap_idx,BLOCK_BITMAP);
 
-					dir_inode->i_sectors[tfflib] = 0;
+					dir_inode->di.i_sectors[tfflib] = 0;
 				}
 			}
 		}else{
@@ -300,9 +302,10 @@ bool delete_dir_entry(struct partition* part,struct dir* pdir,uint32_t inode_no,
 			bwrite_multi(part->my_disk,all_blocks_addr[block_idx],io_buf,1);
 		}
 
-		ASSERT(dir_inode->i_size>=dir_entry_size);
-		dir_inode->i_size -= dir_entry_size;
+		ASSERT(dir_inode->di.i_size>=dir_entry_size);
+		dir_inode->di.i_size -= dir_entry_size;
 		memset(io_buf,0,SECTOR_SIZE*2);
+		// printk("delete_dir_entry:::part:%x dir_inode:%x\n",part->i_rdev,dir_inode->i_dev);
 		inode_sync(part,dir_inode,io_buf);
 
 		return true;
@@ -312,27 +315,30 @@ bool delete_dir_entry(struct partition* part,struct dir* pdir,uint32_t inode_no,
 	
 struct dir_entry* dir_read(struct dir* dir){
 	struct dir_entry* dir_e = (struct dir_entry*)dir->dir_buf;
-	struct inode* dir_inode = dir->inode;
+	struct m_inode* dir_inode = dir->inode;
+
+	struct partition* part = get_part_by_rdev(dir_inode->i_dev);
+
 	uint32_t all_blocks_addr[TOTAL_BLOCK_COUNT] = {0},block_cnt = DIRECT_INDEX_BLOCK;
 	uint32_t block_idx = 0,dir_entry_idx = 0;
 	
 	while(block_idx<DIRECT_INDEX_BLOCK){
-		all_blocks_addr[block_idx] = dir_inode->i_sectors[block_idx];
+		all_blocks_addr[block_idx] = dir_inode->di.i_sectors[block_idx];
 		block_idx++;
 	}
 	// the first first-level index block
 	int tfflib = DIRECT_INDEX_BLOCK;
-	if(dir_inode->i_sectors[tfflib]!=0){
-		bread_multi(cur_part->my_disk,dir_inode->i_sectors[tfflib],all_blocks_addr+tfflib,1);
+	if(dir_inode->di.i_sectors[tfflib]!=0){
+		bread_multi(part->my_disk,dir_inode->di.i_sectors[tfflib],all_blocks_addr+tfflib,1);
 		block_cnt = TOTAL_BLOCK_COUNT;
 	}
 	block_idx = 0;
 
 	uint32_t cur_dir_entry_pos = 0;
-	uint32_t dir_entry_size = cur_part->sb->dir_entry_size;
+	uint32_t dir_entry_size = part->sb->dir_entry_size;
 	uint32_t dir_entrys_per_sec = SECTOR_SIZE / dir_entry_size;
-	while(dir->dir_pos<dir_inode->i_size){
-		if(dir->dir_pos>=dir_inode->i_size){
+	while(dir->dir_pos<dir_inode->di.i_size){
+		if(dir->dir_pos>=dir_inode->di.i_size){
 			return NULL;
 		}
 		if(all_blocks_addr[block_idx]==0){
@@ -340,7 +346,7 @@ struct dir_entry* dir_read(struct dir* dir){
 			continue;
 		}
 		memset(dir_e,0,SECTOR_SIZE);
-		bread_multi(cur_part->my_disk,all_blocks_addr[block_idx],dir_e,1);
+		bread_multi(part->my_disk,all_blocks_addr[block_idx],dir_e,1);
 		dir_entry_idx = 0;
 		while(dir_entry_idx<dir_entrys_per_sec){
 			if((dir_e+dir_entry_idx)->f_type!=FT_UNKNOWN){
@@ -366,15 +372,19 @@ struct dir_entry* dir_read(struct dir* dir){
 bool dir_is_empty(struct dir* dir){
 	// if the directory only has two entry "." and ".."
 	// then it is empty 
-	struct inode* dir_inode =dir->inode;
-	return (dir_inode->i_size==cur_part->sb->dir_entry_size*2);
+	struct m_inode* dir_inode =dir->inode;
+	struct partition* part = get_part_by_rdev(dir_inode->i_dev);
+	return (dir_inode->di.i_size==part->sb->dir_entry_size*2);
 }
 
 int32_t dir_remove(struct dir* parent_dir,struct dir* child_dir){
-	struct inode* child_dir_inode = child_dir->inode;
+	struct m_inode* child_dir_inode = child_dir->inode;
 	int32_t block_idx = 1;
+
+	struct partition* part = get_part_by_rdev(parent_dir->inode->i_dev);
+
 	while(block_idx<13){
-		ASSERT(child_dir_inode->i_sectors[block_idx]==0);
+		ASSERT(child_dir_inode->di.i_sectors[block_idx]==0);
 		block_idx++;
 	}
 	void* io_buf = kmalloc(SECTOR_SIZE*2);
@@ -383,9 +393,9 @@ int32_t dir_remove(struct dir* parent_dir,struct dir* child_dir){
 		return -1;
 	}
 
-	delete_dir_entry(cur_part,parent_dir,child_dir_inode->i_no,io_buf);
+	delete_dir_entry(part,parent_dir,child_dir_inode->i_no,io_buf);
 
-	inode_release(cur_part,child_dir_inode->i_no);
+	inode_release(part,child_dir_inode->i_no);
 	kfree(io_buf);
 	return 0;
 }
