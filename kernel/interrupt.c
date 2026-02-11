@@ -4,6 +4,10 @@
 #include "print.h"
 #include "io.h"
 #include "page.h"
+#include "signal.h"
+#include "thread.h"
+#include "debug.h"
+#include "stdio-kernel.h"
 
 #define IDT_DESC_CNT 0x81
 
@@ -114,6 +118,25 @@ static void intr_handler_general(uint8_t intr_vec){
     
 }
 
+// 非法指令异常处理
+static void intr_handler_illegal_opcode(uint32_t vec_no) {
+    struct task_struct* cur = get_running_task_struct();
+    
+    // 如果是内核自己跑出了非法指令，那必须 Panic
+    if (cur->pgdir == NULL) {
+        printk("err type is %s\n",intr_name[vec_no]);
+        PANIC("Kernel executed an illegal opcode!");
+    }
+
+    // 如果是用户进程
+    printk("PID %d (%s) Illegal Instruction (SIGILL)\n", 
+           cur->pid, cur->name);
+    
+    printk("err type is %s\n",intr_name[vec_no]);
+           
+    send_signal(cur, SIGILL);
+}
+
 static void exception_init(void){
     int idx = 0;
     for(idx=0;idx<IDT_DESC_CNT;idx++){
@@ -142,6 +165,8 @@ static void exception_init(void){
 	intr_name[18] = "#MC Machine-Check Exception"; 
 	intr_name[19] = "#XF SIMD Floating-Point Exception";     
 
+    register_handler(6,intr_handler_illegal_opcode);
+    register_handler(13,intr_handler_illegal_opcode);
     register_handler(14,intr_handler_page_fault);
 }
 

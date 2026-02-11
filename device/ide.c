@@ -228,6 +228,14 @@ void ide_init(){
 	register_block_dev(IDE_MAJOR, &ide_dev_fops, "ide_disk");
 	
 	printk("ide_init done\n");
+	// uint8_t* bf = kmalloc(512);
+	// ide_read(&channels[0].devices[0], 0, bf,1);
+	// int i=0;
+	// for(i=0;i<512;i++){
+	// 	printk("%x ",bf[i]);
+	// }
+
+	// while(1);
 }
 
 static void select_disk(struct disk* hd){
@@ -464,36 +472,6 @@ static bool partition_info(struct dlist_elem* pelem,void* arg UNUSED){
 	return false;
 }
 
-// read the disk without file system
-// void sys_readraw_old(const char* disk_name,uint32_t lba,const char* filename,uint32_t file_size){
-// 	struct disk* disk;
-// 	if(!strcmp("sda",disk_name)){
-// 		disk = &channels[0].devices[0];
-// 	}else if(!strcmp("sdb",disk_name)){
-// 		disk = &channels[0].devices[1];
-// 	}else{
-// 		printf("unknown disk name!\n");
-// 		return ;
-// 	}
-// 	uint32_t sec_cnt =  DIV_ROUND_UP(file_size,SECTOR_SIZE);
-// 	void* buf =  kmalloc(sec_cnt*SECTOR_SIZE);
-// 	if(buf==NULL){
-// 		printf("sys_readraw: kmalloc for buf failed!\n");
-// 		return ;
-// 	}
-//    	bread_multi(disk,lba,buf,sec_cnt);
-// 	int32_t fd = sys_open(filename,O_CREATE|O_RDWR);
-
-// 	if(fd!=-1){
-// 		if(sys_write(fd,buf,file_size)==-1){
-// 			printk("file write error!\n");
-// 			while(1);
-// 		}
-// 	}
-// 	kfree(buf);
-// 	sys_close(fd);
-// }
-
 // 流式读取的readraw，防止文件过大导致堆空间被迅速耗尽
 void sys_readraw(const char* disk_name, uint32_t lba, const char* filename, uint32_t file_size) {
     struct disk* disk;
@@ -579,6 +557,14 @@ int32_t ide_dev_read(struct file* file, void* buf, uint32_t count) {
     struct m_inode* inode = file->fd_inode;
     struct partition* part = get_part_by_rdev(inode->i_dev);
     uint32_t part_size_bytes = part->sec_cnt * SECTOR_SIZE;
+	// 如果当前操作的是sda这个裸盘，那么直接就读一个扇区然后返回
+	// 这么做主要是用来测试，测试 cat dev/sda 好不好使
+	if(file->fd_inode->di.i_rdev==0x30000){
+		// 
+		struct disk *disk = &channels[0].devices[0];
+		bread_multi(disk, 0, buf, 1);
+		return 512;
+	}
 
 	// 边界检查
 	// 在磁盘中，fd_pos就表示现在要操作磁盘的第几个字节

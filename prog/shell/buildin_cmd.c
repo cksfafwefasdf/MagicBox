@@ -196,6 +196,10 @@ void buildin_ls(uint32_t argc, char** argv) {
                 }
 				if(FT_DIRECTORY==dir_e.f_type){
 					printf("%c %d %d " BLUE "%s" RESET "\n", ftype, dir_e.i_no, file_stat.st_size, dir_e.filename);
+				}else if(FT_CHAR_SPECIAL==dir_e.f_type){
+					printf("%c %d %d " RED "%s" RESET "\n", ftype, dir_e.i_no, file_stat.st_size, dir_e.filename);
+				}else if(FT_BLOCK_SPECIAL==dir_e.f_type){
+					printf("%c %d %d " YELLOW "%s" RESET "\n", ftype, dir_e.i_no, file_stat.st_size, dir_e.filename);
 				}else{
 					printf("%c %d %d %s\n", ftype, dir_e.i_no, file_stat.st_size, dir_e.filename);
 				}
@@ -204,8 +208,12 @@ void buildin_ls(uint32_t argc, char** argv) {
         } else {
             // 简略模式：只打印文件名
             while (readdir(fd, &dir_e) > 0) {
-				if(FT_DIRECTORY == dir_e.f_type){
+				if(FT_DIRECTORY==dir_e.f_type){
 					printf(BLUE "%s " RESET, dir_e.filename);
+				}else if(FT_CHAR_SPECIAL==dir_e.f_type){
+					printf(RED "%s " RESET, dir_e.filename);
+				}else if(FT_BLOCK_SPECIAL==dir_e.f_type){
+					printf(YELLOW "%s " RESET, dir_e.filename);
 				}else{
 					printf("%s ", dir_e.filename);
 				}

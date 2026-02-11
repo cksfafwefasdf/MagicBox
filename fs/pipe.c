@@ -6,6 +6,8 @@
 #include "debug.h"
 #include "inode.h"
 #include "file.h"
+#include "signal.h"
+#include "errno.h"
 
 int32_t sys_pipe(int32_t pipefd[2]) {
 	// 申请一页内核内存作为 struct pipe (包含 ioqueue 和计数器)
@@ -38,7 +40,7 @@ int32_t sys_pipe(int32_t pipefd[2]) {
 	}
 	file_table[gfd_r].fd_inode = inode;
     file_table[gfd_r].fd_flag = O_RDONLY;
-    file_table[gfd_r].f_type = FT_PIPE;
+    // file_table[gfd_r].f_type = FT_PIPE;
     file_table[gfd_r].f_count = 1;      // 初始由当前进程的一个局部 FD 指向
     
     int32_t gfd_w = get_free_slot_in_global();
@@ -48,7 +50,7 @@ int32_t sys_pipe(int32_t pipefd[2]) {
 	}
 	file_table[gfd_w].fd_inode = inode;
     file_table[gfd_w].fd_flag = O_WRONLY;
-    file_table[gfd_w].f_type = FT_PIPE;
+    // file_table[gfd_w].f_type = FT_PIPE;
     file_table[gfd_w].f_count = 1;      // 初始由当前进程的一个局部 FD 指向
 
     // 映射到进程
@@ -103,6 +105,7 @@ int32_t pipe_read(struct file* file, void* buf, uint32_t count) {
 }
 
 int32_t pipe_write(struct file* file, const void* buf, uint32_t count) {
+    
     struct pipe* p = (struct pipe*)file->fd_inode->di.i_pipe_ptr;
     const char* buffer = buf;
     uint32_t bytes_written = 0;
@@ -113,7 +116,9 @@ int32_t pipe_write(struct file* file, const void* buf, uint32_t count) {
         // 每次循环先看一眼还有没有读者，这是 Broken Pipe 的根本检查点
         if (p->reader_count == 0) {
             intr_set_status(old_status);
-            return -1; // 触发 SIGPIPE 逻辑，这在后期信号机制中实现
+            // 发送 SIGPIPE 给当前进程
+            send_signal(get_running_task_struct(), SIGPIPE);
+            return -EPIPE; // 触发 SIGPIPE 逻辑
         }
 
         if (!ioq_full(&p->queue)) {
@@ -125,7 +130,7 @@ int32_t pipe_write(struct file* file, const void* buf, uint32_t count) {
             // 再次确保读者还在，否则睡下去就醒不来了
             if (p->reader_count == 0) {
                 intr_set_status(old_status);
-                return -1;
+                return -EPIPE;
             }
             
             // 阻塞自己。调度器在切回来时应恢复 old_status 的中断状态

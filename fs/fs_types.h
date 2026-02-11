@@ -84,7 +84,7 @@ struct file{
 	uint32_t fd_pos;
 	uint32_t fd_flag;
 	struct m_inode* fd_inode;
-	enum file_types f_type;
+	// enum file_types f_type;
 	// f_count 用于表示有多少局部FD指向此全局表中的 file，主要用于处理fork和dup2
 	// inode 的 i_open_cnts 表示有多少个全局 file结构指向同一个inode
 	// 通过多设置一个 f_count，将inode的生命周期管理和file的生命周期管理分开了

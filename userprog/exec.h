@@ -35,7 +35,7 @@ struct Elf32_Phdr{
 	Elf32_Word p_flags;
 	Elf32_Word p_align;
 };
-
+// p_type: 段的类型
 enum segment_type{
 	PT_NULL,
 	PT_LOAD,
@@ -44,6 +44,13 @@ enum segment_type{
 	PT_NOTE,
 	PT_SHLIB,
 	PT_PHDR
+};
+
+// p_flags: 段的权限 (按位组合)
+enum segment_flags {
+    PF_X = 1, // 可执行 (Executable)
+    PF_W = 2, // 可写 (Writable)
+    PF_R = 4  // 可读 (Readable)
 };
 
 extern int32_t sys_execv(const char* path,const char* argv[]);

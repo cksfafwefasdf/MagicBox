@@ -44,14 +44,38 @@ section .data:
 section .text
 global intr_exit
 intr_exit:
-	add esp,4 ;clear intr-vecotrs
-	popad
-	pop gs
-	pop fs
-	pop es
-	pop ds
-	add esp,4 ;skip the ERROR_CODE or ZERO, esp to eip
-	iretd
+    ; add esp, 4 ; 跳过 vec_no。此时 esp 指向 edi
+
+    ; 检查 CS 确定是否返回用户态 
+    ; 偏移量 = edi(0) + 8*4(通用) + 4*4(段) + 2*4(err, eip) = 56 
+	; 也就是之前pushad保存的环境
+	; popad 和 pop 段寄存器的操作要放到该操作后，否则可能会返回错误的返回值
+    mov eax, [esp + 60]     
+	; 检查是否是返回到用户态进程中，检查CS寄存器的的 RPL 位
+	; 看看待返回的代码是否是用户代码
+	; 该段代码就是内核态代码，因此检查待转目标是否是用户态就行
+    and eax, 0x0003
+    cmp eax, 0x0003
+    jne .restore_context    ; 内核态返回，直接走
+
+    ; 只有在内核态返回用户态时，才调用信号处理
+    push esp ; 此时 esp 指向 edi，正是 struct intr_stack*
+    extern do_signal
+    call do_signal
+    add esp, 4
+
+.restore_context:
+	add esp, 4 ; 跳过 vec_no。此时 esp 指向 edi
+    ; 严格按照结构体顺序恢复
+    
+    popad ; 恢复 edi 到 eax (8个)
+    pop gs ; 恢复段寄存器 (4个)
+    pop fs
+    pop es
+    pop ds
+    
+    add esp, 4 ; 跳过 err_code
+    iretd
 
 extern syscall_table
 section .text

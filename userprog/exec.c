@@ -87,10 +87,18 @@ static int32_t load(const char* pathname){
 	Elf32_Off prog_header_offset = elf_header.e_phoff;
 	Elf32_Half prog_header_size = elf_header.e_phentsize;
 
-	uint32_t prog_idx = 0;
-
 	int32_t global_fd = fd_local2global(fd);
 	ASSERT(global_fd!=-1);
+
+	uint32_t prog_idx = 0;
+    uint32_t max_vaddr = 0; // 用于追踪最高虚拟地址边界
+	// execv 的进程通常直接就是我们现在正在运行的程序所在的进程了
+    struct task_struct* cur = get_running_task_struct();
+
+	cur->start_code = 0;
+    cur->end_code = 0;
+    cur->start_data = 0;
+    cur->end_data = 0;
 	
 	while(prog_idx<elf_header.e_phnum){
 		
@@ -103,16 +111,67 @@ static int32_t load(const char* pathname){
 			goto done;
 		}
 		// printf("prog_header.p_type:%x\n",prog_header.p_type);
+		// 所有的代码段和数据段都必须是可加载段（PT_LOAD）
 		if(PT_LOAD == prog_header.p_type){
+			// 加载段
 			if(!segment_load(fd,prog_header.p_offset,prog_header.p_filesz,prog_header.p_vaddr)){
 				ret = -1;
 				goto done;
 			}
+
+			// 在写汇编或 C 代码时，我们可以定义无数个 .section .data1、.section .data2
+			// 甚至在代码中间穿插数据。但当我们把它们交给链接器（Linker，如 ld）时，魔法就发生了
+			// 链接器会根据“访问权限”和“加载属性”把所有的 Section 重新排列。
+			// 它会把所有具有“只读+执行”权限的段（如 .text、.rodata）排在一起，把所有具有“可读写”权限的段（如 .data、.bss）排在一起。
+			// Section（节）：是给链接器看的（如 .text, .data, .bss）。
+			// Segment（段/程序头）：是给操作系统加载器（也就是 load 函数）看的。
+			// 一个 Segment 通常包含一个或多个 Section。 
+			// 链接器会生成一个巨大的 PT_LOAD Segment，里面塞满了所有的 .text；
+			// 然后再生成另一个 PT_LOAD Segment，里面塞满了所有的 .data 和 .bss。
+			// 链接器生成的 Segment 是按照地址从小到大排列的。通常代码段在低地址，数据段在高地址。
+			// 无论中间有多少个琐碎的段，对于实现 brk 来说，我们只需要知道整个程序占用的虚拟空间的最顶端在哪里。从那个顶端往上的空间，就是自由的堆。
+			// 通常来说每个程序只会有一个代码段和数据段，但若不幸，我们有某个有多个数据段的程序，那么
+			// end_code 最终指向的是最后一个代码类段的结束。
+			// end_data 最终指向的是最后一个数据类段的结束（即 BSS 结束处）。
+			// brk 从这个 end_data 开始起跑。因此依然正确
+			uint32_t vaddr_end = prog_header.p_vaddr + prog_header.p_memsz;
+			if (!(prog_header.p_flags & PF_W)) { // PF_W (写) = 2,
+				// 如果没有写权限，那么就是代码段
+				// 实际上这不太严谨，只读数据段 .rodata 也没有写权限
+				// 在此处，我们一样将其看作是代码段的一部分，这和linux的做法一样
+				// 通常来说，只读数据段(.rodata .text)都是连在一起的
+				// 因此我们将第一个只读数据段的起始地址作为 start_code
+				// 最后一个只读数据段的结束地址作为 end_code
+				// 但是，通常来说，第一个只读段都是 elf 头所在的位置，并不是 .text
+				// 但是这没啥关系，因为这和linux的表现一致
+				// 只有第一次遇到只读段时，才记录 start_code
+				if (cur->start_code == 0) {
+					cur->start_code = prog_header.p_vaddr;
+				}
+				cur->end_code = vaddr_end;
+			} else { // 有写权限 -> 数据段
+				cur->start_data = prog_header.p_vaddr;
+				cur->end_data = vaddr_end; // 数据/BSS 结束的地方
+			}
+
+			if (vaddr_end > max_vaddr) {
+				max_vaddr = vaddr_end;
+			}
+			
 		}
 
 		prog_header_offset+=elf_header.e_phentsize;
 		prog_idx++;
 	}
+
+	cur->end_data = max_vaddr; // 程序的终点即为堆的起点
+    cur->brk = max_vaddr; // 初始时堆顶等于堆起点
+	// 程序的栈起始位置
+	// 由于我们划分了高1GB的虚拟地址给内核空间，而栈是从高向低生长的
+	// 因此设置高1GB的最开始的地址 0xc0000000 作为栈底是合适的，可用空间很大
+    cur->start_stack = 0xc0000000; 
+
+	// printk("load: start_code:%x end_data:%x start_stack:%x\n",cur->start_code,cur->end_data,cur->start_stack);
 
 	ret = elf_header.e_entry;
 
@@ -146,6 +205,20 @@ int32_t sys_execv(const char* path,const char* argv[]){
 	intr_0_stack->ecx = argc;
 	intr_0_stack->eip = (void*) entry_point;
 	intr_0_stack->esp = (void*) 0xc0000000;
+
+	int i=0;
+	// fork 出的子进程会全权继承父进程的信号处理操作
+	// execv 出来的进程当父进程中的处理函数为SIG_IGN时，仍然保留
+	// 否则将其全部置为 SIG_DFL
+	// SIG_IGN 必须保留，这允许 Shell 实现 nohup 或后台静默运行。
+	for(i=0;i<SIG_NR;i++){
+		if (cur->sigactions[i].sa_handler != SIG_IGN) {
+			cur->sigactions[i].sa_handler = SIG_DFL;
+			cur->sigactions[i].sa_mask = 0;
+			cur->sigactions[i].sa_flags = 0;
+			cur->sigactions[i].sa_restorer = NULL;
+    	}
+	}
 
 	
 	asm volatile ("movl %0,%%esp; jmp intr_exit"::"g"(intr_0_stack):"memory");

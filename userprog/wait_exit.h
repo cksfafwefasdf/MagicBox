@@ -4,5 +4,6 @@
 
 extern pid_t sys_wait(int32_t* status);
 extern void sys_exit(int32_t status);
+extern pid_t sys_waitpid(pid_t pid, int32_t* status, int32_t options);
 
 #endif

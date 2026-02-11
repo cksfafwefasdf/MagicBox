@@ -88,6 +88,8 @@ extern void ufree(void* ptr);
 extern void kfree(void* ptr);
 extern void do_free(void* ptr,enum pool_flags PF);
 
+extern uint32_t sys_brk(uint32_t new_brk);
+
 
 extern uint32_t mem_bytes_total;
 #endif

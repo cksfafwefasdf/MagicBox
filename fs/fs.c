@@ -19,6 +19,7 @@
 #include "ide.h"
 #include "file.h"
 #include "inode.h"
+#include "ide_buffer.h"
 
 struct partition* cur_part;
 struct dir* cur_dir;
@@ -1567,6 +1568,7 @@ void make_dev_nodes(void) {
                 char dev_name[32];
                 sprintf(dev_name,"/dev/%s", hd->name);
                 sys_mknod(dev_name, FT_BLOCK_SPECIAL, hd->i_rdev);
+				printk("/dev/%s rdev: %x\n",hd->name,hd->i_rdev);
             }
         }
     }

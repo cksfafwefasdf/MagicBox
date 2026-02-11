@@ -12,6 +12,9 @@
 #include "wait_exit.h"
 #include "ide.h"
 #include "pipe.h"
+#include "tty.h"
+#include "timer.h"
+#include "signal.h"
 
 #define SYSCALL_NR 64
 typedef void* syscall_func;
@@ -25,7 +28,6 @@ void syscall_init(void){
 	put_str("syscall_init start\n");
 	syscall_table[SYS_GETPID] = sys_getpid;
 	syscall_table[SYS_WRITE] = sys_write;
-	// syscall_table[SYS_WRITE_INT] = sys_write_int;
 	syscall_table[SYS_MALLOC] = umalloc;
 	syscall_table[SYS_FREE] = ufree;
 	syscall_table[SYS_FORK] = sys_fork;
@@ -58,6 +60,18 @@ void syscall_init(void){
 	syscall_table[SYS_READ_SECTORS] = sys_read_sectors;
 	syscall_table[SYS_MKNOD] = sys_mknod;
 	syscall_table[SYS_DUP2] = sys_dup2;
+	syscall_table[SYS_SETPGID] = sys_setpgid;
+	syscall_table[SYS_GETPGID] = sys_getpgid;
+	syscall_table[SYS_IOCTL] = sys_ioctl;
+	syscall_table[SYS_SIGNAL] = sys_signal;
+	syscall_table[SYS_ALARM] = sys_alarm;
+	syscall_table[SYS_PAUSE] = sys_pause;
+	syscall_table[SYS_SIGRETURN] = sys_sigreturn;
+	syscall_table[SYS_SIGACTION] = sys_sigaction;
+	syscall_table[SYS_WAITPID] = sys_waitpid;
+	syscall_table[SYS_KILL] = sys_kill;
+	syscall_table[SYS_SIGPENDING] = sys_sigpending;
+	syscall_table[SYS_SIGPROCMASK] = sys_sigprocmask;
 	
 	put_str("syscall_init done\n");
 }

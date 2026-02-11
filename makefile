@@ -25,7 +25,7 @@ OBJS = $(BUILD_DIR)/main.o $(BUILD_DIR)/init.o $(BUILD_DIR)/interrupt.o \
 	$(BUILD_DIR)/fork.o $(BUILD_DIR)/exec.o $(BUILD_DIR)/wait_exit.o \
 	$(BUILD_DIR)/assert.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/tty.o \
 	$(BUILD_DIR)/page.o $(BUILD_DIR)/hashtable.o $(BUILD_DIR)/ide_buffer.o \
-	$(BUILD_DIR)/tar.o $(BUILD_DIR)/char_dev.o $(BUILD_DIR)/block_dev.o
+	$(BUILD_DIR)/tar.o $(BUILD_DIR)/char_dev.o $(BUILD_DIR)/block_dev.o $(BUILD_DIR)/signal.o
 
 $(BUILD_DIR)/main.o:kernel/main.c lib/kernel/print.h lib/stdint.h kernel/init.h
 	$(CC) $< $(CFLAGS) -o $@
@@ -136,6 +136,9 @@ $(BUILD_DIR)/char_dev.o:device/char_dev.c device/char_dev.h device/tty.h fs/fs.h
 $(BUILD_DIR)/block_dev.o:device/block_dev.c device/block_dev.h device/ide.h fs/fs.h 
 	$(CC) $< $(CFLAGS) -o $@
 
+$(BUILD_DIR)/signal.o:kernel/signal.c kernel/signal.h
+	$(CC) $< $(CFLAGS) -o $@
+
 # ASM code
 
 $(BUILD_DIR)/kernel.o:kernel/kernel.s
@@ -173,7 +176,7 @@ hd:
 	dd if=$(BUILD_DIR)/kernel.bin of=$(DISK_DIR)/hd60M.img bs=512 count=600 seek=9 conv=notrunc 
 
 clean: 
-	cd $(BUILD_DIR) && rm -f *.o *.bin disasm_mbr disasm_loader
+	cd $(BUILD_DIR) && rm -f *.o *.bin disasm_mbr disasm_loader *.map *.sym
 	rm -rf $(BUILD_DIR_PROG)
 
 build:$(BUILD_DIR)/kernel.bin

@@ -15,6 +15,11 @@
 #define SECTOR_SIZE 512
 #define BLOCK_SIZE SECTOR_SIZE
 
+// waitpid 的参数
+#define WNOHANG    1    // 0001
+#define WUNTRACED  2    // 0010
+#define WCONTINUED 4    // 0100
+
 enum file_types{
 	FT_UNKNOWN, // unsupported type
 	FT_REGULAR, // regular file
@@ -45,6 +50,13 @@ struct dir_entry{
 	char filename[MAX_FILE_NAME_LEN];
 	uint32_t i_no;
 	enum file_types f_type;
+};
+
+struct sigaction {
+    void (*sa_handler)(int);
+    uint32_t sa_mask;
+    int32_t sa_flags;
+    void (*sa_restorer)(void); // 信号执行完后的返回函数
 };
 
 enum std_fd{

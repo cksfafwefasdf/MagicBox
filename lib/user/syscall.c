@@ -1,6 +1,17 @@
 #include "syscall.h"
 #include "stdio.h"
 #include "unistd.h"
+#include "string.h"
+
+// 该 syscall 文件主要是由用户程序包含的
+// 而我们的所有用户程序都要链接运行时库 start.s
+// 因此所有用户程序都能访问到 sig_restorer 这个函数
+// 由于我们的init进程是一个用户进程，因此他只能调用syscall.h 中的系统调用，不能使用 sys_xxx函数
+// 但是它又是随内核一起编译的，这就引发了一个问题，
+// sig_restorer是随用户程序编译的，但是init这个随内核编译的用户程序并没有包含start.s，因此init它不知道sig_restorer的存在
+// 因此我们将sig_restorer声明成弱引用，链接器在链接时，若没有找到该符号，那么就把他置为0，找到了就置为相应值
+
+__attribute__((weak)) extern void sig_restorer(void);
 
 // eax for int_no
 // ebx for arg1
@@ -212,4 +223,63 @@ int32_t dup2(uint32_t old_local_fd, uint32_t new_local_fd){
 
 int32_t mknod(const char* pathname, enum file_types type, uint32_t dev){
 	return _syscall3(SYS_MKNOD,pathname,type,dev);
+}
+
+pid_t setpgid(pid_t pid, pid_t pgid){
+	return _syscall2(SYS_SETPGID,pid,pgid);
+}
+pid_t getpgid(pid_t pid){
+	return _syscall1(SYS_GETPGID,pid);
+}
+
+int32_t ioctl(int fd, uint32_t cmd, uint32_t arg){
+	return _syscall3(SYS_IOCTL,fd,cmd,arg);
+}
+
+void* signal(int sig, void* handler){
+	struct sigaction action;
+	struct sigaction old_action;
+	// 一定要记得初始化，防止上一个结束的程序和当前程序的栈重合
+	// 然后上一个程序的脏数据污染了我们的sigaction结构体
+	// 如果脏数据正好位于我们的sa_restorer字段，那么sa_restorer就不为NULL了
+	// sigaction 的 sa_restorer 默认赋值逻辑就无效了
+	memset(&action, 0, sizeof(struct sigaction));
+	action.sa_handler = handler;
+	action.sa_mask = 0;
+	action.sa_flags = 0;
+	action.sa_restorer = sig_restorer;
+
+	sigaction(sig,&action,&old_action);
+	return old_action.sa_handler;
+}
+
+int pause(void){
+	return _syscall0(SYS_PAUSE);
+}
+
+uint32_t alarm(uint32_t seconds){
+	return _syscall1(SYS_ALARM,seconds);
+}
+
+int sigaction(int sig, struct sigaction* act, struct sigaction* oact){
+	if (act && act->sa_restorer == NULL) {
+        act->sa_restorer = sig_restorer; // 默认为 start.S 里的跳板
+    }
+    return _syscall3(SYS_SIGACTION, sig, act, oact);
+}
+
+pid_t waitpid(pid_t pid, int32_t* status, int32_t options){
+    return _syscall3(SYS_WAITPID, pid, status, options);
+}
+
+int kill(pid_t pid, int sig){
+	return _syscall2(SYS_KILL, pid, sig);
+}
+
+int sigpending(uint32_t* set){
+	return _syscall1(SYS_SIGPENDING, set);
+}
+
+int sigprocmask(int how, const uint32_t* set, uint32_t* oldset){
+	return _syscall3(SYS_SIGPROCMASK, how, set, oldset);
 }

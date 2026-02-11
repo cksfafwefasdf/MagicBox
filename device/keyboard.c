@@ -161,7 +161,8 @@ static void intr_handler_keyboard(void){
 		uint8_t index = (scancode &= 0x00ff);
 		char cur_char = keymap[index][is_upper_case];
 
-		if((ctrl_down_last&&cur_char=='l')||(ctrl_down_last&&cur_char=='u')){
+		// 原本只支持 ctrl+l 和 ctrl+u，现在添加多种快捷键支持
+		if(ctrl_down_last && cur_char >= 'a' && cur_char <= 'z'){
 			cur_char = cur_char - 'a' + 1;
 		}
 

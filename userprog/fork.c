@@ -21,6 +21,7 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 	child_thread->status = TASK_READY;
 	child_thread->ticks = child_thread->priority;
 	child_thread->parent_pid = parent_thread->pid;
+	child_thread->pgrp = parent_thread->pgrp; // 子进程继承父进程的组id
 	child_thread->general_tag.prev = child_thread->general_tag.next = NULL;
 	child_thread->all_list_tag.prev = child_thread->all_list_tag.next = NULL;
 	block_desc_init(child_thread->u_block_desc);

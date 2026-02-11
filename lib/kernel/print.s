@@ -51,6 +51,9 @@ global put_char
 put_char: ; write a char that from the stack to the position of cursor 
 	pushad ; backup all the GPRs
 	
+	pushfd ; 备份标志寄存器（包含中断状态）
+	cli ; 关中断保证原子性
+
 	mov ax,SELECTOR_GRAPHIC
 	mov gs,ax
 	
@@ -72,7 +75,7 @@ put_char: ; write a char that from the stack to the position of cursor
 	; pushad push 8 GPRs which is 4*8=32byte
 	; after pushad's 32byte is return-addr which is 4byte
 	; so first argument is esp+32+4=esp+36
-	mov ecx,[esp+36] ; get char to print 
+	mov ecx,[esp+40] ; get char to print 
 	mov al, [out_status] ; get current status
 
 	cmp al, 0
@@ -352,6 +355,7 @@ put_char: ; write a char that from the stack to the position of cursor
 	out dx,al
 
 .put_char_done:
+	popfd ; 恢复标志寄存器，会自动恢复先前的中断状态
 	popad
 	ret
 

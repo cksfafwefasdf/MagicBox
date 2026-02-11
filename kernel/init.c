@@ -20,32 +20,42 @@
 #include "tty.h"
 #include "stdio.h"
 #include "device.h"
+#include "debug.h"
 void init(void);
 void print_logo(void);
 
 void init(void) {
     // 先打开一个可读可写的控制台
     int32_t tty_fd = open("/dev/tty0", O_RDWR);
-   
+    
     // 强制把 console_fd 拷贝到 0, 1, 2 号 FD
     dup2(tty_fd, 0); // stdin
     dup2(tty_fd, 1); // stdout
     dup2(tty_fd, 2); // stderr
-
+    
     if (tty_fd > 2) close(tty_fd);
     
     printf("process init started...\n");
 
-    uint32_t ret_pid = fork();
+    int32_t ret_pid = fork();
     
     if (ret_pid) { // 父进程逻辑：负责回收僵尸进程
+        // init 第一个启动的进程是shell，强制将shell的进程组设置为自己的pid
+        setpgid(ret_pid,ret_pid);
+        // 将shell的进程组设置为tty的台前进程组
+        // 0, 1, 2 都是 tty 的描述符，用绑定一个
+        ioctl(0, TIOCSPGRP, &ret_pid);
+
         int status;
         int child_pid;
         while (1) {
             child_pid = wait(&status);
-            printf("I'm init, my pid is 1, I receive a child, it's pid is %d, status is %d\n", child_pid, status);
+            printf("I'm init, my pid is 3, I receive a child, it's pid is %d, status is %d\n", child_pid, status);
         }
     } else { // 子进程逻辑：启动 Shell
+
+        setpgid(0, 0); // 确保自己进组，双重确认
+
         // 检查 Shell 是否已经存在于文件系统中
         int fd = open(SHELL_PATH, O_RDONLY);
 

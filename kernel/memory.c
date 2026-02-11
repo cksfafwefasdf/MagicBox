@@ -628,10 +628,6 @@ void sys_free_mem(){
 	// printk("free[KF+KP]: %d+%d\tfree[UP]: %d\nused[K]: %d\tused[U]: %d\n",kf,kp,up,kernel_total-kf-kp,user_total-up);
 	// printk("total[K+U]\tfree[(KF+KP)+UP]\tused[K+U]\t\n%d+%d\t(%d+%d)+%d\t%d+%d\n",kernel_total,user_total,kf, kp,up,kernel_total-kf-kp,user_total-up);
 }
-// un-write protect page
-static void un_wp_page(uint32_t * v_pte_ptr){
-	printk("un_wp_page:::*v_pte_ptr: %x\n", *v_pte_ptr);
-}
 
 void copy_page_tables(struct task_struct* from,struct task_struct* to,void* page_buf){
 	ASSERT(page_buf!=NULL);
@@ -702,22 +698,97 @@ void set_page_read_only(struct task_struct* pthread){
 	printk("set_page_read_only:::refresh TLB done\n");
 }
 
-void swap_page(uint32_t err_code,void* err_vaddr){
-	printk("swap_page:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
-	while (1);
-	
+// un-write protect page
+static void un_wp_page(uint32_t * v_pte_ptr){
+	printk("un_wp_page:::*v_pte_ptr: %x\n", *v_pte_ptr);
 }
 
-void write_protect(uint32_t err_code,void* err_vaddr){
-	printk("kernel_vaddr.vaddr_start: %x\n", kernel_vaddr.vaddr_start);
-	if((uint32_t)err_vaddr>=0xC0000000){
-		PANIC("kernel write protection error");
-	}
-	
-	printk("write_protect:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
-	un_wp_page(pte_ptr(err_vaddr));
-	while(1);
+// 检查虚拟地址是否合法
+static bool is_vaddr_legal(struct task_struct* cur, void* err_vaddr) {
+    uint32_t vaddr = (uint32_t)err_vaddr;
 
+    // 检查是否越界进入了内核空间
+    if (vaddr >= 0xc0000000) return false;
+
+    // 只有用户进程才有 userprog_vaddr 位图
+    if (cur->pgdir != NULL) {
+        struct virtual_addr* pool = &cur->userprog_vaddr;
+        if (vaddr >= pool->vaddr_start) {
+            uint32_t bit_idx = (vaddr - pool->vaddr_start) / PG_SIZE;
+            // 如果位图中已经标记为 1，说明已经分配过，
+            // 此时触发 P=0 的异常通常意味着页表被意外篡改或交换到了磁盘（r如果后期实现了 swap）
+            if (bit_idx < pool->vaddr_bitmap.btmp_bytes_len * 8) {
+                if (bitmap_bit_check(&pool->vaddr_bitmap, bit_idx)) {
+                    return true; 
+                }
+            }
+        }
+    }
+
+    // 栈的自动增长探测 (即使位图中没标，但在栈的合法波动范围内)
+    // 用户栈底通常在 0xc0000000 附近，这里我们允许它在一定范围内自动触发分配
+    // 比如：当前 ESP 指令附近的地址，或者是 start_stack 向下 8MB 内
+    if (vaddr < 0xc0000000 && vaddr >= (0xc0000000 - 0x800000)) {
+        return true; 
+    }
+
+    // 段边界检查，作为双重保险
+    // load 时填了这些字段，它们可以用来识别合法的程序区
+    if (vaddr >= cur->start_code && vaddr < cur->brk) {
+        return true;
+    }
+
+    // 其他情况一律视为非法访问（如 NULL 指针，或访问未申请的空洞）
+    return false;
+}
+
+// 该函数对应两者情况
+// 懒加载/交换：内核分配物理页。
+// 非法访问：访问了完全没有映射、或者不属于用户空间（如访问内核空间地址）的内存
+void swap_page(uint32_t err_code,void* err_vaddr){
+	printk("swap_page:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
+	
+	struct task_struct* cur = get_running_task_struct();
+
+    // 逻辑判定,如果地址是非法的（例如：空指针、内核空间、未分配区域）
+	// cur->pgdir!=NULL 保证该进程是一个用户进程
+	// 用户进程才能发信号量
+	if (!is_vaddr_legal(cur, err_vaddr)&&cur->pgdir!=NULL) {
+        printk("PID %d (%s) Segmentation Fault at %x (P=%d, W=%d, U=%d)\n", 
+                cur->pid, cur->name, err_vaddr, 
+                err_code & 1, (err_code >> 1) & 1, (err_code >> 2) & 1);
+        
+        // 发送信号
+        send_signal(cur, SIGSEGV);
+        
+        // 关键点：中断返回后会重新执行出错指令。
+        // 我们必须在 do_signal 拦截并处理它，或者在此处直接处理默认行为。
+        return; 
+    }
+	
+	PANIC("swap_page");
+	while (1);
+}
+
+// 写时复制（COW）：这是合法的，内核分配新页并映射，然后直接 ret 返回用户态继续执行。
+// 非法写入：比如用户程序试图修改只读的代码段（.text）。
+void write_protect(uint32_t err_code, void* err_vaddr) {
+    struct task_struct* cur = get_running_task_struct();
+
+    // 如果是内核触发了写保护（比如操作了 CR0 的 WP 位），直接 PANIC
+    if (cur->pgdir == NULL || (uint32_t)err_vaddr >= 0xC0000000) {
+        PANIC("Kernel Write Protection Error!");
+    }
+
+    // 对于用户进程，写保护异常（在不考虑 COW 的情况下）通常是违规操作
+    // 比如：尝试修改 .text 段
+    printk("PID %d (%s) Write Violation at %x, err_code is %d\n", cur->pid, cur->name, err_vaddr, err_code);
+    
+    // 同样发送 SIGSEGV，因为这属于非法的内存操作
+    send_signal(cur, SIGSEGV);
+
+	// un_wp_page(pte_ptr(err_vaddr));
+	
 }
 
 
@@ -725,4 +796,76 @@ void sys_test(){
 	set_page_read_only(get_running_task_struct());
 	// printk("sys_test:::thread name: %s\n",get_running_task_struct()->name);
 	printk("sys_test:::set_page_read_only done\n");
+}
+
+// 检查虚拟地址池中从 vaddr 开始的 pg_cnt 个页是否都是空闲的
+static bool vaddr_range_is_free(struct virtual_addr* vaddr_pool, uint32_t vaddr, uint32_t pg_cnt) {
+    // 计算该虚拟地址在位图中的起始偏移（第几个 bit）
+    uint32_t bit_idx_start = (vaddr - vaddr_pool->vaddr_start) / PG_SIZE;
+    
+    // 逐页检查位图状态
+	uint32_t i;
+    for (i = 0; i < pg_cnt; i++) {
+        // 如果 bitmap_bit_check 返回 true，说明该位是 1，即已被占用
+        if (bitmap_bit_check(&vaddr_pool->vaddr_bitmap, bit_idx_start + i)) {
+            return false; 
+        }
+    }
+    return true;
+}
+
+// 修改进程的堆顶边界 (brk) 
+uint32_t sys_brk(uint32_t new_brk) {
+    struct task_struct* cur = get_running_task_struct();
+	// 若new_brk == 0，表示是查询当前堆顶
+    if (new_brk == 0) return cur->brk;
+	// 非法缩减，将堆顶缩到数据区了，缩减失败，同样返回当前堆顶
+    if (new_brk < cur->end_data) return cur->brk;
+
+    uint32_t old_brk_page = cur->brk & 0xfffff000;
+    uint32_t new_brk_page = new_brk & 0xfffff000;
+
+    if (new_brk > cur->brk) {
+        if (new_brk_page > old_brk_page) {
+            // 安全检查, 检查 [old_brk_page + PG_SIZE, new_brk_page] 范围在位图中是否可用
+            // 这一步可以防止堆撞上栈或 mmap 区域
+			// 需要新分配的起始虚拟地址（当前堆顶所在页的下一页）
+            uint32_t start_vaddr = old_brk_page + PG_SIZE;
+            // 需要分配的总页数
+            uint32_t pg_cnt = (new_brk_page - old_brk_page) / PG_SIZE;
+            if (!vaddr_range_is_free(&cur->userprog_vaddr, start_vaddr, pg_cnt)) {
+                printk("sys_brk: vaddr collision! range [%x, %x] is occupied.\n", 
+                        start_vaddr, new_brk_page);
+				PANIC("sys_brk: vaddr_range_is_free failed!\n");
+                return cur->brk; // 发现前方有 mmap 或其他映射，扩张失败
+            }
+            
+            //  分配
+            uint32_t vaddr = start_vaddr;
+            while (vaddr <= new_brk_page) {
+                if (mapping_v2p(PF_USER, vaddr) == NULL) {
+                    // 这里的错误处理：如果分配了一半失败了，理论上应该回滚，
+                    // 但简易内核可以记录当前分配到的位置
+					PANIC("sys_brk: mapping_v2p failed!\n");
+                    return cur->brk; 
+                }
+                vaddr += PG_SIZE;
+            }
+        }
+    } else if (new_brk < cur->brk) {
+        // 缩减时的安全检查：不能释放包含 end_data 的那一页
+        uint32_t data_end_page = cur->end_data & 0xfffff000;
+        
+        if (new_brk_page < old_brk_page) {
+            uint32_t vaddr = old_brk_page;
+            // 只有当 vaddr 超过了数据段所在的页，才允许释放
+            while (vaddr > new_brk_page && vaddr > data_end_page) {
+                mfree_page(PF_USER, (void*)vaddr, 1);
+                vaddr -= PG_SIZE;
+            }
+        }
+    }
+
+    cur->brk = new_brk;
+    return cur->brk;
 }
