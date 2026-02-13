@@ -11,6 +11,8 @@
 #include "stdio-kernel.h"
 #include "debug.h"
 #include "file.h"
+#include "process.h"
+#include "wait_exit.h"
 
 extern void intr_exit;
 
@@ -45,12 +47,6 @@ static bool segment_load(int32_t fd,uint32_t offset,uint32_t filesz,uint32_t vad
 		page_idx++;
 	}
 
-	// res = bitmap_bit_check(&cur->userprog_vaddr,bit_idx);
-	// printk("segment_load:::after res: %d\n",res);
-	// while(1);
-
-	// printk("prog_size: %d\n",prog_size);
-	// while(1);
 	sys_lseek(fd,offset,SEEK_SET);
 	sys_read(fd,(void*)vaddr,filesz);
 	
@@ -180,47 +176,143 @@ done:
 	return ret;
 }
 
-int32_t sys_execv(const char* path,const char* argv[]){
-	
-	uint32_t argc = 0;
-	
-	while(argv!=NULL&&argv[argc]){
-		argc++;
-	}
-	
-	int32_t entry_point = load(path);
-	
+// sys_execv 必须要有参数！至少要有第一个参数，即文件名！
+// argv[0] 和 path 不总是一样，因为 argv[0] 可能是 ls ，而 path 是 /bin/ls
+// 并且 argv 必须以 NULL 结尾
+int32_t sys_execv(const char* path, const char* argv[]) {
 
-	if(entry_point==-1){
+	if(argv==NULL){
+		printk("sys_execv dose not allow argv to be NULL !\n");
 		return -1;
 	}
 
-	struct task_struct* cur = get_running_task_struct();
-	memcpy(cur->name,path,TASK_NAME_LEN);
-	cur->name[TASK_NAME_LEN-1] = 0;
+    uint32_t argc = 0;
+    struct task_struct* cur = get_running_task_struct();
 
-	struct intr_stack* intr_0_stack = (struct intr_stack*) ((uint32_t)cur+PG_SIZE-sizeof(struct intr_stack));
-
-	intr_0_stack->ebx = (int32_t)argv;
-	intr_0_stack->ecx = argc;
-	intr_0_stack->eip = (void*) entry_point;
-	intr_0_stack->esp = (void*) 0xc0000000;
-
-	int i=0;
-	// fork 出的子进程会全权继承父进程的信号处理操作
-	// execv 出来的进程当父进程中的处理函数为SIG_IGN时，仍然保留
-	// 否则将其全部置为 SIG_DFL
-	// SIG_IGN 必须保留，这允许 Shell 实现 nohup 或后台静默运行。
-	for(i=0;i<SIG_NR;i++){
-		if (cur->sigactions[i].sa_handler != SIG_IGN) {
-			cur->sigactions[i].sa_handler = SIG_DFL;
-			cur->sigactions[i].sa_mask = 0;
-			cur->sigactions[i].sa_flags = 0;
-			cur->sigactions[i].sa_restorer = NULL;
-    	}
+    // 准备内核中转页，用于备份参数
+    // 必须在 user_vaddr_space_clear 之前完成，因为我们需要读取用户态的 path 和 argv
+    char* k_arg_page = get_kernel_pages(1); 
+    
+	if (k_arg_page == NULL){
+		goto fail1;
 	}
 
+	char* path_bk =  kmalloc(strlen(path) + 1); // +1 是加上一个 '\0'
 	
-	asm volatile ("movl %0,%%esp; jmp intr_exit"::"g"(intr_0_stack):"memory");
-	return 0;
+	if (path_bk == NULL){
+		goto fail2;
+	}
+
+	memset(k_arg_page,0,PG_SIZE);
+	strcpy(path_bk,path); // 备份路径
+
+    char* k_ptr = k_arg_page;
+    uint32_t arg_offsets[MAX_ARG_NR] = {0};
+    uint32_t arg_lens[MAX_ARG_NR] = {0};
+
+    // 备份参数，第一个参数是文件名
+	int i = 0; 
+	// 由于我们是以 argv[i] != NULL 作为边界条件的，因此 argv 必须以 NULL 结尾
+	while (argv[i] != NULL && argc < MAX_ARG_NR) {
+		uint32_t cur_len = strlen(argv[i]) + 1;
+		
+		// 检查内核页是否溢出
+		if ((k_ptr - k_arg_page) + cur_len > PG_SIZE) goto fail3;
+
+		arg_offsets[argc] = (uint32_t)(k_ptr - k_arg_page);
+		arg_lens[argc] = cur_len;
+		strcpy(k_ptr, argv[i]);
+		
+		k_ptr += cur_len;
+		argc++;
+		i++;
+	}
+
+    // 清理旧的用户空间映射 (0 ~ 3GB)
+    // 此时用户栈被销毁，用户态指针 path 和 argv 彻底失效
+    user_vaddr_space_clear(cur);
+
+	// printk("argv[0]:%s \n",k_arg_page + arg_offsets[0]);
+    // 加载新程序，传入内核空间的 path 副本
+    // 此时读取 path 访问的是内核地址 (0xC0000000以上)，绝对不会触发用户空间缺页
+
+    int32_t entry_point = load(path_bk); 
+
+    if (entry_point == -1) {
+		printk("execv: load failed! killing process %d\n", cur->pid);
+		kfree(path_bk);
+		mfree_page(PF_KERNEL, k_arg_page, 1);
+		
+		// 必须走 sys_exit。
+		// 既然已经 user_vaddr_space_clear 了，这个进程已经无法生存，
+		// 必须通过正规渠道“宣布死亡”，让父进程收尸。
+		sys_exit(-1); 
+	}
+
+    // 更新进程名
+    memcpy(cur->name, path_bk, TASK_NAME_LEN);
+    cur->name[TASK_NAME_LEN - 1] = 0;
+	
+
+    // 准备新程序的用户栈
+    // 栈底设为 0xc0000000
+    uint32_t user_stack_top = 0xc0000000;
+    uint32_t new_argv_pointers[MAX_ARG_NR] = {0};
+
+    // 将内核备份的参数拷贝到新栈顶
+    // 第一次 memcpy 写入 0xbffffxxx 时，CPU 会自动触发 swap_page 进行扩容
+    for (i = (int)argc - 1; i >= 0; i--) {
+        uint32_t cur_len = arg_lens[i];
+        user_stack_top -= cur_len;
+        
+        // 这一步会通过缺页中断自动建立物理映射
+        memcpy((void*)user_stack_top, k_arg_page + arg_offsets[i], cur_len);
+        new_argv_pointers[i] = user_stack_top; 
+    }
+	
+
+    // 拷贝指针数组到栈顶 (argv 列表) 
+    uint32_t argv_table_size = sizeof(char*) * (argc + 1);
+    user_stack_top -= argv_table_size;
+    
+    char** user_argv_list = (char**)user_stack_top;
+    // 如果跨页了也会触发 swap_page，但可以自动修复，不要紧
+    user_argv_list[argc] = NULL; // 最后一个参数置为 NULL
+    for (i = 0; i < argc; i++) {
+        user_argv_list[i] = (char*)new_argv_pointers[i];
+    }
+
+    // 准备进入用户态的中断栈上下文
+    struct intr_stack* intr_0_stack = (struct intr_stack*)((uint32_t)cur + PG_SIZE - sizeof(struct intr_stack));
+
+    intr_0_stack->ebx = (int32_t)user_argv_list; // 存入新程序的 argv 指针
+    intr_0_stack->ecx = (int32_t)argc;           // 存入 argc
+    intr_0_stack->eip = (void*)entry_point;      // 新程序入口
+    intr_0_stack->esp = (void*)user_stack_top;   // 新程序栈顶
+
+    // 信号处理重置 (按照posix标准，要保留父进程的 SIG_IGN，其余的全部置为默认)
+    for (i=0 ; i < SIG_NR; i++) {
+        if (cur->sigactions[i].sa_handler != SIG_IGN) {
+            cur->sigactions[i].sa_handler = SIG_DFL;
+            cur->sigactions[i].sa_mask = 0;
+            cur->sigactions[i].sa_flags = 0;
+            cur->sigactions[i].sa_restorer = NULL;
+        }
+    }
+
+    // 释放中转内存
+    mfree_page(PF_KERNEL, k_arg_page, 1);
+	kfree(path_bk);
+
+    // 切换栈并跳转到 intr_exit 执行 iret 进入用户态
+    asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (intr_0_stack) : "memory");
+
+    return 0; // 不会执行到这里
+
+fail3:
+	kfree(path_bk);
+fail2:
+    mfree_page(PF_KERNEL, k_arg_page, 1);
+fail1:
+	return -1;
 }

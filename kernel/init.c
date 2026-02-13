@@ -23,6 +23,8 @@
 #include "debug.h"
 void init(void);
 void print_logo(void);
+// linux 标准中，argv 必须以 NULL 结尾
+char* argv[] = {SHELL_PATH,NULL} ;
 
 void init(void) {
     // 先打开一个可读可写的控制台
@@ -78,7 +80,7 @@ void init(void) {
         // 运行 Shell
         close(fd);
         printf("init: starting shell %s...\n", SHELL_PATH);
-        execv(SHELL_PATH, NULL);
+        execv(SHELL_PATH, argv);
 
         // 如果 execv 返回了，说明执行失败
         panic("init: shell execv failed!");

@@ -209,7 +209,7 @@ void do_signal(struct intr_stack* stack) {
     if (sa->sa_handler == SIG_DFL) {
         switch (sig) {
             case SIGCHLD: // 子进程已停止或终止
-                // 默认忽略，什么都不做
+                // 默认忽略，什么都不做，因为一般父进程会负责收尾
                 goto end;
             case SIGALRM: // 该信号会在用户调用alarm系统调用所设置的延迟时间到后产生。该信号常用于判别系统调用超时。 
             case SIGTERM: // 用于和善地要求一个程序终止。它是kill的默认信号。与SIGKILL不同，该信号能被捕获，这样就能在退出运行前做清理工作。 

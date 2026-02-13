@@ -32,42 +32,13 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 	// printk("Child PCB: %x, Bitmp Vaddr: %x, Phys: %x\n", 
     //    child_thread, vaddr_btmp, addr_v2p(vaddr_btmp));
 	
-	memcpy(vaddr_btmp,child_thread->userprog_vaddr.vaddr_bitmap.bits,bitmap_pg_cnt*PG_SIZE);
+	memset(vaddr_btmp,0,bitmap_pg_cnt*PG_SIZE);
 	child_thread->userprog_vaddr.vaddr_bitmap.bits = vaddr_btmp;
 	// ASSERT(strlen(child_thread->name)<11);
 	strcat(child_thread->name,"_fork");
 	return 0;
 }
 
-static void copy_body_stack3(struct task_struct* child_thread,struct task_struct* parent_thread,void* buf_page){
-	
-	uint8_t* vaddr_btmp = parent_thread->userprog_vaddr.vaddr_bitmap.bits;
-	uint32_t btmp_bytes_len = parent_thread->userprog_vaddr.vaddr_bitmap.btmp_bytes_len;
-	uint32_t vaddr_start = parent_thread->userprog_vaddr.vaddr_start;
-	uint32_t idx_byte = 0;
-	uint32_t idx_bit = 0;
-	uint32_t prog_vaddr = 0;
-
-	while(idx_byte<btmp_bytes_len){
-		if(vaddr_btmp[idx_byte]){
-			idx_bit = 0;
-			while (idx_bit<8){
-				if((BITMAP_MASK<<idx_bit)&vaddr_btmp[idx_byte]){
-					prog_vaddr = (idx_byte*8+idx_bit)*PG_SIZE+vaddr_start;
-					memcpy(buf_page,(void*)prog_vaddr,PG_SIZE);
-					page_dir_activate(child_thread);
-					get_a_page_without_op_vaddrbitmap(PF_USER,prog_vaddr);
-
-					memcpy((void*)prog_vaddr,buf_page,PG_SIZE);
-					page_dir_activate(parent_thread);
-				}
-				idx_bit++;
-				
-			}
-		}
-		idx_byte++;
-	}
-}
 
 static int32_t build_child_stack(struct task_struct* child_thread){
 	struct intr_stack* intr_0_stack = (struct intr_stack*)((uint32_t)child_thread+PG_SIZE-sizeof(struct intr_stack));
@@ -139,16 +110,10 @@ static int32_t copy_process(struct task_struct* child_thread,struct task_struct*
 		return -1;
 	}
 	
-	copy_body_stack3(child_thread,parent_thread,buf_page);
-	// printk("set_page_read_only start!\n");
-	// set_page_read_only(parent_thread);
-	// printk("set_page_read_only done!\n");
+	// copy_body_stack3(child_thread,parent_thread,buf_page);
 	
-	// printk("copy_page_table start!\n");
-	// copy_page_tables(parent_thread,child_thread,buf_page);
-	// printk("copy_page_table done!\n");
+	copy_page_tables(parent_thread,child_thread,buf_page);
 	
-	// while(1);
 	build_child_stack(child_thread);
 	update_f_cnts(child_thread);
 	mfree_page(PF_KERNEL,buf_page,1);

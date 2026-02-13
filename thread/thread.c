@@ -373,9 +373,10 @@ void thread_exit(struct task_struct* thread_over,bool need_schedule){
 		dlist_remove(&thread_over->general_tag);
 	}
 
-	if(thread_over->pgdir){
-		mfree_page(PF_KERNEL,thread_over->pgdir,1);
-	}
+	// wati-exit.c 中的 release_pg_table 函数中已经释放过页表了，不用再释放了
+	// if(thread_over->pgdir){
+	// 	mfree_page(PF_KERNEL,thread_over->pgdir,1);
+	// }
 
 	dlist_remove(&thread_over->all_list_tag);
 

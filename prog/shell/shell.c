@@ -7,10 +7,6 @@
 #include "buildin_cmd.h"
 #include "unistd.h"
 
-#define CMD_LEN 128
-#define MAX_ARG_NR 16
-#define CMD_NUM 64
-
 #define SIG_IGN  ((void (*)(int))1)
 #define SIG_DFL  ((void (*)(int))0)
 #define SIGINT 2

@@ -20,6 +20,11 @@
 #define WUNTRACED  2    // 0010
 #define WCONTINUED 4    // 0100
 
+// 和 shell 有关的宏
+#define CMD_LEN 128
+#define MAX_ARG_NR 16
+#define CMD_NUM 64
+
 enum file_types{
 	FT_UNKNOWN, // unsupported type
 	FT_REGULAR, // regular file

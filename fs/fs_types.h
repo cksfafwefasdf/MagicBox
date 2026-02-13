@@ -12,7 +12,7 @@
 
 #define ADDR_BYTES_32BIT 4 // size of the 32 bits address pointor
 
-#define FS_MAGIC_NUMBER 0x20030000 // magic number for this file system
+#define FS_MAGIC_NUMBER 0x20030001 // magic number for this file system
 
 #define DIRECT_INDEX_BLOCK 12
 #define FIRST_LEVEL_INDEX_BLOCK 1

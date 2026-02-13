@@ -7,6 +7,7 @@
 #include "file.h"
 #include "debug.h"
 #include "memory.h"
+#include "process.h"
 
 struct wait_opts {
     pid_t target_pid;
@@ -14,47 +15,11 @@ struct wait_opts {
 };
 
 static void release_prog_resource(struct task_struct* release_thread){
-	uint32_t* pgdir_vaddr = release_thread->pgdir;
-	uint16_t pde_idx = 0;
-	uint32_t pde = 0;
-	uint32_t* v_pde_ptr = NULL;
+	release_pg_block(release_thread);
 
-	uint16_t pte_idx=0;
-	uint32_t pte = 0;
-	uint32_t* v_pte_ptr = NULL;
-
-	uint32_t* first_pte_vaddr_in_pde = NULL;
-	uint32_t pg_phy_addr = 0;
-
-	while(pde_idx<USER_PDE_NR){
-		v_pde_ptr = pgdir_vaddr+pde_idx;
-		pde = *v_pde_ptr;
-		if(pde&0x00000001){
-			first_pte_vaddr_in_pde = pte_ptr(pde_idx*0x400000);
-			pte_idx = 0;
-			while (pte_idx<USER_PTE_NR){
-				v_pte_ptr = first_pte_vaddr_in_pde+pte_idx;
-				pte = *v_pte_ptr;
-				if(pte&0xfffff000){
-					if(pte&0x00000001){
-						pg_phy_addr = pte&0xfffff000;
-						free_a_phy_page(pg_phy_addr);
-					}else{
-						PANIC("need swap!\n");
-					}
-				}
-				pte_idx++;
-			}
-			pg_phy_addr = pde & 0xfffff000;
-			free_a_phy_page(pg_phy_addr);
-		}
-		pde_idx++;
-	}
 	uint32_t bitmap_pg_cnt = (release_thread->userprog_vaddr.vaddr_bitmap.btmp_bytes_len)/PG_SIZE;
 	uint8_t* user_vaddr_pool_bitmap = release_thread->userprog_vaddr.vaddr_bitmap.bits;
-
 	mfree_page(PF_KERNEL,user_vaddr_pool_bitmap,bitmap_pg_cnt);
-
 	uint8_t local_fd = 0;
 	while(local_fd<MAX_FILES_OPEN_PER_PROC){
 		if(release_thread->fd_table[local_fd]!=-1){
@@ -93,6 +58,7 @@ static bool init_adopt_a_child(struct dlist_elem* pelem,void* arg){
 	return false;
 }
 
+
 pid_t sys_wait(int32_t* status){
 	struct task_struct* parent_thread = get_running_task_struct();
 
@@ -104,7 +70,8 @@ pid_t sys_wait(int32_t* status){
 				*status = child_thread->exit_status;
 
 			uint16_t child_pid = child_thread->pid;
-
+			release_pg_table(child_thread);
+			release_pg_dir(child_thread);
 			thread_exit(child_thread,false);
 			return child_pid;
 		}
@@ -204,7 +171,8 @@ pid_t sys_waitpid(pid_t pid, int32_t* status, int32_t options) {
             struct task_struct* child_thread = member_to_entry(struct task_struct, all_list_tag, child_elem);
             if (status != NULL) *status = child_thread->exit_status;
             uint16_t child_pid = child_thread->pid;
-
+			release_pg_table(child_thread); // 释放页表
+			release_pg_dir(child_thread); // 释放页目录表
             thread_exit(child_thread, false); // 彻底销毁
             return child_pid;
         }
