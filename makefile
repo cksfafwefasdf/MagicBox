@@ -8,7 +8,7 @@ CC = gcc
 LD = ld
 LIB = -I lib/ -I lib/kernel/ -I lib/user/ -I lib/common/ -I kernel/ -I device/ -I thread/ -I userprog/	-I fs/ -I shell/
 ASFLAGS = -f elf
-CFLAGS = -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes \
+CFLAGS = -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes -D DEBUG \
      -Wmissing-prototypes -m32 -fno-stack-protector -std=gnu89 -fgnu89-inline -fcommon -Wno-error=implicit-function-declaration
 LDFLAGS = -Ttext $(ENTRY_POINT) -e main -Map $(BUILD_DIR)/kernel.map -m elf_i386
 # LDFLAGS = -Ttext $(ENTRY_POINT) -e main -Map $(BUILD_DIR)/kernel.map -m elf_i386 -s
@@ -25,7 +25,8 @@ OBJS = $(BUILD_DIR)/main.o $(BUILD_DIR)/init.o $(BUILD_DIR)/interrupt.o \
 	$(BUILD_DIR)/fork.o $(BUILD_DIR)/exec.o $(BUILD_DIR)/wait_exit.o \
 	$(BUILD_DIR)/assert.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/tty.o \
 	$(BUILD_DIR)/page.o $(BUILD_DIR)/hashtable.o $(BUILD_DIR)/ide_buffer.o \
-	$(BUILD_DIR)/tar.o $(BUILD_DIR)/char_dev.o $(BUILD_DIR)/block_dev.o $(BUILD_DIR)/signal.o
+	$(BUILD_DIR)/tar.o $(BUILD_DIR)/char_dev.o $(BUILD_DIR)/block_dev.o $(BUILD_DIR)/signal.o \
+	$(BUILD_DIR)/vma.o
 
 $(BUILD_DIR)/main.o:kernel/main.c lib/kernel/print.h lib/stdint.h kernel/init.h
 	$(CC) $< $(CFLAGS) -o $@
@@ -137,6 +138,9 @@ $(BUILD_DIR)/block_dev.o:device/block_dev.c device/block_dev.h device/ide.h fs/f
 	$(CC) $< $(CFLAGS) -o $@
 
 $(BUILD_DIR)/signal.o:kernel/signal.c kernel/signal.h
+	$(CC) $< $(CFLAGS) -o $@
+
+$(BUILD_DIR)/vma.o:userprog/vma.c userprog/vma.h
 	$(CC) $< $(CFLAGS) -o $@
 
 # ASM code

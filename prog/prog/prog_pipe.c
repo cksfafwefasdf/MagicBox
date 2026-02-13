@@ -13,7 +13,9 @@ void my_sig_handler(int sig) {
 }
 
 int main() {
-    int fd[2];
+    // int fd[2];
+    // 测试用户态 malloc
+    int* fd = malloc(sizeof(2));
     pipe(fd);
 
     // 关键：注册处理函数，这样进程就不会被默认动作杀掉了
@@ -36,6 +38,7 @@ int main() {
     
     // 此时父进程还活着，它可以顺手回收一下儿子
     // wait(NULL); 
+    free(fd);
     
     return 0;
 }

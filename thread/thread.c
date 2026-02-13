@@ -91,6 +91,8 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 	pthread->blocked = 0;
 	memset(pthread->sigactions, 0, sizeof(pthread->sigactions));
 
+	dlist_init(&pthread->vma_list);
+
 	// 将所有信号的处理函数默认设为 SIG_DFL
 	int i;
 	for (i = 0; i < SIG_NR; i++) {

@@ -70,6 +70,7 @@ extern void sys_readraw(const char* disk_name,uint32_t lba,const char* filename,
 extern void sys_read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uint32_t sec_cnt);
 extern int32_t ide_dev_write(struct file* file, const void* buf, uint32_t count);
 extern int32_t ide_dev_read(struct file* file, void* buf, uint32_t count);
+extern struct partition* get_part_by_rdev(uint32_t rdev);
 
 extern struct ide_channel channels[2];
 extern uint8_t channel_cnt;

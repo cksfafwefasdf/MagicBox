@@ -11,6 +11,7 @@
 #include "thread.h"
 #include "process.h"
 #include "stdint.h"
+#include "vma.h"
 
 
 #define PDE_IDX(addr) ((addr&0xffc00000)>>22)
@@ -367,9 +368,10 @@ void* kmalloc(uint32_t size) {
     return do_alloc(size, PF_KERNEL);
 }
 
-// 专门给用户进程请求内存使用 (如 sbrk 系统调用) */
+// 专门给用户进程请求内存使用
 void* umalloc(uint32_t size) {
-    return do_alloc(size, PF_USER);
+    void* vaddr = do_alloc(size, PF_USER);
+    return vaddr;
 }
 
 
@@ -717,45 +719,6 @@ void copy_page_tables(struct task_struct* from, struct task_struct* to, void* pa
 	intr_set_status(old_status);
 }
 
-// 检查虚拟地址是否合法
-static bool is_vaddr_legal(struct task_struct* cur, void* err_vaddr) {
-    uint32_t vaddr = (uint32_t)err_vaddr;
-
-    // 检查是否越界进入了内核空间
-    if (vaddr >= 0xc0000000) return false;
-
-    // 只有用户进程才有 userprog_vaddr 位图
-    if (cur->pgdir != NULL) {
-        struct virtual_addr* pool = &cur->userprog_vaddr;
-        if (vaddr >= pool->vaddr_start) {
-            uint32_t bit_idx = (vaddr - pool->vaddr_start) / PG_SIZE;
-            // 如果位图中已经标记为 1，说明已经分配过，
-            // 此时触发 P=0 的异常通常意味着页表被意外篡改或交换到了磁盘（r如果后期实现了 swap）
-            if (bit_idx < pool->vaddr_bitmap.btmp_bytes_len * 8) {
-                if (bitmap_bit_check(&pool->vaddr_bitmap, bit_idx)) {
-                    return true; 
-                }
-            }
-        }
-    }
-
-    // 栈的自动增长探测 (即使位图中没标，但在栈的合法波动范围内)
-    // 用户栈底通常在 0xc0000000 附近，这里我们允许它在一定范围内自动触发分配
-    // 比如：当前 ESP 指令附近的地址，或者是 start_stack 向下 8MB 内
-    if (vaddr < 0xc0000000 && vaddr >= (0xc0000000 - 0x800000)) {
-        return true; 
-    }
-
-    // 段边界检查，作为双重保险
-    // load 时填了这些字段，它们可以用来识别合法的程序区
-    if (vaddr >= cur->start_code && vaddr < cur->brk) {
-        return true;
-    }
-
-    // 其他情况一律视为非法访问（如 NULL 指针，或访问未申请的空洞）
-    return false;
-}
-
 bool is_vaddr_mapped(struct task_struct* cur, uint32_t vaddr) {
     // 确保是用户空间地址
     if (vaddr < cur->userprog_vaddr.vaddr_start || vaddr >= 0xc0000000) {
@@ -772,7 +735,7 @@ bool is_vaddr_mapped(struct task_struct* cur, uint32_t vaddr) {
 // 非法访问：访问了完全没有映射、或者不属于用户空间（如访问内核空间地址）的内存
 void swap_page(uint32_t err_code,void* err_vaddr){
 	enum intr_status _old =  intr_disable();
-	printk("swap_page:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
+	debug_printk("swap_page:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
 	
 	struct task_struct* cur = get_running_task_struct();
 	uint32_t vaddr = (uint32_t)err_vaddr;
@@ -780,6 +743,19 @@ void swap_page(uint32_t err_code,void* err_vaddr){
 	// 硬件给出的 vaddr 可能是 0xbffffabc，我们需要把它对齐到 0xbffff000
     uint32_t page_vaddr = vaddr & 0xfffff000;
 
+	// 先尝试在 VMA 合同库里找找看，这个地址合法吗？
+    struct vm_area* vma = find_vma(cur, page_vaddr);
+
+	if (vma == NULL) {
+		printk("VMA Search Failed! vaddr: %x\n", page_vaddr);
+		// 打印当前进程所有的 vma 范围，看看 0xBFFFF000 在不在里面
+		goto segmentation_fault;
+	}
+	
+	// 如果 vma 都不存在，那么说明不是懒加载，而是真正的段错误 
+	if (vma == NULL) {
+        goto segmentation_fault;
+    }
 
 	// 尝试栈自动扩容，由于我们在process.c中的start_process函数中
 	// 只默认为用户进程栈的高4KB映射了物理内存
@@ -793,39 +769,66 @@ void swap_page(uint32_t err_code,void* err_vaddr){
 	// 因此即使父进程需要10KB，子进程只需要3KB，我们最终的子进程都会占用10KB
 	// 使用COW后，子进程不额外拷贝父进程的位图了，而是重新自立门户
 	// 因此每次子进程初次使用栈时，都会触发栈扩容逻辑
-    if (page_vaddr < 0xc0000000 && page_vaddr >= 0xc0000000 - 0x800000) {
-        // 如果这个地址在位图里是 0，说明它是新长出来的栈空间
-        if (!is_vaddr_mapped(cur, page_vaddr)) {
+    
+	// 由于我们引入了 vma，因此我们现在可以直接通过vma来判断地址是否属于栈空间了
+	// 因此原本的判断可以直接删除了，地址是否合法可以方向的完全交给 find_vma 来判断
 
-            // 建立映射 (映射到对齐后的虚拟页起始地址)
-            mapping_v2p(PF_USER, page_vaddr);
-            printk("PID %d (%s) Stack expanded at %x\n", cur->pid, cur->name, page_vaddr);
-			intr_set_status(_old);
-            return; // 成功扩容，返回用户态重新执行指令
-        }
+	// 检查是否已经映射过（物理页是否已存在）
+    // 如果 is_vaddr_mapped 为 true 却依然触发缺页，可能是 P=0 但位图没清，
+    // 在没有置换到交换分区（Swap Partition）前，这种情况通常是异常。
+	if (is_vaddr_mapped(cur, page_vaddr)) {
+        // 如果物理页已经存在，但仍然缺页，可能是权限问题（比如写保护）
+        // 但写保护通常由 write_protect 处理，这里直接 panic 方便调试
+        PANIC("swap_page: page already mapped but fault again!");
     }
 
-	// 懒加载逻辑，待实现...
-	// 懒加载逻辑，待实现...
-	// 懒加载逻辑，待实现...
+	// 合法合同且尚未映射，开始分配物理页
+    // mapping_v2p 内部会完成 palloc 物理页 + 修改位图 + 建立页表映射
+    mapping_v2p(PF_USER, page_vaddr);
 
-    // 逻辑判定,如果地址是非法的（例如：空指针、内核空间、未分配区域）
-	// cur->pgdir!=NULL 保证该进程是一个用户进程
-	// 用户进程才能发信号量
-	if (!is_vaddr_legal(cur, err_vaddr)&&cur->pgdir!=NULL) {
-        printk("PID %d (%s) Segmentation Fault at %x (P=%d, W=%d, U=%d)\n", 
-                cur->pid, cur->name, err_vaddr, 
-                err_code & 1, (err_code >> 1) & 1, (err_code >> 2) & 1);
+
+	// 根据合同内容初始化物理页数据
+    if (vma->vma_inode != NULL) {
+        // 有文件的映射 (代码段、数据段、BSS)
+        uint32_t offset_in_vma = page_vaddr - vma->vma_start;
         
-        // 发送信号
-        send_signal(cur, SIGSEGV);
-        intr_set_status(_old);
-        // 关键点：中断返回后会重新执行出错指令。
-        // 我们必须在 do_signal 拦截并处理它，或者在此处直接处理默认行为。
-        return; 
+        // 先全页清零，保证了 BSS 区域和文件末端对齐部分的正确性
+        memset((void*)page_vaddr, 0, PG_SIZE);
+
+        // 如果故障点在文件有效长度内，则读取磁盘
+        if (offset_in_vma < vma->vma_filesz) {
+            uint32_t read_size = PG_SIZE;
+            // 最后一页可能不满 4KB
+            if (offset_in_vma + PG_SIZE > vma->vma_filesz) {
+                read_size = vma->vma_filesz - offset_in_vma;
+            }
+            
+            // 物理偏移 = 合同起始偏移 + 块内偏移
+            inode_read_data(vma->vma_inode, 
+                            vma->vma_pgoff + offset_in_vma, 
+                            (void*)page_vaddr, 
+                            read_size);
+        }
+    } else {
+        // 匿名映射 (栈、堆 brk 区域) 
+        // 按照规定，新分配的匿名页必须初始化为全 0
+		// 这里可以直接自动实现我们的栈扩容逻辑
+        memset((void*)page_vaddr, 0, PG_SIZE);
     }
+
 	intr_set_status(_old);
-	PANIC("swap_page");
+    return;
+
+segmentation_fault:
+    if (cur->pgdir != NULL) {
+        printk("PID %d (%s) Segmentation Fault at %x\n", cur->pid, cur->name, vaddr);
+        send_signal(cur, SIGSEGV);
+    } else {
+		// 内核进程不存在懒加载，直接报错
+		printk("Kernel Page Fault at %x\n", vaddr);
+        PANIC("Kernel Page Fault");
+    }
+    intr_set_status(_old);
 }
 
 // 触发写保护错误了，调用此函数，将相应的数据段的数据拷贝给触发写错误的进程
@@ -886,6 +889,10 @@ void write_protect(uint32_t err_code, void* err_vaddr) {
 	// 先判断当前发送只读页错误的地址是不是位于数据段
 	// 要是位于代码段的话那么本来也就不让改写
 	// 直接发信号终止程序
+
+	// 现在我们已经开始接入 vma 了
+	// 在后续的实现中我们需要改进成使用 vma->flags & PF_W
+	// 来判断是否为代码段
 	if (vaddr < cur->end_code) {
         printk("PID %d (%s) attempt to write Read-Only Segment at %x\n", cur->pid, cur->name, vaddr);
         send_signal(cur, SIGSEGV);

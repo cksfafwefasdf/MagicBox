@@ -12,4 +12,12 @@ extern void print_stacktrace(void);
     #define ASSERT(CONDITION) if(!(CONDITION)){PANIC(#CONDITION);}
 #endif // NDEBUG
 
+#ifdef DEBUG
+    /* 如果定义了 DEBUG，则正常调用 printk */
+    #define debug_printk(fmt, ...) printk(fmt, ##__VA_ARGS__)
+#else
+    /* 如果没定义 DEBUG，则宏内容为空，编译器会自动优化掉这些代码 */
+    #define debug_printk(fmt, ...) ((void)0)
+#endif
+
 #endif // __KERNEL_DEBUG_H

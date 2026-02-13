@@ -684,3 +684,17 @@ int32_t ide_dev_write(struct file* file, const void* buf, uint32_t count) {
     if (io_buf) kfree(io_buf);
     return (int32_t)count;
 }
+
+// 通过 vfs 逻辑设备号拿到 partition
+struct partition* get_part_by_rdev(uint32_t rdev) {
+    struct dlist_elem* elem = partition_list.head.next;
+    while (elem != &partition_list.tail) {
+        struct partition* part = member_to_entry(struct partition, part_tag, elem);
+        if (part->i_rdev == rdev) {
+            return part;
+        }
+        elem = elem->next;
+    }
+
+    return NULL; 
+}

@@ -6,6 +6,7 @@
 #include "bitmap.h"
 #include "signal.h"
 #include "unistd.h"
+#include "fs_types.h"
 
 // each process can open 8 files at most
 #define MAX_FILES_OPEN_PER_PROC 8
@@ -121,6 +122,11 @@ struct task_struct{
 	// 除非你去扫描整个位图，但是每次都扫描整个位图太费时间了，brk相当于是一个“缓存”
     uint32_t brk; // 当前堆顶（sbrk 操纵的对象）
     uint32_t start_stack; // 用户栈底地址
+
+	// 挂载该进程管理的 vm_area
+	// 使用侵入式链表定义，这样的话thread.h就不用抱包含vma.h了
+	// 避免了循环依赖
+	struct dlist vma_list;
 
 	struct virtual_addr userprog_vaddr;
 	struct mem_block_desc u_block_desc[DESC_TYPE_CNT];

@@ -8,6 +8,7 @@
 #include "debug.h"
 #include "memory.h"
 #include "process.h"
+#include "vma.h"
 
 struct wait_opts {
     pid_t target_pid;
@@ -15,6 +16,9 @@ struct wait_opts {
 };
 
 static void release_prog_resource(struct task_struct* release_thread){
+	// 清理 VMA 链表（释放 kmalloc 申请的 vma 结构体，并 close 关联的 inode）
+    clear_vma_list(release_thread);
+
 	release_pg_block(release_thread);
 
 	uint32_t bitmap_pg_cnt = (release_thread->userprog_vaddr.vaddr_bitmap.btmp_bytes_len)/PG_SIZE;

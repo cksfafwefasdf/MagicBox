@@ -10,6 +10,8 @@
 #include "interrupt.h"
 #include "dlist.h"
 #include "print.h"
+#include "thread.h"
+#include "ide.h"
 
 extern void intr_exit(void);
 
@@ -40,7 +42,7 @@ void release_pg_block(struct task_struct* task){
 				if(pte&0xfffff000){
 					pg_phy_addr = pte&0xfffff000;
 					pfree(pg_phy_addr); // 释放页表项指向的数据页
-					v_pte_ptr = 0; // 抹除映射
+					*v_pte_ptr = 0; // 抹除映射
 				}
 				pte_idx++;
 			}
@@ -193,4 +195,3 @@ void process_execute(void* filename,char* name){
     dlist_push_back(&thread_all_list, &thread->all_list_tag);
 	intr_set_status(old_status);
 }
-

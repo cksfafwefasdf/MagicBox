@@ -20,6 +20,7 @@
 #include "file.h"
 #include "inode.h"
 #include "ide_buffer.h"
+#include "debug.h"
 
 struct partition* cur_part;
 struct dir* cur_dir;
@@ -1166,7 +1167,7 @@ int32_t sys_stat(const char* path,struct stat* buf){
 		ret = 0;
 
 	}else{	
-		printk("sys_stat: %s not found!\n",path);
+		debug_printk("sys_stat: %s not found!\n",path);
 	}
 
 	dir_close(searched_record.parent_dir);
@@ -1347,20 +1348,6 @@ void sys_mount(const char* part_name){
     struct task_struct* cur = get_running_task_struct();
     cur->cwd_inode_nr = cur_part->sb->root_inode_no;
 
-}
-
-// 通过 vfs 逻辑设备号拿到 partition
-struct partition* get_part_by_rdev(uint32_t rdev) {
-    struct dlist_elem* elem = partition_list.head.next;
-    while (elem != &partition_list.tail) {
-        struct partition* part = member_to_entry(struct partition, part_tag, elem);
-        if (part->i_rdev == rdev) {
-            return part;
-        }
-        elem = elem->next;
-    }
-
-    return NULL; 
 }
 
 // 创建特殊文件（字符/块设备）

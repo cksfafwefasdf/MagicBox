@@ -243,3 +243,78 @@ struct m_inode* make_anonymous_inode() {
 
     return inode;
 }
+
+// 从 inode 的 offset 处读取 count 字节到 buf
+// 专门供 swap_page/惰性加载使用，不依赖 fd_table
+int32_t inode_read_data(struct m_inode* inode, uint32_t offset, void* buf, uint32_t count) {
+    struct partition* part = get_part_by_rdev(inode->i_dev);
+    uint8_t* buf_dst = (uint8_t*)buf;
+    uint32_t size_left = count;
+
+    // 边界检查：不能超过文件实际大小
+    if (offset + count > inode->di.i_size) {
+        size_left = inode->di.i_size - offset;
+    }
+    if (size_left <= 0) return 0;
+
+    // 准备缓冲区和块地址表
+
+    uint8_t* io_buf = kmalloc(BLOCK_SIZE);
+    uint32_t* all_blocks_addr = (uint32_t*)kmalloc(TOTAL_BLOCK_COUNT * sizeof(uint32_t));
+    if (!io_buf || !all_blocks_addr) {
+        PANIC("inode_read_data: kmalloc failed");
+    }
+    memset(all_blocks_addr, 0, TOTAL_BLOCK_COUNT * sizeof(uint32_t));
+
+    // 填充 block 地址表
+    uint32_t block_start_idx = offset / BLOCK_SIZE;
+    uint32_t block_end_idx = (offset + size_left - 1) / BLOCK_SIZE;
+
+    // 填充直接块 (0-11)
+    uint32_t idx = 0;
+    while (idx < DIRECT_INDEX_BLOCK && idx <= block_end_idx) {
+        all_blocks_addr[idx] = inode->di.i_sectors[idx];
+        idx++;
+    }
+
+	// the first first-level index block
+	uint32_t tfflib = DIRECT_INDEX_BLOCK;
+
+    // 填充一级间接块 (12 及以后)
+    if (block_end_idx >= tfflib) {
+        ASSERT(inode->di.i_sectors[tfflib] != 0);
+        // 从磁盘读取间接索引表到 all_blocks_addr 的后半部分
+        bread_multi(part->my_disk, inode->di.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+    }
+
+    // 开始搬运数据
+    uint32_t bytes_read = 0;
+    uint32_t curr_pos = offset;
+
+    while (bytes_read < size_left) {
+        uint32_t sec_idx = curr_pos / BLOCK_SIZE;
+        uint32_t sec_lba = all_blocks_addr[sec_idx];
+        
+        uint32_t sec_off_bytes = curr_pos % BLOCK_SIZE;
+        uint32_t sec_left_bytes = BLOCK_SIZE - sec_off_bytes;
+        uint32_t chunk_size = (size_left - bytes_read < sec_left_bytes) ? 
+                               (size_left - bytes_read) : sec_left_bytes;
+
+        ASSERT(sec_lba != 0); // 正常文件（非空洞文件）不应为 0
+
+        // 读取一个物理块
+        bread_multi(part->my_disk, sec_lba, io_buf, 1);
+        
+        // 拷贝所需部分到目标缓冲区
+        memcpy(buf_dst, io_buf + sec_off_bytes, chunk_size);
+
+        buf_dst += chunk_size;
+        curr_pos += chunk_size;
+        bytes_read += chunk_size;
+    }
+
+    kfree(all_blocks_addr);
+    kfree(io_buf);
+
+    return bytes_read;
+}

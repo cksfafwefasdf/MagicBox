@@ -13,6 +13,7 @@
 #include "file.h"
 #include "process.h"
 #include "wait_exit.h"
+#include "vma.h"
 
 extern void intr_exit;
 
@@ -84,6 +85,9 @@ static int32_t load(const char* pathname){
 	Elf32_Half prog_header_size = elf_header.e_phentsize;
 
 	int32_t global_fd = fd_local2global(fd);
+
+	struct m_inode* file_inode = file_table[global_fd].fd_inode; // 获取 inode，以便于填充vma
+
 	ASSERT(global_fd!=-1);
 
 	uint32_t prog_idx = 0;
@@ -110,10 +114,18 @@ static int32_t load(const char* pathname){
 		// 所有的代码段和数据段都必须是可加载段（PT_LOAD）
 		if(PT_LOAD == prog_header.p_type){
 			// 加载段
-			if(!segment_load(fd,prog_header.p_offset,prog_header.p_filesz,prog_header.p_vaddr)){
-				ret = -1;
-				goto done;
-			}
+			// if(!segment_load(fd,prog_header.p_offset,prog_header.p_filesz,prog_header.p_vaddr)){
+			// 	ret = -1;
+			// 	goto done;
+			// }
+
+			add_vma(cur, 
+                    prog_header.p_vaddr, // start
+                    prog_header.p_vaddr + prog_header.p_memsz, // end (含BSS)
+                    prog_header.p_offset, // 文件偏移
+                    file_inode, // 关联 inode
+                    prog_header.p_flags, // 权限
+					prog_header.p_filesz); // 大小
 
 			// 在写汇编或 C 代码时，我们可以定义无数个 .section .data1、.section .data2
 			// 甚至在代码中间穿插数据。但当我们把它们交给链接器（Linker，如 ld）时，魔法就发生了
@@ -159,6 +171,11 @@ static int32_t load(const char* pathname){
 		prog_header_offset+=elf_header.e_phentsize;
 		prog_idx++;
 	}
+
+	// 为堆 (Heap) 签署一个初始合同
+    // 初始大小为 0，但 VMA 必须存在，后续 sbrk 会通过修改 vma_end 来扩容
+	// 堆栈是非文件区域，filesz要设置为0
+    add_vma(cur, max_vaddr, max_vaddr, 0, NULL, PF_R | PF_W,0);
 
 	cur->end_data = max_vaddr; // 程序的终点即为堆的起点
     cur->brk = max_vaddr; // 初始时堆顶等于堆起点
@@ -228,9 +245,20 @@ int32_t sys_execv(const char* path, const char* argv[]) {
 		i++;
 	}
 
+	// 加载新程序时，先清空旧的 vma 链表
+	clear_vma_list(cur);
+
     // 清理旧的用户空间映射 (0 ~ 3GB)
     // 此时用户栈被销毁，用户态指针 path 和 argv 彻底失效
     user_vaddr_space_clear(cur);
+
+	// 预留 8MB 空间给栈 (0xc0000000 - 8MB 到 0xc0000000)
+    // 这样接下来的参数拷贝触发缺页时，find_vma 就能找到它
+	// 堆栈是非文件区域，filesz要设为0
+
+	// 目前，我们的malloc和free直接绕过了堆的vma进行操作
+	// 因此目前堆的vma只是一个占位，等待后期完善
+    add_vma(cur, 0xc0000000 - 0x800000, 0xc0000000, 0, NULL, PF_R | PF_W,0);
 
 	// printk("argv[0]:%s \n",k_arg_page + arg_offsets[0]);
     // 加载新程序，传入内核空间的 path 副本

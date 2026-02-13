@@ -10,6 +10,7 @@
 #include "stdio-kernel.h"
 #include "print.h"
 #include "pipe.h"
+#include "vma.h"
 
 extern void intr_exit(void); // defined in  kernel.s
 static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,struct task_struct* parent_thread){
@@ -24,6 +25,9 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 	child_thread->pgrp = parent_thread->pgrp; // 子进程继承父进程的组id
 	child_thread->general_tag.prev = child_thread->general_tag.next = NULL;
 	child_thread->all_list_tag.prev = child_thread->all_list_tag.next = NULL;
+
+	dlist_init(&child_thread->vma_list);
+
 	block_desc_init(child_thread->u_block_desc);
 
 	uint32_t bitmap_pg_cnt = DIV_ROUND_UP((0xc0000000-USER_VADDR_START)/PG_SIZE/8,PG_SIZE);
@@ -32,7 +36,11 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 	// printk("Child PCB: %x, Bitmp Vaddr: %x, Phys: %x\n", 
     //    child_thread, vaddr_btmp, addr_v2p(vaddr_btmp));
 	
-	memset(vaddr_btmp,0,bitmap_pg_cnt*PG_SIZE);
+	// 如果父进程已经用了 0x400000 这个地址，虽然现在是 COW 只读
+	// 但该地址在虚拟空间中是“已占用”的。
+	// 如果子进程位图是全 0，它以后调用 malloc 可能又申请到 0x400000，逻辑就乱了。
+	// 所以需要拷贝父进程的位图
+	memcpy(vaddr_btmp, parent_thread->userprog_vaddr.vaddr_bitmap.bits, bitmap_pg_cnt * PG_SIZE);
 	child_thread->userprog_vaddr.vaddr_bitmap.bits = vaddr_btmp;
 	// ASSERT(strlen(child_thread->name)<11);
 	strcat(child_thread->name,"_fork");
@@ -102,6 +110,13 @@ static int32_t copy_process(struct task_struct* child_thread,struct task_struct*
 	if(copy_pcb_vaddrbitmap_stack0(child_thread,parent_thread)==-1){
 		return -1;
 	}
+
+	if (!copy_vma_list(parent_thread, child_thread)) {
+        // 如果 VMA 拷贝失败（比如 kmalloc 失败），需要清理已分配资源
+		// 在此我们先 PANIC 便于调试
+		PANIC("failed to copy_vma_list!");
+        return -1; 
+    }
 	
 	
 	child_thread->pgdir = create_page_dir();
@@ -117,7 +132,7 @@ static int32_t copy_process(struct task_struct* child_thread,struct task_struct*
 	build_child_stack(child_thread);
 	update_f_cnts(child_thread);
 	mfree_page(PF_KERNEL,buf_page,1);
-	printk("copy_process::: copy_process done!\n");
+	debug_printk("copy_process::: copy_process done!\n");
 	return 0;
 }
 
