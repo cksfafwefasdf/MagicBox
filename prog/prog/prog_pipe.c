@@ -3,42 +3,54 @@
 #include "string.h"
 #include "stdint.h"
 
-// 检验管道破裂，以及信号 SIGPIPE 以及 自定义信号 handler  同时可以测试init进程是否可以正确回收孤儿进程
-
-#define SIGPIPE 13
-
-void my_sig_handler(int sig) {
-    // 真实的 handler 里用 printf 是不安全的，但测试时先这么干吧
-    printf("\n[Kernel Test] Process caught SIGPIPE (%d)!\n", sig);
-}
+// 测试具名管道的读写以及观察后台进程
 
 int main() {
-    // int fd[2];
-    // 测试用户态 malloc
-    int* fd = malloc(sizeof(2));
-    pipe(fd);
+    printf("FIFO Test Start...\n");
 
-    // 关键：注册处理函数，这样进程就不会被默认动作杀掉了
-    signal(SIGPIPE, my_sig_handler);
-
-    if (fork() == 0) {
-        close(fd[0]);
-        printf("Child: Closed read end and exiting...\n");
+	signal(2, (void*)0);
+    // 确保创建一个 FIFO
+    mkfifo("/data/fifo_test");
+	
+    pid_t pid_writer = fork();
+	
+    if (pid_writer == 0) {
+        // 子进程 A，写者 
+        printf("Writer Process (PID:%d) attempting to open FIFO...\n", getpid());
+        int32_t fd = open("/data/fifo_test", O_WRONLY);
+        if (fd != -1) {
+            printf("Writer Process: Opened FIFO, writing data...\n");
+            write(fd, "Message from Writer!", 21);
+            close(fd);
+            printf("Writer Process: Data sent and closed.\n");
+        }
         exit(0);
     }
 
-    close(fd[0]);
-    for(volatile uint32_t i = 0; i < 1000000000; i++); 
+    pid_t pid_reader = fork();
+    if (pid_reader == 0) {
+        // 子进程 B：读者 
+        printf("Reader Process (PID:%d) attempting to open FIFO...\n", getpid());
+        int32_t fd = open("/data/fifo_test", O_RDONLY);
+        if (fd != -1) {
+            printf("Reader Process: Opened FIFO, reading data...\n");
+            char buf[64] = {0};
+            read(fd, buf, 21);
+            printf("Reader Process: Received: %s\n", buf);
+            close(fd);
+        }
+        exit(0);
+    }
 
-    printf("Parent: Attempting to write...\n");
-    int ret = write(fd[1], "test", 4);
+    // 父进程等待两个孩子
 
-    // 因为信号被捕获了，系统调用会返回错误码，进程继续执行
-    printf("Parent: write returned %d\n", ret); 
-    
-    // 此时父进程还活着，它可以顺手回收一下儿子
-    // wait(NULL); 
-    free(fd);
-    
-    return 0;
+	// 加一个耗时操作，这样的话，当我们运行 prog_pipe & 时，按下回车
+	// 我们就有时间使用ps命令看到各个后台进程，否则执行的太快了我们都没时间输入 ps
+	for(volatile uint32_t i = 0; i < 1000000000; i++); 
+
+    int status;
+    wait(&status);
+    wait(&status);
+
+    printf("FIFO Test Finished. Cleaning up...\n");
 }

@@ -54,6 +54,8 @@ uint32_t total_pages = 0;
 
 static void* palloc(struct pool* m_pool);
 
+int32_t inode_read_data(struct m_inode* inode, uint32_t offset, void* buf, uint32_t count);
+
 
 static void mem_pool_init(uint32_t all_mem){
 	put_str("mem_pool init start\n");
@@ -719,7 +721,7 @@ void copy_page_tables(struct task_struct* from, struct task_struct* to, void* pa
 	intr_set_status(old_status);
 }
 
-bool is_vaddr_mapped(struct task_struct* cur, uint32_t vaddr) {
+static bool is_vaddr_mapped(struct task_struct* cur, uint32_t vaddr) {
     // 确保是用户空间地址
     if (vaddr < cur->userprog_vaddr.vaddr_start || vaddr >= 0xc0000000) {
         return false;

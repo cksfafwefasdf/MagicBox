@@ -110,12 +110,22 @@ struct file_operations ide_dev_fops = {
 static void ide_set_multiple_mode(struct disk* hd, uint8_t sec_per_block) {
     select_disk(hd);
     outb(reg_sect_cnt(hd->my_channel), sec_per_block);
-    // 这里由于是在 ide_init 阶段，中断可能还没好，我们用同步方式
+    
+    // 标记要开始等中断了
+    hd->my_channel->expecting_intr = true; 
     outb(reg_cmd(hd->my_channel), CMD_SET_MULTIPLE);
     
-    // 必须等待硬盘处理完这个设置
-    if (!busy_wait(hd)) {
-        printk("Warning: disk %s does not support Multiple Mode\n", hd->name);
+    // 阻塞自己，等待中断处理程序执行 sema_signal
+    sema_wait(&hd->my_channel->wait_disk); 
+
+    // 被唤醒后，直接检查状态
+    uint8_t status = inb(reg_status(hd->my_channel));
+    if (status & 0x01) { // 只检查 ERR 位
+        uint8_t err = inb(reg_error(hd->my_channel));
+        printk("Warning: disk %s Multiple Mode Fail. Err:0x%x\n", hd->name, err);
+    } else {
+        // 打印成功信息，让你调试时心里有底
+        printk("Disk %s: Multiple Mode enabled, %d sectors per block.\n", hd->name, sec_per_block);
     }
 }
 
@@ -301,21 +311,35 @@ static void write2sector(struct disk* hd,void* buf,uint8_t sec_cnt){
 }
 
 // busy wati 30 seconds
-static bool busy_wait(struct disk* hd){
-	struct ide_channel* channel = hd->my_channel;
-	uint16_t time_limit = BUSY_WAIT_TIME_LIMIT;
-	while(time_limit-=10>0){
-		if(!(inb(reg_status(channel))&BIT_ALT_STAT_BSY)){
-			// DRQ is 1 means disk is ready to read or write
-			return (inb(reg_status(channel))&BIF_ALT_STAT_DRQ);
-		}else{
-			mtime_sleep(10); //sleep 10ms, this thread will yield the CPU
-		}
-	}
-	// All actions required in this state shall be completed within 31 s
-	// if the disk fails to complete the operation within 30 seconds
-	// return false
-	return false;
+// static bool busy_wait(struct disk* hd){
+// 	struct ide_channel* channel = hd->my_channel;
+// 	uint16_t time_limit = BUSY_WAIT_TIME_LIMIT;
+// 	while(time_limit-=10>0){
+// 		if(!(inb(reg_status(channel))&BIT_ALT_STAT_BSY)){
+// 			// DRQ is 1 means disk is ready to read or write
+// 			return (inb(reg_status(channel))&BIF_ALT_STAT_DRQ);
+// 		}else{
+// 			mtime_sleep(10); //sleep 10ms, this thread will yield the CPU
+// 		}
+// 	}
+// 	// All actions required in this state shall be completed within 31 s
+// 	// if the disk fails to complete the operation within 30 seconds
+// 	// return false
+// 	return false;
+// }
+
+static bool busy_wait(struct disk* hd) {
+    struct ide_channel* channel = hd->my_channel;
+    // 轮询一段时间（比如 100,000 次），不进行 thread_yield
+    // 因为 QEMU 模拟器里，磁盘状态翻转极快，原地等待可能只要几百个纳秒
+    uint32_t timeout = 1000000; 
+    while (timeout--) {
+        uint8_t status = inb(reg_status(channel));
+        if (!(status & BIT_ALT_STAT_BSY)) { // 不忙了
+            return (status & BIF_ALT_STAT_DRQ); // 返回是否准备好数据
+        }
+    }
+    return false;
 }
 
 void ide_read(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {

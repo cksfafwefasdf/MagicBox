@@ -115,7 +115,16 @@ struct m_inode* inode_open(struct partition* part,uint32_t inode_no){
 void inode_close(struct m_inode* inode){
 	enum intr_status old_status = intr_disable();
 	if(--inode->i_open_cnts==0){
-		// 非匿名管道再进行释放
+
+		// 对 FIFO 和 PIPE 的缓冲区进行回收
+		// 让缓冲区随inode的消亡同时消亡，保证强一致性
+        if (inode->di.i_type == FT_FIFO || inode->di.i_type == FT_PIPE) {
+            if (inode->di.i_pipe_ptr != 0) {
+                mfree_page(PF_KERNEL, (void*)inode->di.i_pipe_ptr, 1);
+                inode->di.i_pipe_ptr = 0;
+            }
+        }
+		// 非匿名管道再进行释放，匿名inode是不会出现在打开队列上的
 		if(inode->i_no!=ANONY_I_NO)
 			dlist_remove(&inode->inode_tag);
 

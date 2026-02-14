@@ -23,5 +23,6 @@ extern void pipe_release(struct file* f);
 extern int32_t pipe_write(struct file* file, const void* buf, uint32_t count);
 extern int32_t pipe_read(struct file* file, void* buf, uint32_t count);
 extern int32_t sys_pipe(int32_t pipefd[2]);
+extern int32_t init_pipe(struct m_inode* inode);
 
 #endif

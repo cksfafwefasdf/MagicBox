@@ -17,7 +17,7 @@
 #define START_BYTE_PARTITION_TABLE 446
 #define END_BYTE_PARTITION_TABLE 509
 // 每轮读写操作连续读取的扇区数
-// 设置 8 或 16。必须是 2 的幂，但不能超过硬盘支持的最大值（IDENTIFY Word 47）
+// 设置 8 或 16。必须是 2 的幂，但不能超过硬盘支持的最大值（IDENTIFY Word 47，通常是16）
 #define SECTORS_PER_OP_BLOCK 16
 
 

@@ -51,6 +51,7 @@
 #define	SYS_KILL 43
 #define	SYS_SIGPENDING 44
 #define	SYS_SIGPROCMASK 45
+#define SYS_MKFIFO 46
 
 // user interface
 extern uint32_t getpid(void);
@@ -100,4 +101,6 @@ extern pid_t waitpid(pid_t pid, int32_t* status, int32_t options);
 extern int kill(pid_t pid, int sig);
 extern int sigpending(uint32_t* set);
 extern int sigprocmask(int how, const uint32_t* set, uint32_t* oldset);
+extern int32_t mkfifo(const char* pathname);
+
 #endif

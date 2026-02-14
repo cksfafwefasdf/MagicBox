@@ -72,6 +72,7 @@ void syscall_init(void){
 	syscall_table[SYS_KILL] = sys_kill;
 	syscall_table[SYS_SIGPENDING] = sys_sigpending;
 	syscall_table[SYS_SIGPROCMASK] = sys_sigprocmask;
+	syscall_table[SYS_MKFIFO] = sys_mkfifo;
 	
 	put_str("syscall_init done\n");
 }

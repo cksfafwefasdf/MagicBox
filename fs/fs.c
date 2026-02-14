@@ -21,6 +21,7 @@
 #include "inode.h"
 #include "ide_buffer.h"
 #include "debug.h"
+#include "interrupt.h"
 
 struct partition* cur_part;
 struct dir* cur_dir;
@@ -291,82 +292,6 @@ int32_t path_depth_cnt(char* pathname){
 
 // search_file 只关闭中间搜索过程中的“中间父目录”，最终的父目录无论如何他都不关闭
 // 由调用者关闭
-// static int search_file(const char* pathname,struct path_search_record* searched_record){
-// 	if(!strcmp(pathname,"/")||!strcmp(pathname,"/.")||!strcmp(pathname,"/..")){
-// 			searched_record->parent_dir = dir_open(cur_part, 0);
-// 			searched_record->file_type = FT_DIRECTORY;
-// 			searched_record->searched_path[0] = 0;
-// 			searched_record->i_dev = root_dir.inode->i_dev;
-// 			return 0;
-// 	}
-	
-
-// 	uint32_t path_len = strlen(pathname);
-// 	ASSERT(pathname[0]=='/'&&path_len>1&&path_len<MAX_PATH_LEN);
-// 	char* sub_path = (char*)pathname;
-// 	// struct dir* parent_dir = &root_dir;
-// 	// 重复打开一遍 root_dir ，防止在 sys_open 中错误的关闭全局变量的 root_dir
-
-// 	struct dir* parent_dir = dir_open(cur_part, 0); 
-// 	struct dir_entry dir_e;
-
-	
-
-// 	char name[MAX_FILE_NAME_LEN]= {0};
-
-// 	searched_record->parent_dir = parent_dir;
-// 	searched_record->file_type = FT_UNKNOWN;
-// 	searched_record->i_dev = parent_dir->inode->i_dev;
-
-// 	uint32_t parent_inode_no = 0;
-
-// 	struct partition* part;
-
-// 	sub_path = _path_parse(sub_path,name);
-
-// 	while(name[0]){
-// 		ASSERT(strlen(searched_record->searched_path)<512);
-
-// 		part = get_part_by_rdev(searched_record->i_dev);
-
-// 		strcat(searched_record->searched_path,"/");
-// 		strcat(searched_record->searched_path,name);
-
-// 		if(search_dir_entry(part,parent_dir,name,&dir_e)){
-// 			memset(name,0,MAX_FILE_NAME_LEN);
-// 			if(sub_path){
-// 				sub_path = _path_parse(sub_path,name);
-// 			}
-
-// 			if(FT_DIRECTORY==dir_e.f_type){
-// 				parent_inode_no = parent_dir->inode->i_no;
-
-// 				if (parent_dir != &root_dir) { 
-// 					dir_close(parent_dir); 
-// 				}
-
-// 				parent_dir = dir_open(part,dir_e.i_no);
-// 				searched_record->parent_dir = parent_dir;
-// 				searched_record->i_dev = parent_dir->inode->i_dev;
-// 				continue;
-// 			}else if(FT_REGULAR==dir_e.f_type){
-// 				searched_record->file_type = FT_REGULAR;
-// 				return dir_e.i_no;
-// 			}
-// 		}else{
-// 			return -1;
-// 		}
-// 	}
-
-// 	part = get_part_by_rdev(searched_record->parent_dir->inode->i_dev);
-// 	dir_close(searched_record->parent_dir);
-// 	searched_record->parent_dir = dir_open(part,parent_inode_no);
-// 	searched_record->file_type = FT_DIRECTORY;
-// 	return dir_e.i_no;
-// }
-
-// search_file 只关闭中间搜索过程中的“中间父目录”，最终的父目录无论如何他都不关闭
-// 由调用者关闭
 static int search_file(const char* pathname, struct path_search_record* searched_record) {
     // 处理根目录特例
     if (!strcmp(pathname, "/") || !strcmp(pathname, "/.") || !strcmp(pathname, "/..")) {
@@ -503,6 +428,63 @@ int32_t sys_open(const char* pathname,uint8_t flags){
 			break;
 	}
 
+	// 对于 FIFO 的处理 
+	// 检查这个 FIFO 之前是否被打开过
+    if (fd != -1) {
+        struct task_struct* cur = get_running_task_struct();
+        struct file* f = &file_table[cur->fd_table[fd]];
+        struct m_inode* inode = f->fd_inode;
+
+        if (inode->di.i_type == FT_FIFO) {
+            // 如果 FIFO 还没分配内存缓冲区，则分配 (第一次打开)，该逻辑在 init_pipe 中处理
+			// FIFO 本质上就只是 PIPE 在文件系统上的一个封装
+			// PIPE 只能用于相互认识的进程之间的通信，比如 父进程和 fork 后的子进程
+			// FIFO 用于解决相互不认识的进程之间的通信，只要知道FIFO的路径名
+			// 这两个进程就能相互通信
+            if (init_pipe(inode) != 0) {
+				sys_close(fd);
+				return -1;
+			}
+
+            struct pipe* p = (struct pipe*)inode->di.i_pipe_ptr;
+
+            // 根据当前打开标志更新 reader/writer 计数
+            if (flags & O_WRONLY || flags & O_RDWR) p->writer_count++;
+            if (!(flags & O_WRONLY) || flags & O_RDWR) p->reader_count++;
+
+            // 处理 POSIX 阻塞逻辑
+            // 如果是读打开，循环等待直到有写者，如果是写打开，循环等待直到有读者。
+			enum intr_status old_status = intr_disable();
+			if (flags & O_WRONLY) {
+                // 对于写者，如果当前没读者，要睡在生产者队列等读者来
+				// 使用 while 是为了防止虚假唤醒。
+				// 比如一个读者刚被唤醒，结果唯一的写者突然闪退了（或者被信号杀掉了）
+				// 此时读者必须再次检查 writer_count，如果还是 0，就得继续睡。
+                while (p->reader_count == 0) {
+                    // 唤醒可能正在 open 阶段等待写者的读者
+                    if (p->queue.consumer != NULL) ioq_wakeup(&p->queue.consumer);
+                    
+                    ioq_wait(&p->queue.producer); // 阻塞自己
+                }
+                // 成功等到读者，唤醒它
+                if (p->queue.consumer != NULL) ioq_wakeup(&p->queue.consumer);
+                
+            } else {
+                // 对于读者，如果当前没写者，要睡在消费者队列等写者来
+                while (p->writer_count == 0) {
+                    // 唤醒可能正在 open 阶段等待读者的写者
+                    if (p->queue.producer != NULL) ioq_wakeup(&p->queue.producer);
+                    
+                    ioq_wait(&p->queue.consumer); // 阻塞自己
+                }
+                // 成功等到写者，唤醒它
+                if (p->queue.producer != NULL) ioq_wakeup(&p->queue.producer);
+            }
+
+			intr_set_status(old_status);
+        }
+    }
+
 	return fd;
 }
 
@@ -532,11 +514,13 @@ int32_t sys_close(int32_t fd) {
     // 无论 f_count 是多少，只要本进程关闭了这一个 FD，
     // 就应该对应地减少管道的 reader/writer_count 并唤醒对端。
 	// 这些操作都会在 pipe_release 做
-    if (file->fd_inode->di.i_type == FT_PIPE) {
+    if (file->fd_inode->di.i_type == FT_PIPE || file->fd_inode->di.i_type == FT_FIFO) {
         pipe_release(file);
     }
 
     // 调用通用的文件关闭函数，处理 f_count 和 inode_close
+	// 对于 FIFO 和 PIPE，我们会在 inode_close 里面处理缓冲区的释放逻辑
+	// 以便保证只要inode被销毁，相应的缓存区也一定被销毁，保证强一致性
     int32_t ret = file_close(file);
 
     // 释放局部资源, 本进程的局部 fd 槽位回收
@@ -569,6 +553,7 @@ int32_t sys_write(int32_t fd,void* buf, uint32_t count) {
 
     switch (type) {
         case FT_PIPE:
+		case FT_FIFO: // 具名管道和匿名管道在读写逻辑上是完全一样的
             // 管道逻辑
             return pipe_write(wr_file, buf, count);
 
@@ -620,6 +605,7 @@ int32_t sys_read(int32_t fd, void* buf, uint32_t count) {
 
     switch (type) {
         case FT_PIPE:
+		case FT_FIFO: // 具名管道和匿名管道在读写逻辑上是完全一样的
             // 管道逻辑
             return pipe_read(rd_file, buf, count);
 
@@ -1350,9 +1336,9 @@ void sys_mount(const char* part_name){
 
 }
 
-// 创建特殊文件（字符/块设备）
+// 创建特殊文件（字符/块设备/FIFO）
 int32_t sys_mknod(const char* pathname, enum file_types type, uint32_t dev) {
-    if (type != FT_CHAR_SPECIAL && type != FT_BLOCK_SPECIAL) {
+    if (type != FT_CHAR_SPECIAL && type != FT_BLOCK_SPECIAL && type != FT_FIFO) {
         printk("sys_mknod: only support special files\n");
         return -1;
     }
@@ -1564,4 +1550,10 @@ void make_dev_nodes(void) {
     dlist_traversal(&partition_list, make_partition_node, NULL);
 
     printk("/dev nodes dynamic creation done.\n");
+}
+
+int32_t sys_mkfifo(const char* pathname) {
+    // 逻辑基本等同于 sys_mknod(pathname, FT_FIFO, 0)
+	// 因为 fifo 和设备inode一样，都是只有inode没有对应磁盘数据块
+    return sys_mknod(pathname, FT_FIFO, 0); 
 }

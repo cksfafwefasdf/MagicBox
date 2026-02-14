@@ -283,3 +283,7 @@ int sigpending(uint32_t* set){
 int sigprocmask(int how, const uint32_t* set, uint32_t* oldset){
 	return _syscall3(SYS_SIGPROCMASK, how, set, oldset);
 }
+
+int32_t mkfifo(const char* pathname){
+	return _syscall1(SYS_MKFIFO, pathname);
+}

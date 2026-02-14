@@ -17,43 +17,6 @@
 
 extern void intr_exit;
 
-static bool segment_load(int32_t fd,uint32_t offset,uint32_t filesz,uint32_t vaddr){
-	
-	uint32_t vaddr_first_page = vaddr & 0xfffff000;
-
-	uint32_t size_in_first_page = PG_SIZE - (vaddr& 0x00000fff);
-	uint32_t occupy_pages = 0;
-
-	if(filesz>size_in_first_page){
-		uint32_t left_size = filesz - size_in_first_page;
-		occupy_pages = DIV_ROUND_UP(left_size,PG_SIZE)+1;
-	}else{
-		occupy_pages = 1;
-	}
-
-	uint32_t page_idx = 0;
-	uint32_t vaddr_page = vaddr_first_page;
-
-	// printk("segment_load:::before res: %d\n",res);
-
-	while(page_idx<occupy_pages){
-		uint32_t* pde = pde_ptr(vaddr_page);
-		uint32_t* pte = pte_ptr(vaddr_page);
-		if(!(*pde&0x00000001)|| !(*pte & 0x00000001)){
-			if(mapping_v2p(PF_USER,vaddr_page)==NULL){
-				return false;
-			}
-		}
-		vaddr_page+=PG_SIZE;
-		page_idx++;
-	}
-
-	sys_lseek(fd,offset,SEEK_SET);
-	sys_read(fd,(void*)vaddr,filesz);
-	
-	return true;
-}
-
 static int32_t load(const char* pathname){
 	int32_t ret = -1;
 	struct Elf32_Ehdr elf_header;

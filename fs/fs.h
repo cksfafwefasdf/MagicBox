@@ -28,6 +28,7 @@ extern void sys_mount(const char* part_name);
 extern int32_t sys_dup2(uint32_t old_local_fd, uint32_t new_local_fd);
 extern int32_t sys_mknod(const char* pathname, enum file_types type, uint32_t dev);
 extern void make_dev_nodes(void);
+extern int32_t sys_mkfifo(const char* pathname);
 
 extern struct partition* cur_part;
 
