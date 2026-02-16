@@ -21,6 +21,16 @@ HD80_PATH="$TARGET_DIR/hd80M.img"
 echo "Creating $HD60_PATH..."
 qemu-img create -f raw "$HD60_PATH" 60M
 
+# 分区 hd60M.img (sda)
+echo "Partitioning $HD60_PATH..."
+(
+  # n: 新建分区, p: 主分区, 1: 分区号
+  # 40960 是 20MB 对应的扇区偏移 (20*1024*1024/512)
+  # 前 20MB 留作内核和预装程序的预留区，后40MB用来分区后装文件系统
+  echo n; echo p; echo 1; echo 40960; echo 122879
+  echo w
+) | fdisk "$HD60_PATH"
+
 # 创建 hd80M.img
 echo "Creating $HD80_PATH..."
 # 163296 sectors * 512 bytes = 83607552 bytes
@@ -48,3 +58,4 @@ echo "Partitioning $HD80_PATH..."
 echo "---------------------------------------"
 echo "Done! Verified with fdisk -l:"
 fdisk -l "$HD80_PATH"
+fdisk -l "$HD60_PATH"

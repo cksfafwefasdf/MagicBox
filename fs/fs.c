@@ -153,13 +153,12 @@ static bool mount_partition(struct dlist_elem* pelem,void* arg){
 	char* part_name = (char*) arg;
 	struct partition* part = member_to_entry(struct partition,part_tag,pelem);
 	if(!strcmp(part->name,part_name)){
+
 		cur_part = part;
 		struct disk* hd = cur_part->my_disk;
 		
 		cur_part->block_bitmap.bits = (uint8_t*)kmalloc(cur_part->sb->block_bitmap_sects*SECTOR_SIZE);
 		cur_part->inode_bitmap.bits = (uint8_t*)kmalloc(cur_part->sb->inode_bitmap_sects*SECTOR_SIZE);
-		
-
 		
 		if(cur_part->block_bitmap.bits==NULL){
 			PANIC("alloc memory failed!");
@@ -198,14 +197,12 @@ void filesys_init(){
 
 	printk("searching filesystem......\n");
 	while(channel_no<channel_cnt){
+		dev_no = 0;
 		while (dev_no<2){
-			// skip system disk (hd60M.img)
-			if(dev_no==0){
-				dev_no++;
-				continue;
-			}
 			struct disk* hd = &channels[channel_no].devices[dev_no];
+			if (!hd->name[0]) { dev_no++; continue; } // 跳过不存在的磁盘
 			struct partition* part = hd->prim_parts;
+			uint8_t part_idx = 0;
 			while(part_idx<12){
 				if(part_idx==4){
 					part = hd->logic_parts;
@@ -307,6 +304,7 @@ static int search_file(const char* pathname, struct path_search_record* searched
     
     char* sub_path = (char*)pathname;
     struct dir* parent_dir = dir_open(cur_part, 0); 
+
     struct dir_entry dir_e;
     char name[MAX_FILE_NAME_LEN] = {0};
 
@@ -369,12 +367,34 @@ static int search_file(const char* pathname, struct path_search_record* searched
     return dir_e.i_no;
 }
 
-int32_t sys_open(const char* pathname,uint8_t flags){
+// 将路径转换为绝对路径
+static void make_abs_pathname(const char* pathname, char* abs_path) {
+    if (pathname[0] == '/') {
+        // 如果已经是绝对路径，直接拷贝
+        strcpy(abs_path, pathname);
+    } else {
+        // 如果是相对路径，先获取当前目录
+        sys_getcwd(abs_path, MAX_PATH_LEN);
+        
+        // 针对根目录 "/" 做特殊处理，避免拼成 "//name"
+        if (strcmp(abs_path, "/") != 0) {
+            strcat(abs_path, "/");
+        }
+        strcat(abs_path, pathname);
+    }
+}
+
+int32_t sys_open(const char* _pathname,uint8_t flags){
 	// printk("sys_open:::pathname: %s\n",pathname);
+
+	char pathname[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
+
 	if(pathname[strlen(pathname)-1]=='/'){
 		printk("can't open a directory %s\n",pathname);
 		return -1;
 	}
+
 	// ASSERT(flags<=7);
 	int32_t fd = -1;
 
@@ -646,6 +666,9 @@ int32_t sys_lseek(int32_t fd,int32_t offset,enum whence whence){
 
 	int32_t new_pos = 0;
 	int32_t file_size = (int32_t)pf->fd_inode->di.i_size;
+	enum file_types type = pf->fd_inode->di.i_type;
+
+	// 先计算指针位置
 	switch (whence){
 		case SEEK_SET:
 			new_pos = offset;
@@ -660,14 +683,34 @@ int32_t sys_lseek(int32_t fd,int32_t offset,enum whence whence){
 			printk("sys_lseek: error! unknown whence!\n");
 			return -1;
 	}
-	if(new_pos<0||new_pos>(file_size-1)){
+
+	// 根据计算出的结果进行边界检查
+	if (type == FT_REGULAR || type == FT_DIRECTORY) {
+		// 普通文件和目录：严格受 i_size 限制
+		if (new_pos < 0 || (uint32_t)new_pos > pf->fd_inode->di.i_size) {
+			return -1;
+		}
+	} else if (type == FT_BLOCK_SPECIAL) {
+		// 块设备, 检查是否超过分区物理边界
+		struct partition* part = get_part_by_rdev(pf->fd_inode->di.i_rdev);
+		uint32_t part_size = part->sec_cnt * SECTOR_SIZE;
+		if (new_pos < 0 || (uint32_t)new_pos >= part_size) {
+			return -1;
+		}
+	} else {
+		// 字符设备、管道等 通常不支持 lseek，或者逻辑不同
+		printk("sys_lseek: this type of file/device doesn't support lseek!\n");
 		return -1;
 	}
+	
 	pf->fd_pos = new_pos;
 	return pf->fd_pos;
 }
 
-int32_t sys_unlink(const char* pathname){
+int32_t sys_unlink(const char* _pathname){
+	char pathname[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
+
 	ASSERT(strlen(pathname)<MAX_PATH_LEN);
 
 	struct path_search_record searched_record;
@@ -716,13 +759,15 @@ int32_t sys_unlink(const char* pathname){
 	return 0;
 }
 
-int32_t sys_mkdir(const char* pathname){
+int32_t sys_mkdir(const char* _pathname){
 	uint8_t rollback_step = 0;
 	void* io_buf = kmalloc(SECTOR_SIZE*2);
 	if(io_buf==NULL){
 		printk("sys_mkdir: kmalloc for io_buf failed!\n");
 		return -1;
 	}
+	char pathname[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
 
 	struct path_search_record searched_record;
 	memset(&searched_record,0,sizeof(struct path_search_record));
@@ -830,7 +875,9 @@ rollback:
 	return -1;
 }
 
-int32_t sys_opendir(const char* name) {
+int32_t sys_opendir(const char* _pathname) {
+	char name[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, name); // 统一转成绝对路径
     ASSERT(strlen(name) < MAX_PATH_LEN);
     
     struct path_search_record searched_record;
@@ -839,6 +886,8 @@ int32_t sys_opendir(const char* name) {
     
     int inode_no = -1;
 	struct partition *part;
+
+	
 
     // 处理根目录
     if (strcmp(name, "/") == 0 || strcmp(name, "/.") == 0 || strcmp(name, "/..") == 0) {
@@ -978,8 +1027,11 @@ void sys_rewinddir(int32_t fd) {
     f->fd_pos = 0;
 }
 
-int32_t sys_rmdir(const char* pathname){
+int32_t sys_rmdir(const char* _pathname){
 	struct path_search_record searched_record;
+	char pathname[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
+	
 	memset(&searched_record,0,sizeof(struct path_search_record));
 	int inode_no = search_file(pathname,&searched_record);
 	ASSERT(inode_no!=0);
@@ -1110,10 +1162,14 @@ char* sys_getcwd(char* buf,uint32_t size){
 	return buf;
 }
 
-int32_t sys_chdir(const char* path){
+int32_t sys_chdir(const char* _pathname){
 	int32_t ret = -1;
 	struct path_search_record searched_record;
 	memset(&searched_record,0,sizeof(struct path_search_record));
+
+	char path[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, path); // 统一转成绝对路径
+	
 
 	int inode_no = search_file(path,&searched_record);
 	if(inode_no!=-1){
@@ -1130,7 +1186,11 @@ int32_t sys_chdir(const char* path){
 	return ret;
 }
 
-int32_t sys_stat(const char* path,struct stat* buf){
+int32_t sys_stat(const char* _pathname,struct stat* buf){
+
+	char path[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, path); // 统一转成绝对路径
+
 	if(!strcmp(path,"/")||!strcmp(path,"/.")||!strcmp(path,"/..")){
 		buf->st_filetype = FT_DIRECTORY;
 		buf->st_ino = 0;
@@ -1141,6 +1201,7 @@ int32_t sys_stat(const char* path,struct stat* buf){
 	int32_t ret = -1;
 	struct path_search_record searched_record;
 	memset(&searched_record,0,sizeof(struct path_search_record));
+	
 	int32_t inode_no = search_file(path,&searched_record);
 	struct partition* part = get_part_by_rdev(searched_record.i_dev);
 
@@ -1159,132 +1220,122 @@ int32_t sys_stat(const char* path,struct stat* buf){
 	dir_close(searched_record.parent_dir);
 	return ret;
 }
+
 // partition formatlize 512B-blocks used avaliable
-void sys_disk_info(){
-	uint8_t channel_idx;
-	printk("disk number: %d\n",disk_num);
-	char** granularits = kmalloc(sizeof(char*)*disk_num);
-	uint8_t* div_cnts = kmalloc(sizeof(uint8_t)*disk_num);
-	int i=0;
-	for(i=0;i<disk_num;i++){
-		while(disk_size[i]>1024){
-			disk_size[i]/=1024;
-			div_cnts[i]++;
-		}
-		switch (div_cnts[i]){
-			case 0:
-				granularits[i] = "B";
-				break;
-			case 1:
-				granularits[i] = "KB";
-				break;
-			case 2:
-				granularits[i] = "MB";
-				break;
-			case 3:
-				granularits[i] = "GB";
-				break;
-			case 4:
-				granularits[i] = "TB";
-				break;
-			default:
-				granularits[i] = "OVERFLOW!";
-				break;
-		}
-	}
+void sys_disk_info() {
+    uint8_t channel_idx;
+    printk("disk number: %d\n", disk_num);
 
-	for(channel_idx=0;channel_idx<CHANNEL_NUM;channel_idx++){
-		uint8_t ide_idx = 0;
-		for(ide_idx=0;ide_idx<DEVICE_NUM_PER_CHANNEL;ide_idx++){
-			if(!strcmp("",channels[channel_idx].devices[ide_idx].name)) continue;
-			printk("%s\t%d%s\n",channels[channel_idx].devices[ide_idx].name,disk_size[channel_idx*DISK_NUM_IN_CHANNEL+ide_idx],granularits[channel_idx*DISK_NUM_IN_CHANNEL+ide_idx]);
-		}
-	}
+    // 处理磁盘容量单位
+    char** granularits = kmalloc(sizeof(char*) * disk_num);
+    uint8_t* div_cnts = kmalloc(sizeof(uint8_t) * disk_num);
+    memset(div_cnts, 0, disk_num);
 
+    for (int i = 0; i < disk_num; i++) {
+        uint32_t temp_size = disk_size[i];
+        while (temp_size > 1024) {
+            temp_size /= 1024;
+            div_cnts[i]++;
+        }
+        switch (div_cnts[i]) {
+            case 0: granularits[i] = "B";  break;
+            case 1: granularits[i] = "KB"; break;
+            case 2: granularits[i] = "MB"; break;
+            case 3: granularits[i] = "GB"; break;
+            case 4: granularits[i] = "TB"; break;
+            default: granularits[i] = "OVERFLOW!"; break;
+        }
+    }
 
-	printk("partition\tformatlize\t512B-blocks\tused\tavaliable\n");
-	for(channel_idx=0;channel_idx<CHANNEL_NUM;channel_idx++){
-		uint8_t device_idx = 0;
-		bool has_partition = false;
-		for(device_idx=0;device_idx<DEVICE_NUM_PER_CHANNEL;device_idx++){
-			if(!strcmp("",channels[channel_idx].devices[device_idx].name)) continue;
-			uint8_t part_idx = 0;
-			for(part_idx=0;part_idx<PRIM_PARTS_NUM;part_idx++){
-				if(!strcmp("",channels[channel_idx].devices[device_idx].prim_parts[part_idx].name)) continue;
-				has_partition = true;
-			}
-			if(has_partition){
-				for(part_idx=0;part_idx<PRIM_PARTS_NUM;part_idx++){
-					if(!strcmp("",channels[channel_idx].devices[device_idx].prim_parts[part_idx].name)) continue;
-					uint32_t bitmap_sects = channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->block_bitmap_sects;
-					uint8_t* buf_bitmap_bits = kmalloc(bitmap_sects*SECTOR_SIZE);
-					memset(buf_bitmap_bits,0,bitmap_sects*SECTOR_SIZE);
+    // 打印磁盘基本容量 (sda, sdb...)
+    for (channel_idx = 0; channel_idx < CHANNEL_NUM; channel_idx++) {
+        for (uint8_t ide_idx = 0; ide_idx < DEVICE_NUM_PER_CHANNEL; ide_idx++) {
+            struct disk* hd = &channels[channel_idx].devices[ide_idx];
+            if (!hd->name[0]) continue;
+            uint8_t d_idx = channel_idx * DISK_NUM_IN_CHANNEL + ide_idx;
+            // 注意：这里用原始 disk_size 计算出的缩放值
+            uint32_t display_size = disk_size[d_idx];
+            for(int j=0; j<div_cnts[d_idx]; j++) display_size /= 1024;
+            printk("%s\t%d%s\n", hd->name, display_size, granularits[d_idx]);
+        }
+    }
 
-					bread_multi(&channels[channel_idx].devices[device_idx]
-						,channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->block_bitmap_lba
-						,buf_bitmap_bits
-						,bitmap_sects
-					);
-					
-					struct bitmap bitmap_buf;
-					bitmap_buf.bits = buf_bitmap_bits;
-					bitmap_buf.btmp_bytes_len = (channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->sec_cnt)/8;
-					uint32_t free_sects = bitmap_count(&bitmap_buf);
-					uint32_t used_sects = (bitmap_buf.btmp_bytes_len*8)-free_sects;
-					kfree(buf_bitmap_bits);
-					// P means primary part
-					char cur_flag_str[2] = {0};
-					if(!strcmp(cur_part->name,channels[channel_idx].devices[device_idx].prim_parts[part_idx].name)){
-						cur_flag_str[0] = '*';
-					}
-					printk("%s(P)%s\t%x\t%d\t%d\t%d\n"
-					,channels[channel_idx].devices[device_idx].prim_parts[part_idx].name
-					,cur_flag_str
-					,channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->magic
-					,channels[channel_idx].devices[device_idx].prim_parts[part_idx].sb->sec_cnt
-					,used_sects
-					,free_sects);
-				}
-				for(part_idx=0;part_idx<LOGIC_PARTS_NUM;part_idx++){
-					if(!strcmp("",channels[channel_idx].devices[device_idx].logic_parts[part_idx].name)) continue;
-					uint32_t bitmap_sects = channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->block_bitmap_sects;
-					uint8_t* buf_bitmap_bits = kmalloc(bitmap_sects*SECTOR_SIZE);
-					memset(buf_bitmap_bits,0,bitmap_sects*SECTOR_SIZE);
+    printk("partition\tformatlize\t512B-blocks\tused\tavaliable\n");
 
-					bread_multi(&channels[channel_idx].devices[device_idx]
-						,channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->block_bitmap_lba
-						,buf_bitmap_bits
-						,bitmap_sects
-					);
-					
-					struct bitmap bitmap_buf;
-					bitmap_buf.bits = buf_bitmap_bits;
-					bitmap_buf.btmp_bytes_len = (channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->sec_cnt)/8;
-					uint32_t free_sects = bitmap_count(&bitmap_buf);
-					uint32_t used_sects = (bitmap_buf.btmp_bytes_len*8)-free_sects;
-					kfree(buf_bitmap_bits);
-					char cur_flag_str[2] = {0};
-					if(!strcmp(cur_part->name,channels[channel_idx].devices[device_idx].logic_parts[part_idx].name)){
-						cur_flag_str[0] = '*';
-					}
+    for (channel_idx = 0; channel_idx < CHANNEL_NUM; channel_idx++) {
+        for (uint8_t device_idx = 0; device_idx < DEVICE_NUM_PER_CHANNEL; device_idx++) {
+            struct disk* hd = &channels[channel_idx].devices[device_idx];
+            if (!hd->name[0]) continue;
 
-					// uint32_t sum = 1+1+channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->inode_bitmap_sects+channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->block_bitmap_sects+channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->inode_table_sects;
-					// printk("used: %d\n",sum);
-					// L means logic part
-					printk("%s(L)%s\t%x\t%d\t%d\t%d\n"
-					,channels[channel_idx].devices[device_idx].logic_parts[part_idx].name
-					,cur_flag_str
-					,channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->magic
-					,channels[channel_idx].devices[device_idx].logic_parts[part_idx].sb->sec_cnt
-					,used_sects
-					,free_sects);
-				}
-			}else{
-				// R means raw disk
-				printk("%s(R)\t-\t-\t-\t%d%s\n",channels[channel_idx].devices[device_idx].name,disk_size[channel_idx*DISK_NUM_IN_CHANNEL+device_idx],granularits[channel_idx*DISK_NUM_IN_CHANNEL+device_idx]);
-			}
-		}
-	}
+            // 检查是否有分区
+            bool has_partition = false;
+            for (uint8_t i = 0; i < PRIM_PARTS_NUM; i++) {
+                if (hd->prim_parts[i].name[0]) { has_partition = true; break; }
+            }
+
+            if (has_partition) {
+                // 分两轮打印：第一轮主分区(P)，第二轮逻辑分区(L)
+                for (int type = 0; type < 2; type++) {
+                    int limit = (type == 0) ? PRIM_PARTS_NUM : LOGIC_PARTS_NUM;
+                    for (int p_idx = 0; p_idx < limit; p_idx++) {
+                        struct partition* part = (type == 0) ? &hd->prim_parts[p_idx] : &hd->logic_parts[p_idx];
+                        if (!part->name[0]) continue;
+
+                        struct super_block* sb = part->sb;
+                        bool is_temp_sb = false;
+
+                        // 即便没挂载，也现场读
+                        if (sb == NULL) {
+                            sb = kmalloc(SECTOR_SIZE);
+                            bread_multi(hd, part->start_lba + 1, sb, 1);
+                            is_temp_sb = true;
+                        }
+
+                        // 如果魔数对不上，说明没格式化，打印横杠
+                        if (sb->magic != FS_MAGIC_NUMBER) { 
+                            printk("%s(%c)\t-\t-\t-\t-\n", part->name, (type == 0 ? 'P' : 'L'));
+                        } else {
+                            // 计算位图
+                            uint32_t btmp_sects = sb->block_bitmap_sects;
+                            uint8_t* btmp_buf = kmalloc(btmp_sects * SECTOR_SIZE);
+                            bread_multi(hd, sb->block_bitmap_lba, btmp_buf, btmp_sects);
+
+                            struct bitmap btmp;
+                            btmp.bits = btmp_buf;
+                            btmp.btmp_bytes_len = sb->sec_cnt / 8;
+                            uint32_t free_sects = bitmap_count(&btmp);
+                            uint32_t used_sects = (btmp.btmp_bytes_len * 8) - free_sects;
+
+                            char cur_flag_str[2] = {0};
+                            if (cur_part != NULL && !strcmp(cur_part->name, part->name)) {
+                                cur_flag_str[0] = '*';
+                            }
+
+                            printk("%s(%c)%s\t%x\t%d\t%d\t%d\n", 
+                                   part->name, 
+                                   (type == 0 ? 'P' : 'L'), 
+                                   cur_flag_str, 
+                                   sb->magic, 
+                                   sb->sec_cnt, 
+                                   used_sects, 
+                                   free_sects);
+
+                            kfree(btmp_buf);
+                        }
+                        if (is_temp_sb) kfree(sb);
+                    }
+                }
+            } else {
+                // R means raw disk
+                uint8_t d_idx = channel_idx * DISK_NUM_IN_CHANNEL + device_idx;
+                uint32_t display_size = disk_size[d_idx];
+                for(int j=0; j<div_cnts[d_idx]; j++) display_size /= 1024;
+                printk("%s(R)\t-\t-\t-\t%d%s\n", hd->name, display_size, granularits[d_idx]);
+            }
+        }
+    }
+    kfree(granularits);
+    kfree(div_cnts);
 }
 
 static bool check_disk_name(struct dlist_elem* pelem,void* arg){
@@ -1302,6 +1353,23 @@ void sys_mount(const char* part_name){
 	if(res==NULL){
 		printk("sys_mount: partition %s not found!\n",part_name);
 		return;
+	}
+
+	struct partition* part = member_to_entry(struct partition, part_tag, res);
+
+	// 由于我们引入了全盘分区，因此需要区分现在挂载的到底是全盘分区还是正常的装有文件系统的分区
+	// 若是全盘分区则直接拒绝
+	// 临时申请一个缓冲区来读取潜在的超级块
+	struct super_block* sb_buf = (struct super_block*)kmalloc(SECTOR_SIZE);
+	
+	// 超级块在第一个扇区，因此使用 part->start_lba + 1
+	bread_multi(part->my_disk, part->start_lba + 1, sb_buf, 1);
+
+	// 检查魔数是否匹配,即是否有文件系统
+	if (sb_buf->magic != FS_MAGIC_NUMBER) {
+		printk("sys_mount: Error! Partition %s is not a valid filesystem (Magic Mismatch).\n", part_name);
+		kfree(sb_buf);
+		return ; // 找到了这个盘，但它不合法，直接返回 true 停止遍历
 	}
 
 	if(cur_part!=NULL&&cur_part->block_bitmap.bits!=NULL){
@@ -1337,14 +1405,18 @@ void sys_mount(const char* part_name){
 }
 
 // 创建特殊文件（字符/块设备/FIFO）
-int32_t sys_mknod(const char* pathname, enum file_types type, uint32_t dev) {
+int32_t sys_mknod(const char* _pathname, enum file_types type, uint32_t dev) {
     if (type != FT_CHAR_SPECIAL && type != FT_BLOCK_SPECIAL && type != FT_FIFO) {
         printk("sys_mknod: only support special files\n");
         return -1;
     }
+	
 
     void* io_buf = kmalloc(SECTOR_SIZE * 2);
     if (io_buf == NULL) return -1;
+
+	char pathname[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
 
     struct path_search_record searched_record;
     memset(&searched_record, 0, sizeof(struct path_search_record));

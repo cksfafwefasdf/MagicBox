@@ -48,7 +48,11 @@ struct disk{
 	uint8_t dev_no; // master ide is 0, slave is 1
 	struct partition prim_parts[4]; // the max number of primary partition is 4
 	struct partition logic_parts[8]; // we only support 8 logic partition
+	// 全盘分区，用于管理没有逻辑分区的裸盘，或者直接绕过分区来对磁盘进行操作
+	// 这个分区跨越整个磁盘（从 LBA 0 到最大 LBA）。
+	struct partition all_disk_part; 
 	uint32_t i_rdev; // 逻辑设备号，用于在vfs中注册时使用
+	uint32_t total_sectors;
 };
 
 struct ide_channel{

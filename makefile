@@ -9,7 +9,7 @@ LD = ld
 LIB = -I lib/ -I lib/kernel/ -I lib/user/ -I lib/common/ -I kernel/ -I device/ -I thread/ -I userprog/	-I fs/ -I shell/
 ASFLAGS = -f elf
 CFLAGS = -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes -D DEBUG \
-     -Wmissing-prototypes -m32 -fno-stack-protector -std=gnu89 -fgnu89-inline -fcommon -Wno-error=implicit-function-declaration
+     -Wmissing-prototypes -m32 -fno-stack-protector -fcommon -Wno-error=implicit-function-declaration
 LDFLAGS = -Ttext $(ENTRY_POINT) -e main -Map $(BUILD_DIR)/kernel.map -m elf_i386
 # LDFLAGS = -Ttext $(ENTRY_POINT) -e main -Map $(BUILD_DIR)/kernel.map -m elf_i386 -s
 
@@ -175,7 +175,10 @@ mk_dir:
 	if [ ! -d $(BUILD_DIR_PROG) ]; then mkdir $(BUILD_DIR_PROG); fi
 
 hd:
-	dd if=$(BUILD_DIR)/mbr.bin of=$(DISK_DIR)/hd60M.img count=1 bs=512 conv=notrunc
+# 我们只加载MBR的代码区域，不加载分区表区域，防止破坏fdisk创建的分区表
+	dd if=$(BUILD_DIR)/mbr.bin of=$(DISK_DIR)/hd60M.img count=1 bs=446 conv=notrunc
+# 强制将 55AA 写入扇区末尾（偏移 510 字节处）
+	printf '\125\252' | dd of=$(DISK_DIR)/hd60M.img bs=1 count=2 seek=510 conv=notrunc
 	dd if=$(BUILD_DIR)/loader.bin of=$(DISK_DIR)/hd60M.img count=4 bs=512 conv=notrunc seek=2
 	dd if=$(BUILD_DIR)/kernel.bin of=$(DISK_DIR)/hd60M.img bs=512 count=600 seek=9 conv=notrunc 
 

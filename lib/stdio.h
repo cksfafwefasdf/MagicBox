@@ -17,5 +17,6 @@ extern uint32_t vsprintf(char* str,const char* format,va_list ap);
 extern uint32_t printf(const char* format,...);
 extern uint32_t sprintf(char* buf,const char* format,...);
 extern int itoa(uint32_t value,char* buf_ptr,uint8_t base);
-extern bool atoi(char* str,int32_t* buf);
+extern int32_t atoi(const char* str);
+extern bool atoi_dep(char* str,int32_t* buf);
 #endif

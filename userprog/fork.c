@@ -20,11 +20,14 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 	child_thread->pid = fork_pid();
 	child_thread->elapsed_ticks = 0;
 	child_thread->status = TASK_READY;
+	child_thread->priority = parent_thread->priority;
 	child_thread->ticks = child_thread->priority;
 	child_thread->parent_pid = parent_thread->pid;
 	child_thread->pgrp = parent_thread->pgrp; // 子进程继承父进程的组id
 	child_thread->general_tag.prev = child_thread->general_tag.next = NULL;
 	child_thread->all_list_tag.prev = child_thread->all_list_tag.next = NULL;
+	// 子进程继承父进程的工作目录
+	child_thread->cwd_inode_nr = parent_thread->cwd_inode_nr;
 
 	dlist_init(&child_thread->vma_list);
 

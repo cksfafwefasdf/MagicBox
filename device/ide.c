@@ -94,7 +94,7 @@ static void read_from_sector(struct disk* hd,void* buf,uint8_t sec_cnt);
 static void write2sector(struct disk* hd,void* buf,uint8_t sec_cnt);
 static bool busy_wait(struct disk* hd);
 static void swap_pairs_bytes(const char* dst,char* buf,uint32_t len);
-static void identify_disk(struct disk* hd);
+static uint32_t identify_disk(struct disk* hd);
 static void partition_scan(struct disk* hd,uint32_t ext_lba);
 static bool partition_info(struct dlist_elem* pelem,void* arg UNUSED);
 
@@ -204,12 +204,30 @@ void ide_init(){
 
 			memset(hd->name,0,sizeof(hd->name));
 			sprintf(hd->name,"sd%c",'a'+channel_no*2+dev_no);
-			identify_disk(hd);
+			
+			uint32_t sectors = identify_disk(hd);
+			hd->total_sectors = sectors;
+
+			
+
+			// 初始化全盘分区的基本信息
+			memset(&hd->all_disk_part, 0, sizeof(struct partition));
+			sprintf(hd->all_disk_part.name, "%s", hd->name); // 例如名字就是 "sda"
+			hd->all_disk_part.my_disk = hd;
+			hd->all_disk_part.start_lba = 0;
+			// identify_disk 时拿到的总扇区数 
+			hd->all_disk_part.sec_cnt = sectors; 
+			hd->all_disk_part.i_rdev = hd->i_rdev; // 比如 0x30000
+
+			// 将全盘分区也挂载到全局分区链表中
+			// 这样 get_part_by_rdev 就能通过链表自动找到它
+			dlist_push_back(&partition_list, &hd->all_disk_part.part_tag);
+
 			ide_set_multiple_mode(hd, SECTORS_PER_OP_BLOCK); // 注入设置
-			if(dev_no!=0){
-				partition_scan(hd,0);
-			}
-			p_no=0,l_no=0;
+			partition_scan(hd,0);
+			ext_lba_base = 0;
+			p_no=0;
+			l_no=0;
 			dev_no++;
 		}
 		dev_no=0;
@@ -245,7 +263,6 @@ void ide_init(){
 	// 	printk("%x ",bf[i]);
 	// }
 
-	// while(1);
 }
 
 static void select_disk(struct disk* hd){
@@ -416,7 +433,7 @@ static void swap_pairs_bytes(const char* dst,char* buf,uint32_t len){
 	buf[idx] = '\0';
 }
 
-static void identify_disk(struct disk* hd){
+static uint32_t identify_disk(struct disk* hd){
 	char id_info[512];
 	select_disk(hd);
 	cmd_out(hd->my_channel,CMD_IDENTIFY);
@@ -441,6 +458,7 @@ static void identify_disk(struct disk* hd){
 	uint32_t sectors = *(uint32_t*)&id_info[60*2];
 	printk("\t\tSECTORS: %d\n",sectors);
 	printk("\t\tCAPACITY: %dMB\n",sectors*512/1024/1024);
+	return sectors;
 }
 
 static void partition_scan(struct disk* hd,uint32_t ext_lba){
@@ -579,16 +597,9 @@ void sys_read_sectors(const char* hd_name, uint32_t lba, uint8_t* buf, uint32_t 
 // count 读取字节数
 int32_t ide_dev_read(struct file* file, void* buf, uint32_t count) {
     struct m_inode* inode = file->fd_inode;
-    struct partition* part = get_part_by_rdev(inode->i_dev);
+	printk("inode->di.i_rdev:%x\n",inode->di.i_rdev);
+    struct partition* part = get_part_by_rdev(inode->di.i_rdev);
     uint32_t part_size_bytes = part->sec_cnt * SECTOR_SIZE;
-	// 如果当前操作的是sda这个裸盘，那么直接就读一个扇区然后返回
-	// 这么做主要是用来测试，测试 cat dev/sda 好不好使
-	if(file->fd_inode->di.i_rdev==0x30000){
-		// 
-		struct disk *disk = &channels[0].devices[0];
-		bread_multi(disk, 0, buf, 1);
-		return 512;
-	}
 
 	// 边界检查
 	// 在磁盘中，fd_pos就表示现在要操作磁盘的第几个字节
@@ -654,7 +665,7 @@ int32_t ide_dev_read(struct file* file, void* buf, uint32_t count) {
 // 参数含义同 ide_dev_read
 int32_t ide_dev_write(struct file* file, const void* buf, uint32_t count) {
     struct m_inode* inode = file->fd_inode;
-    struct partition* part = get_part_by_rdev(inode->i_dev);
+    struct partition* part = get_part_by_rdev(inode->di.i_rdev);
     uint32_t part_size_bytes = part->sec_cnt * SECTOR_SIZE;
 
     // 边界检查

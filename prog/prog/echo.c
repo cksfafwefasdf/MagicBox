@@ -12,36 +12,20 @@ int main(int argc, char** argv) {
 
     int fd = 1;
     int final_argc = argc;
-    char abs_path[512] = {0}; // 用于存储合成后的绝对路径
 
     if (argc >= 4 && strcmp(argv[argc - 2], "-f") == 0) {
-        char* filename = argv[argc - 1];
-
-        // --- 核心：相对路径转绝对路径逻辑 ---
-        if (filename[0] != '/') {
-            if (getcwd(abs_path, 512) == NULL) {
-                printf("echo: getcwd failed\n");
-                return -1;
-            }
-            // 确保不是在根目录下重复加斜杠
-            if (strcmp(abs_path, "/") != 0) {
-                strcat(abs_path, "/");
-            }
-            strcat(abs_path, filename);
-        } else {
-            strcpy(abs_path, filename);
-        }
+        char* path = argv[argc - 1];
 
         // 第一次尝试：直接打开 (O_WRONLY)
-        fd = open(abs_path, O_WRONLY); 
+        fd = open(path, O_WRONLY); 
 
         if (fd == -1) {
             // 第二次尝试：创建 (O_WRONLY | O_CREATE)
-            fd = open(abs_path, O_WRONLY | O_CREATE);
+            fd = open(path, O_WRONLY | O_CREATE);
         }
 
         if (fd == -1) {
-            printf("echo: open/create %s failed\n", abs_path);
+            printf("echo: open/create %s failed\n", path);
             return -1;
         }
         final_argc = argc - 2;

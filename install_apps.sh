@@ -23,7 +23,7 @@ nasm ./prog/start.s -f elf -o "$BUILD_DIR/start.o"
 
 # 定义目标程序
 # 格式: "程序名,源文件"
-TARGETS="cat,prog/prog/cat.c echo,prog/prog/echo.c prog_pipe,prog/prog/prog_pipe.c shell,prog/shell/shell.c"
+TARGETS="cat,prog/prog/cat.c echo,prog/prog/echo.c prog_pipe,prog/prog/prog_pipe.c shell,prog/shell/shell.c hd,prog/prog/hexdump.c"
 
 # 循环编译
 BIN_LIST="" # 用于记录编译成功的二进制文件名
@@ -51,6 +51,9 @@ for item in $TARGETS; do
         exit 1
     fi
 done
+
+# 清理中间生成的 .o 文件
+rm -f "$BUILD_DIR"/*.o
 
 # 打包为 Tar
 echo "---------------------------------------"

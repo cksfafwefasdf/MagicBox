@@ -41,7 +41,8 @@ int itoa(uint32_t value,char* buf_ptr,uint8_t base){
 	return len;
 }
 
-bool atoi(char* str,int32_t* buf){
+// 废弃的atoi
+bool atoi_dep(char* str,int32_t* buf){
 	*buf = 0;
 	int32_t idx=0;
 	bool is_negative = false;
@@ -69,6 +70,33 @@ bool atoi(char* str,int32_t* buf){
 		return false;
 	}
 	return true;
+}
+
+int32_t atoi(const char* str) {
+    int32_t res = 0;
+    int32_t sign = 1;
+
+    // 跳过空白字符 (空格、制表符等)
+    while (*str == ' ' || *str == '\t' || *str == '\n' || 
+           *str == '\r' || *str == '\f' || *str == '\v') {
+        str++;
+    }
+
+    // 处理正负号
+    if (*str == '-') {
+        sign = -1;
+        str++;
+    } else if (*str == '+') {
+        str++;
+    }
+
+    // 转换数字，直到遇到非数字字符
+    while (*str >= '0' && *str <= '9') {
+        res = res * 10 + (*str - '0');
+        str++;
+    }
+
+    return res * sign;
 }
 
 // format the parameter [ap] according to [format], and output it to [str]

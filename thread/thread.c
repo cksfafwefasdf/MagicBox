@@ -89,6 +89,8 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 	pthread->pgdir = NULL;
 	pthread->signal = 0;
 	pthread->blocked = 0;
+	pthread->cwd_inode_nr = 0; // 默认在根目录
+
 	memset(pthread->sigactions, 0, sizeof(pthread->sigactions));
 
 	dlist_init(&pthread->vma_list);

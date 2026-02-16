@@ -349,12 +349,12 @@ void buildin_readraw(uint32_t argc,char** argv){
 				make_clear_abs_path(argv[arg_idx+1],final_path);
 				filename = final_path;
 			}else if(!strcmp("-l",argv[arg_idx])){
-				if(arg_idx+1>=argc||(!atoi(argv[arg_idx+1],&lba))){
+				if(arg_idx+1>=argc||(!atoi_dep(argv[arg_idx+1],&lba))){
 					printf("readraw: argument -l error! use 'readraw -h' for help!\n");
 					return;
 				}
 			}else if(!strcmp("-s",argv[arg_idx])){
-				if(arg_idx+1>=argc||(!atoi(argv[arg_idx+1],&file_size))){
+				if(arg_idx+1>=argc||(!atoi_dep(argv[arg_idx+1],&file_size))){
 					printf("readraw: argument -s error! use 'readraw -h' for help!\n");
 					return;
 				}
