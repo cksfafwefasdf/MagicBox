@@ -18,7 +18,7 @@
 ## 🛠 Technical Overview
 
 - **Interrupts & Synchronization**: Utilizes the **8259A PIC** to handle hardware interrupts. Kernel-level thread synchronization is managed through **mutexes and semaphores**, ensuring safe access to critical sections such as disk I/O operations and process lists.
-- **Memory Management (VMA & COW)**: Employs a **dual-pool (Kernel/User)** design using bitmaps for physical page allocation. Building upon an **Arena allocator** and **recursive page table mapping**, a preliminary **VMA (Virtual Memory Area)** framework has been introduced. This primarily supports **demand paging (lazy loading)** for ELF segments and **Copy-On-Write (COW)**, reducing physical memory overhead during `fork` and `execv` operations.
+- **Memory Management (Buddy System & VMA):** The system features a hybrid memory management architecture. Page-level physical memory is managed by a **Buddy System allocator** (`buddy.c`), supporting efficient allocation and merging of power-of-two blocks. This overhaul enables the system to manage up to **3GB of physical RAM**, far exceeding the previous 128MB limit imposed by static bitmaps. Small memory objects (2B–1024B) are still handled by a Slab/Arena allocator. On top of this, a **VMA (Virtual Memory Area)** framework is preliminarily introduced to provide demand paging (lazy loading) for ELF segments and **Copy-On-Write (COW)**, significantly reducing physical memory footprints during `fork()` and `execv()` operations.
 - **Unified FS & "Everything is a File"**: Features an **Inode-based** hierarchical file system. Following the "Everything is a File" philosophy, `sys_read` and `sys_write` perform logical dispatching by identifying file types—including regular files, **Linux-style anonymous pipes**, **persistent FIFOs**, and **TTY devices**. This allows IPC and hardware access to be managed through a unified file descriptor (FD) interface.
 - **Task Scheduling**: Implements a **priority-based Round-Robin** scheduling algorithm. In a design reminiscent of Linux 0.12, a task's `priority` directly determines its allocated clock **ticks**. The system decrements the current task's remaining time slice during timer interrupts, triggering a reschedule only when ticks are exhausted. This non-preemptive approach maintains simplicity while distributing CPU time based on task priority.
 - **Signal System**: Provides a basic signal subsystem (supporting `SIGINT`, `SIGKILL`, `SIGCHLD`, `SIGSEGV`, etc.). By manually constructing **user-mode stack frames** within the kernel, the system enables "upcalls" to user-defined handlers. Execution context is restored via `sys_sigreturn`, allowing for custom signal handling logic.
@@ -121,7 +121,7 @@ sh install_apps.sh
 
 Navigate to the `disk_env/` directory. You can choose between a standard run or a high-fidelity hardware simulation.
 
-#### **Standard Run:**
+#### **Standard Run**
 
 ```bash
 qemu-system-i386 \
@@ -130,7 +130,7 @@ qemu-system-i386 \
   -drive file=hd80M.img,format=raw,index=1,media=disk
 ```
 
-#### **Hardware Simulation Mode:** 
+#### **Hardware Simulation Mode**
 
 To better simulate real hardware behavior (including sync disk I/O and precise clocking), use the following:
 
@@ -151,7 +151,7 @@ qemu-system-i386 \
 
 
 
-[^TIP]: **Memory Support:** Thanks to the newly implemented **Buddy System**, the `-m` parameter now supports up to **3072** (3GB), which is the theoretical limit for physical RAM in 32-bit x86 systems (approaching the PCI/MMIO hole).
+**Memory Support:** Thanks to the newly implemented **Buddy System**, the `-m` parameter now supports up to **3072** (3GB), which is the theoretical limit for physical RAM in 32-bit x86 systems (approaching the PCI/MMIO hole).
 
 
 
