@@ -3,7 +3,7 @@
 
 int main(void) {
    put_str("enter kernel\n");
-   init_all();
+   early_init();
 
    while(1);
    return 0;

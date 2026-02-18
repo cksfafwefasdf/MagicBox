@@ -104,7 +104,7 @@ struct m_inode* inode_open(struct partition* part,uint32_t inode_no){
 	
 	dlist_push_front(&part->open_inodes,&inode_found->inode_tag);
 	
-	ASSERT((uint32_t)inode_found>=K_HEAP_START);
+	ASSERT((uint32_t)inode_found>=kernel_heap_start);
 	
 	kfree(inode_buf);
 	// printk("inode flag::: %x\n",inode_found->write_deny);

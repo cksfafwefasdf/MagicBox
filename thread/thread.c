@@ -38,13 +38,12 @@ static void pid_pool_init(void);
 
 // struct lock pid_allocate_lock;
 
-struct task_struct* idle_thread;
+extern struct task_struct* main_thread;
+extern struct task_struct* idle_thread;
 
 static pid_t allocate_pid(void);
 
 extern void switch_to(struct task_struct* cur,struct task_struct* next);
-
-static void idle(void *arg);
 
 // get the PCB pointer of the currently running thread
 struct task_struct* get_running_task_struct(){
@@ -149,18 +148,6 @@ struct task_struct* thread_start(char* name,int prio,thread_func function,void* 
 	return thread;
 }
 
-// make kernel main thread
-// the space for the kernel main thread is reserved in loader.s
-static void make_main_thread(void){
-	// loader.s: mov esp,0xc009f000 
-	// 0xc009e000 ~ 0xc009efff is reserved for the kernel main thread
-	// therefore, we don't need to allocate an additional page for the kernel main thread
-	main_thread = get_running_task_struct();
-	init_thread(main_thread,"main",5);
-
-	ASSERT(!dlist_find(&thread_all_list,&main_thread->all_list_tag));
-	dlist_push_back(&thread_all_list,&main_thread->all_list_tag);
-}
 
 void schedule(){
     // scheduling process must be conducted in INTR_OFF 
@@ -202,10 +189,12 @@ void thread_environment_init(void){
 	dlist_init(&thread_all_list);
 	// lock_init(&pid_allocate_lock);
 	pid_pool_init();
-	
-	make_main_thread();
 
-	idle_thread = thread_start("idle",3,idle,NULL);
+
+	// 这两个操作放到 init_all 里面做
+	// make_main_thread();
+
+	// idle_thread = thread_start("idle",3,idle,NULL);
 
 	put_str("thread_environment_init done\n");
 }
@@ -240,7 +229,9 @@ static pid_t allocate_pid(void){
 	int32_t bit_idx = bitmap_scan(&pid_pool.pid_bitmap,1);
 	bitmap_set(&pid_pool.pid_bitmap,bit_idx,1);
 	lock_release(&pid_pool.pid_lock);
-	return bit_idx+pid_pool.pid_start;
+	// 减一是为了让pid从0开始，使得main为0，idle变成1，当一切初始化完毕后，main回收idle，
+	// 然后自己变成idle，之后启动init，让init的pid变成1
+	return bit_idx+pid_pool.pid_start-1;
 }
 
 // when thread_yield is called, the status of the running thread becomes TASK_READY 
@@ -254,13 +245,7 @@ void thread_yield(void){
 	intr_set_status(old_status);
 }
 
-// run the idle thread when system is not busy 
-static void idle(void *arg UNUSED){
-	while (1){
-		thread_block(TASK_BLOCKED);
-		asm volatile("sti;hlt":::"memory");
-	}
-}
+
 
 pid_t fork_pid(){
 	return allocate_pid();
@@ -363,7 +348,8 @@ static void pid_pool_init(void){
 
 void release_pid(pid_t pid){
 	lock_acquire(&pid_pool.pid_lock);
-	int32_t bit_idx = pid-pid_pool.pid_start;
+	// 由于我们在 allocate_pid 中最后减了一个1，因此此处要加回来
+	int32_t bit_idx = pid-pid_pool.pid_start+1;
 	bitmap_set(&pid_pool.pid_bitmap,bit_idx,0);
 	lock_release(&pid_pool.pid_lock);
 }

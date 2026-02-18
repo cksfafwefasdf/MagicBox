@@ -12,6 +12,7 @@
 #include "process.h"
 #include "stdint.h"
 #include "vma.h"
+#include "buddy.h"
 
 
 #define PDE_IDX(addr) ((addr&0xffc00000)>>22)
@@ -23,13 +24,13 @@
 #define K_TEMP_PAGE_VADDR 0xff3ff000  
 
 // phy-mem pool
-struct pool{
-	struct bitmap pool_bitmap; // use to organize the physical_addr of the pool
-	struct lock lock; // phy mem pool is a public res
-	uint32_t phy_addr_start;
-	uint32_t pool_size;
-	uint32_t pool_pages; // how many pages the pool has, to cooperate with pool_bitmap
-};
+// struct pool{
+// 	struct bitmap pool_bitmap; // use to organize the physical_addr of the pool
+// 	struct lock lock; // phy mem pool is a public res
+// 	uint32_t phy_addr_start;
+// 	uint32_t pool_size;
+// 	uint32_t pool_pages; // how many pages the pool has, to cooperate with pool_bitmap
+// };
 
 struct arena{
 	// point to the mem_block which is related to this arena
@@ -41,91 +42,130 @@ struct arena{
 	bool large; // when malloc above 1024Bytes, large is true
 };
 
+// uint8_t* mem_map = NULL;
+
+// 替换原本实现中的 uint8_t* mem_map
+// 由于每一个物理页会对应一个 page 结构体，因此global_pages的大小和物理页有关
+struct page* global_pages; 
+
+struct buddy_pool kernel_pool,user_pool;
 
 struct mem_block_desc k_block_descs[DESC_TYPE_CNT];
 
-struct pool kernel_pool,user_pool;
 struct virtual_addr kernel_vaddr;
-
-uint8_t* mem_map = NULL;
 
 uint32_t mem_bytes_total = 0;
 uint32_t total_pages = 0;
 
-static void* palloc(struct pool* m_pool);
+uint32_t kernel_heap_start = 0; // 在 mem_pool_init 中动态赋值
+
+static void* palloc(struct buddy_pool* m_pool);
 
 int32_t inode_read_data(struct m_inode* inode, uint32_t offset, void* buf, uint32_t count);
 
 
-static void mem_pool_init(uint32_t all_mem){
-	put_str("mem_pool init start\n");
-	
-	lock_init(&kernel_pool.lock);
-	lock_init(&user_pool.lock);
+// 这是一个内部辅助函数，用于在 mem_pool_init 这种极早期阶段手动绑定物理地址和虚拟地址的映射
+static void early_map(uint32_t vaddr, uint32_t paddr) {
+    uint32_t* pde = pde_ptr(vaddr);
+    uint32_t* pte = pte_ptr(vaddr);
 
+    // 如果 PDE 不存在，说明这 4MB 范围的页表还没分配
+    if (!(*pde & 0x1)) {
+        // 在这种极早期，我们还没法用 palloc，直接硬点一块物理内存给页表使用
+        PANIC("Early PDE not exist! Please check your Loader setup_page.");
+    }
+
+    // 填写 PTE
+    *pte = paddr | PG_P_1 | PG_RW_W | PG_US_U;
+
+    // 刷新 TLB
+    asm volatile ("invlpg %0" : : "m" (*(char*)vaddr) : "memory");
+}	
+
+static void mem_pool_init(uint32_t all_mem) {
+    put_str("mem_pool init start\n");
+
+    // 计算物理内存布局 (避开 1MB, 页表, global_pages)
 	// [total page table size] = [PDT itself](1pg) + [item-0 and item-768 point same place,low 4MB](1pg)+[item-769](1pg)+...+[item-1022](1pg)
 	// = 256 pg
 	// page-table use 256 pages by itself
-	uint32_t page_table_size = PG_SIZE*256;
-	uint32_t used_mem = page_table_size + 0x100000; // low 1MB is kernel
-	uint32_t free_mem = all_mem-used_mem;
-	uint16_t all_free_pages = free_mem/PG_SIZE;
-	uint16_t kernel_free_pages = all_free_pages/2; 
-	uint16_t user_free_pages = all_free_pages-kernel_free_pages;
+    uint32_t page_table_size = PG_SIZE * 256;
+	// 0x100000 是内核的数据大小
+	// page_table_size 是 1MB
+	// base_used_mem 是 2MB
+    uint32_t base_used_mem = 0x100000 + page_table_size;
+    
+    total_pages = all_mem / PG_SIZE;
+    uint32_t global_pages_size = total_pages * sizeof(struct page);
+    
+	// 按理来说，global_pages 会被放到物理地址的低 2MB 之后
+    global_pages = (struct page*)(0xc0000000 + base_used_mem);
 
+	// 在 memset 之前手动建立映射
+    uint32_t cur_vaddr = (uint32_t)global_pages;
+    uint32_t cur_paddr = base_used_mem; // 物理地址也从 2MB 开始
+    uint32_t mapped_size = 0;
 
-	// length of kernel Bitmap
-	uint32_t kbm_length = kernel_free_pages/8;
-	// use extra 1 byte to store the remainder
-	//if(kernel_free_pages%8!=0) kbm_length++;
-	// length of user Bitmap
-	uint32_t ubm_length = user_free_pages/8;
-	//if(user_free_pages%8!=0) ubm_length++;
+    while (mapped_size < global_pages_size) {
+        early_map(cur_vaddr, cur_paddr);
+        cur_vaddr += PG_SIZE;
+        cur_paddr += PG_SIZE;
+        mapped_size += PG_SIZE;
+    }
 
-	kernel_pool.pool_pages = kernel_free_pages;
-	user_pool.pool_pages = user_free_pages;
+    memset(global_pages, 0, global_pages_size);
 
-	// Kernel Pool Start
-	uint32_t kp_start = used_mem;
-	// User pool start
-	uint32_t up_start = kp_start+kernel_free_pages*PG_SIZE;
+    // 计算真正可供伙伴系统使用的物理内存起始点
+    uint32_t real_phy_start = base_used_mem + global_pages_size;
+    real_phy_start = (real_phy_start + PG_SIZE - 1) & 0xfffff000; // 对齐
 
-	kernel_pool.phy_addr_start = kp_start;
-	user_pool.phy_addr_start = up_start;
+    uint32_t total_free_byte = all_mem - real_phy_start;
+    uint32_t kernel_pool_size = total_free_byte / 2;
+    uint32_t user_pool_size = total_free_byte - kernel_pool_size;
 
-	kernel_pool.pool_size = kernel_free_pages*PG_SIZE;
-	user_pool.pool_size = user_free_pages*PG_SIZE;
+    // 初始化物理伙伴池
+    buddy_init(&kernel_pool, real_phy_start, kernel_pool_size, global_pages);
+    buddy_init(&user_pool, real_phy_start + kernel_pool_size, user_pool_size, global_pages);
 
-	kernel_pool.pool_bitmap.btmp_bytes_len = kbm_length;
-	user_pool.pool_bitmap.btmp_bytes_len = ubm_length;
+    // 初始化内核虚拟地址池 (必须保留)，因为我们的虚拟地址目前还是基于位图产生的
+	// 后期要改进成基于brk
+    // 此时 MEM_BITMAP_BASE 只需要存放一个位图了（内核虚拟地址位图，这样的话我们支持的内存空间也就能大很多了）
+    kernel_vaddr.vaddr_bitmap.bits = (void*)MEM_BITMAP_BASE;
+    // 这里的长度代表内核虚拟地址空间的覆盖范围，给个 32MB 的范围对应的位图也就 1KB
+	// 即使我们的物理内存有 4GB，那么它所占用的位图大小为 4GB / (4096 B/page) / (8 page/byte) = 32 页
+	// 我们在 make_main_thread 中改进了内核PCB的位置，我们先前的实现中将内核PCB放到了内存低端的1MB中
+	// 并在loader中将内核栈硬编码成了 0xc009f000，且在之后的操作中一直继承了这个栈
+	// 现在我们改进了这个分配方法，将内核的PCB动态分配到了内核堆空间中，使它和其他的内核线程对等
+	// 这样就更灵活了，这样一来0xc009a000 ~ 0xc0100000 的这部分空间就完全空闲下来了
 
-	// bitmap.bits is the start-addr of the bitmap
-	kernel_pool.pool_bitmap.bits = (void*) MEM_BITMAP_BASE;
-	user_pool.pool_bitmap.bits = (void*) (MEM_BITMAP_BASE+kbm_length);
+    kernel_vaddr.vaddr_bitmap.btmp_bytes_len = (kernel_pool_size / PG_SIZE) / 8; 
+    bitmap_init(&kernel_vaddr.vaddr_bitmap);
 
+    // 内核堆起始位置，紧跟在 global_pages 之后
+	// 动态计算堆起始地址
+    // 堆必须在 global_pages 数组结束之后开始，以防虚拟地址冲突
+    kernel_heap_start = (uint32_t)global_pages + global_pages_size;
+    kernel_heap_start = (kernel_heap_start + PG_SIZE - 1) & 0xfffff000; // 对齐到页
 
-	put_str("kernel_pool_bitmap addr start with: \n");
-	put_str("\t"); put_int((int)kernel_pool.pool_bitmap.bits);put_str("\n");
-	put_str("kernel_pool_phy_addr start with: \n");
-	put_str("\t"); put_int(kernel_pool.phy_addr_start);put_str("\n");
-	put_str("user_pool_bitmap addr start with: \n");
-	put_str("\t"); put_int((int)user_pool.pool_bitmap.bits);put_str("\n");
-	put_str("user_pool_phy_addr start with: \n");
-	put_str("\t"); put_int(user_pool.phy_addr_start);put_str("\n");
+    kernel_vaddr.vaddr_start = kernel_heap_start;
 
-	//clear bitmap
-	bitmap_init(&kernel_pool.pool_bitmap);
-	bitmap_init(&user_pool.pool_bitmap);
+	put_str("Kernel pool range: "); put_int(kernel_pool.phy_addr_start);
+	put_str(" - "); put_int(kernel_pool.phy_addr_start + kernel_pool_size);
+	put_str("\n");
 
-	kernel_vaddr.vaddr_bitmap.btmp_bytes_len = kbm_length;
+    put_str("mem_pool_init done\n");
+}
 
-	// virtual mem pool for kernel
-	kernel_vaddr.vaddr_bitmap.bits = (void *)(MEM_BITMAP_BASE + kbm_length + ubm_length);
-	
-	kernel_vaddr.vaddr_start = K_HEAP_START;
-	bitmap_init(&kernel_vaddr.vaddr_bitmap);
+void mem_init(void){
+	put_str("mem_init start\n");
+	// 在内核页表中，0xc0000000 开始的 1MB 和 0x0 开始的 1MB 映射的是同一个区域
+	// 所以可以直接用 SYS_MEM_SIZE_PTR
+	mem_bytes_total = *((uint32_t*)(SYS_MEM_SIZE_PTR));
 
-	put_str("mem_pool_init done\n");
+	mem_pool_init(mem_bytes_total);
+	block_desc_init(k_block_descs);
+
+	put_str("mem_init done\n");
 }
 
 
@@ -178,18 +218,31 @@ uint32_t* pde_ptr(uint32_t vaddr){
 
 // allocate one phy-page from the phy_pool that m_pool points to
 // return the phy_addr
-static void* palloc(struct pool* m_pool){
-	enum intr_status old = intr_disable();
-	int bit_idx = bitmap_scan(&m_pool->pool_bitmap,1);
-	if(bit_idx==-1){
-		intr_set_status(old);
-		return NULL;
-	} 
-	bitmap_set(&m_pool->pool_bitmap,bit_idx,1);
-	uint32_t page_phyaddr = ((bit_idx*PG_SIZE)+m_pool->phy_addr_start);
-	mem_map[page_phyaddr >> 12]=1;
-	intr_set_status(old);
-	return (void *)page_phyaddr;
+static void* palloc(struct buddy_pool* m_pool) {
+    // 关中断保证原子性（因为涉及 pool 中空闲链表的修改）
+    enum intr_status old = intr_disable();
+
+    // 调用伙伴系统的核心分配函数，申请 1 个物理页 (order 0)
+    // 伙伴系统内部会处理 lock
+    struct page* pg = palloc_pages(m_pool, 0);
+
+	// put_str("DEBUG: pg struct addr: "); put_int((uint32_t)pg); 
+    // put_str(", pool used: "); put_str(m_pool == &kernel_pool ? "KERNEL" : "USER");
+    // put_str("\n");
+
+    if (pg == NULL) {
+        intr_set_status(old);
+        return NULL;
+    }
+
+    // 设置引用计数，新分配的页，引用计数初始化为 1
+    pg->ref_count = 1;
+
+    // 将 struct page 转换为物理地址返回
+    uint32_t page_phyaddr = PAGE_TO_ADDR(&kernel_pool,pg);
+
+    intr_set_status(old);
+    return (void *)page_phyaddr;
 }
 
 // add relation between _vaddr and _page_phyaddr
@@ -201,7 +254,10 @@ static void page_table_add(void* _vaddr,void* _page_phyaddr){
 	// the lowest bit is P bit
 	// check if the page exists in the mem
 	if(*pde&0x00000001){
-		ASSERT(!(*pte&0x00000001));
+		if (*pte & 0x00000001) {
+			put_str("Conflict vaddr: ");put_int(vaddr);put_str("pte val: ");put_int(*pte);put_str("\n");
+		}
+		ASSERT(!(*pte & 0x00000001));
 		if(!(*pte&0x00000001)){
 			*pte = (page_phyaddr|PG_US_U|PG_RW_W|PG_P_1);
 		}else{
@@ -229,8 +285,8 @@ static void page_table_add(void* _vaddr,void* _page_phyaddr){
 // if successful, return the virtual addr
 void* malloc_page(enum pool_flags pf,uint32_t pg_cnt){
 
-	uint32_t max_page = (pf==PF_KERNEL?kernel_pool.pool_pages:user_pool.pool_pages);
-	ASSERT(pg_cnt>0&&pg_cnt<max_page);
+	// uint32_t max_page = (pf==PF_KERNEL?kernel_pool.pool_pages:user_pool.pool_pages);
+	// ASSERT(pg_cnt>0&&pg_cnt<max_page);
 
 	void* vaddr_start = vaddr_alloc(pf,pg_cnt);
 	if(vaddr_start==NULL){
@@ -238,7 +294,7 @@ void* malloc_page(enum pool_flags pf,uint32_t pg_cnt){
 	}
 
 	uint32_t vaddr = (uint32_t)vaddr_start,cnt = pg_cnt;
-	struct pool* mem_pool = pf&PF_KERNEL?&kernel_pool:&user_pool;
+	struct buddy_pool* mem_pool = pf&PF_KERNEL?&kernel_pool:&user_pool;
 
 	// virtual-page is consecutive but phy-page is not
 	// we can only allocate phy-page one by one
@@ -267,26 +323,6 @@ void* get_kernel_pages(uint32_t pg_cnt){
 	return vaddr;
 }
 
-
-void mem_init(void){
-	put_str("mem_init start\n");
-	mem_bytes_total = *((uint32_t*)(SYS_MEM_SIZE_PTR));
-	mem_pool_init(mem_bytes_total);
-	block_desc_init(k_block_descs);
-
-	total_pages = mem_bytes_total / PG_SIZE;
-	// 每一个 page 占用一个字节，也就是8位
-    mem_map = (uint8_t*)kmalloc(total_pages); 
-    
-    if (mem_map == NULL) {
-        PANIC("Could not allocate mem_map!");
-    }
-
-	// 初始化：所有物理页初始计数为 0
-    memset(mem_map, 0, total_pages);
-	put_str("mem_init done\n");
-}
-
 // allocate 4KB mem from user phy mem, return the vaddr
 void* get_user_pages(uint32_t pg_cnt){
 	lock_acquire(&user_pool.lock);
@@ -300,7 +336,7 @@ void* get_user_pages(uint32_t pg_cnt){
 // we cannot control the value of the paddr !!! it is decided by OS !
 // only surport to allocate 1 page
 void* mapping_v2p(enum pool_flags pf,uint32_t vaddr){
-	struct pool* mem_pool = pf&PF_KERNEL?&kernel_pool:&user_pool;
+	struct buddy_pool* mem_pool = pf&PF_KERNEL?&kernel_pool:&user_pool;
 	lock_acquire(&mem_pool->lock);
 	struct task_struct* cur = get_running_task_struct();
 	int32_t bit_idx = -1;
@@ -318,6 +354,8 @@ void* mapping_v2p(enum pool_flags pf,uint32_t vaddr){
 		ASSERT(bit_idx>0);
 		bitmap_set(&kernel_vaddr.vaddr_bitmap,bit_idx,1);
 	}else{
+		printk("PANIC Info: name=%s, pgdir=%x, pf=%d, vaddr=%x\n", 
+                cur->name, cur->pgdir, pf, vaddr);
 		PANIC("get_a_page: not allow kernel to alloc userspace or user to alloc kernelspace by get_a_page!!!\n");
 	}
 
@@ -379,7 +417,7 @@ void* umalloc(uint32_t size) {
 
 // the granularity of size is 1byte 
 void* do_alloc(uint32_t size, enum pool_flags PF){
-	struct pool* mem_pool;
+	struct buddy_pool* mem_pool;
 	struct mem_block_desc* descs;
 	struct task_struct* cur_thread = get_running_task_struct();
 
@@ -478,31 +516,27 @@ void* do_alloc(uint32_t size, enum pool_flags PF){
 
 // opposite of pmalloc
 // free one phy mem page 
-void pfree(uint32_t pg_phy_addr){
+void pfree(uint32_t pg_phy_addr) {
+    struct page* pg = ADDR_TO_PAGE(global_pages,pg_phy_addr);
 
-	if(mem_map[pg_phy_addr >> 12]<=0){
-		printk("mem_map[pg_phy_addr >> 12]: %d pg_phy_addr:%x\n",mem_map[pg_phy_addr >> 12],pg_phy_addr);
-		PANIC("bad mem_map[] !");
-	}
+    // 确保不是在释放一个已经空闲的页
+    ASSERT(pg->ref_count > 0);
 
-	mem_map[pg_phy_addr >> 12]--;
-	if(mem_map[pg_phy_addr >> 12]!=0){
-		return;
-	}
-	enum intr_status old = intr_disable();
+    enum intr_status old = intr_disable();
 
-	struct pool* mem_pool;
-	uint32_t bit_idx = 0;
-	if(pg_phy_addr>=user_pool.phy_addr_start){
-		// if page addr in the user kernel pool
-		mem_pool = &user_pool;
-		bit_idx = (pg_phy_addr - user_pool.phy_addr_start)/PG_SIZE;
-	}else{
-		mem_pool = &kernel_pool;
-		bit_idx = (pg_phy_addr-kernel_pool.phy_addr_start)/PG_SIZE;
-	}
-	bitmap_set(&mem_pool->pool_bitmap,bit_idx,0);
-	intr_set_status(old);
+    // 递减引用计数
+    pg->ref_count--;
+
+    // 判断是否需要归还给伙伴系统
+    if (pg->ref_count == 0) {
+        // 这里的 pool 判断逻辑之前的一致
+        struct buddy_pool* m_pool = (pg_phy_addr >= user_pool.phy_addr_start) ? &user_pool : &kernel_pool;
+        
+        // 调用伙伴系统的释放逻辑，尝试合并
+        pfree_pages(m_pool, pg, 0);
+    }
+
+    intr_set_status(old);
 }
 
 // set P bit in pte zero 
@@ -594,7 +628,7 @@ void do_free(void* ptr,enum pool_flags PF){
 	ASSERT(ptr!=NULL);
 	if(ptr!=NULL){
 
-		struct pool* mem_pool = (PF == PF_KERNEL) ? &kernel_pool : &user_pool;
+		struct buddy_pool* mem_pool = (PF == PF_KERNEL) ? &kernel_pool : &user_pool;
 
 		lock_acquire(&mem_pool->lock);
 		struct mem_block* b = ptr;
@@ -625,34 +659,11 @@ void do_free(void* ptr,enum pool_flags PF){
 	}
 }
 
-// this funciotn is called by dlist_traversal
-static bool sum_free_list(struct dlist_elem *elem UNUSED, void* arg){
-	uint32_t* free_elem_num = (uint32_t*) arg;
-	*free_elem_num += 1;
-	// to ensure traverse the whole list
-	return false;
-}
-
 void sys_free_mem(){
-	// KF: kernel fragment memory
-	// KP: kernel free page memory
-	// UP: user free page memory
-	uint32_t up = bitmap_count(&kernel_pool.pool_bitmap)*PG_SIZE;
-	uint32_t kp = bitmap_count(&user_pool.pool_bitmap)*PG_SIZE;
-	int i;
-	uint32_t kf = 0;
-	for(i=0;i<DESC_TYPE_CNT;i++){
-		if(dlist_empty(&k_block_descs[i].free_list)) continue;
-		uint32_t free_elem_num = 0;
-		dlist_traversal(&k_block_descs[i].free_list,sum_free_list,(void*)&free_elem_num);
-		kf += free_elem_num*k_block_descs[i].block_size;
-	}
 	uint32_t user_total = mem_bytes_total/2;
 	uint32_t kernel_total = mem_bytes_total/2;
-	printk("total\tfree\tused\t\n%d\t%d\t%d\n",mem_bytes_total,kf+kp+up, mem_bytes_total-(kf+kp+up));
-	printk("total[K]: %d\ttotal[U]: %d\nfree[KF+KP]: %d+%d\tfree[UP]: %d\nused[K]: %d\tused[U]: %d\n",kernel_total,user_total,kf,kp,up,kernel_total-kf-kp,user_total-up);
-	// printk("free[KF+KP]: %d+%d\tfree[UP]: %d\nused[K]: %d\tused[U]: %d\n",kf,kp,up,kernel_total-kf-kp,user_total-up);
-	// printk("total[K+U]\tfree[(KF+KP)+UP]\tused[K+U]\t\n%d+%d\t(%d+%d)+%d\t%d+%d\n",kernel_total,user_total,kf, kp,up,kernel_total-kf-kp,user_total-up);
+	printk("kernel_total: %d\n",user_total);
+	printk("user_total: %d\n",kernel_total);
 }
 
 // 将父进程的页表项设置为只读后拷贝给子进程
@@ -692,7 +703,8 @@ void copy_page_tables(struct task_struct* from, struct task_struct* to, void* pa
                 uint32_t pa = from_pte_ptr[pte_idx] & 0xfffff000;
                 
                 // 增加引用计数
-                mem_map[pa >> 12]++;
+                struct page* pg = ADDR_TO_PAGE(global_pages,pa);
+    			pg->ref_count++;
 
                 // 将父进程该页设为只读
                 if (from_pte_ptr[pte_idx] & PG_RW_W) {
@@ -904,20 +916,20 @@ void write_protect(uint32_t err_code, void* err_vaddr) {
 
 	uint32_t* pte = pte_ptr(vaddr);
     uint32_t pa = *pte & 0xfffff000;
-	// 取出页目录表中的索引和页表中的索引
-    uint32_t page_idx = pa >> 12;
 
     // COW 处理
-    if (mem_map[page_idx] > 1) {
+	struct page* pg = ADDR_TO_PAGE(global_pages,pa);
+
+    if (pg->ref_count > 1) {
         // 确实有多个进程共享，执行拷贝
         do_copy_on_write(vaddr, pte, pa);
-    } else if (mem_map[page_idx] == 1) {
+    } else if (pg->ref_count == 1) {
         // 只有一个人用了，直接恢复写权限，不用额外拷贝了
         *pte |= PG_RW_W;
 		// 刷新页目录项
         asm volatile ("invlpg %0" : : "m" (*(char*)vaddr));
     } else {
-        PANIC("write_protect: mem_map counter error!");
+        PANIC("write_protect: global_pages[] counter error!");
     }
 
 	intr_set_status(_old);

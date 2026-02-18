@@ -15,7 +15,7 @@ LDFLAGS = -Ttext $(ENTRY_POINT) -e main -Map $(BUILD_DIR)/kernel.map -m elf_i386
 
 OBJS = $(BUILD_DIR)/main.o $(BUILD_DIR)/init.o $(BUILD_DIR)/interrupt.o \
     $(BUILD_DIR)/print.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/timer.o \
-	$(BUILD_DIR)/debug.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/bitmap.o \
+	$(BUILD_DIR)/debug.o $(BUILD_DIR)/buddy.o  $(BUILD_DIR)/memory.o $(BUILD_DIR)/bitmap.o \
 	$(BUILD_DIR)/string.o $(BUILD_DIR)/thread.o $(BUILD_DIR)/dlist.o \
 	$(BUILD_DIR)/switch.o $(BUILD_DIR)/sync.o $(BUILD_DIR)/console.o \
 	$(BUILD_DIR)/keyboard.o $(BUILD_DIR)/ioqueue.o $(BUILD_DIR)/tss.o \
@@ -143,6 +143,9 @@ $(BUILD_DIR)/signal.o:kernel/signal.c kernel/signal.h
 $(BUILD_DIR)/vma.o:userprog/vma.c userprog/vma.h
 	$(CC) $< $(CFLAGS) -o $@
 
+$(BUILD_DIR)/buddy.o:kernel/buddy.c kernel/buddy.h
+	$(CC) $< $(CFLAGS) -o $@
+
 # ASM code
 
 $(BUILD_DIR)/kernel.o:kernel/kernel.s
@@ -180,7 +183,7 @@ hd:
 # 强制将 55AA 写入扇区末尾（偏移 510 字节处）
 	printf '\125\252' | dd of=$(DISK_DIR)/hd60M.img bs=1 count=2 seek=510 conv=notrunc
 	dd if=$(BUILD_DIR)/loader.bin of=$(DISK_DIR)/hd60M.img count=4 bs=512 conv=notrunc seek=2
-	dd if=$(BUILD_DIR)/kernel.bin of=$(DISK_DIR)/hd60M.img bs=512 count=600 seek=9 conv=notrunc 
+	dd if=$(BUILD_DIR)/kernel.bin of=$(DISK_DIR)/hd60M.img bs=512 count=700 seek=9 conv=notrunc 
 
 clean: 
 	cd $(BUILD_DIR) && rm -f *.o *.bin disasm_mbr disasm_loader *.map *.sym

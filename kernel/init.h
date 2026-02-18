@@ -3,6 +3,6 @@
 
 #define APPS_LBA 1000
 
-extern void init_all(void);
+extern void early_init(void);
 
 #endif

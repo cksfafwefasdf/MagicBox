@@ -15,6 +15,9 @@
 #define MAX_PID_NUM_IN_BYTE MAX_PID_NUM/8
 #define STACK_MAGIC 0x20030000
 
+#define INIT_PID 1
+
+
 typedef void thread_func(void*);
 
 enum task_status{
@@ -156,6 +159,5 @@ extern pid_t sys_getpgid(pid_t pid);
 
 extern struct dlist thread_ready_list;
 extern struct dlist thread_all_list; // queue of all tasks
-
 
 #endif

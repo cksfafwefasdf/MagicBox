@@ -12,6 +12,8 @@
 #include "print.h"
 #include "thread.h"
 #include "ide.h"
+#include "exec.h"
+#include "vma.h"
 
 extern void intr_exit(void);
 
@@ -107,9 +109,9 @@ void start_process(void* filename_){
 	// so we can set intr_stack in the next step
 	cur->self_kstack += sizeof(struct thread_stack);
 	struct intr_stack* proc_stack = (struct intr_stack*)cur->self_kstack;
-	proc_stack->edi = proc_stack->esi = proc_stack->ebp = proc_stack->esp_dummy=0;
 
-	proc_stack->ebx = proc_stack->edx=proc_stack->ecx=proc_stack->eax=0;
+	memset(proc_stack, 0, sizeof(struct intr_stack));
+
 	proc_stack->gs = 0; // user mode won't use graphic segment, so set it 0
 	proc_stack->ds = proc_stack->es = proc_stack->fs = SELECTOR_U_DATA;
 	proc_stack->eip = function; // The addr of the user process that is to be executed
@@ -173,6 +175,9 @@ void create_user_vaddr_bitmap(struct task_struct* user_prog){
 	bitmap_init(&user_prog->userprog_vaddr.vaddr_bitmap);
 }
 
+// 主要是用来给main线程起用户进程
+// 当一切准备就绪后，起用户进程都是通过 fork + execv 来起的
+// 就不再使用此函数了
 void process_execute(void* filename,char* name){
 	// all PCB is in the kernel space
 	struct task_struct* thread = get_kernel_pages(1);
@@ -184,6 +189,10 @@ void process_execute(void* filename,char* name){
 	create_user_vaddr_bitmap(thread);
 	// start_process(filename) will be called by kernel_thread 
 	thread_create(thread,start_process,filename);
+
+	add_vma(thread, 0xBFFFF000, 0xC0000000, 0, NULL, PF_R | PF_W, 0);
+	thread->start_stack = 0xc0000000;
+
 	thread->pgdir = create_page_dir();
 	
 	block_desc_init(thread->u_block_desc);

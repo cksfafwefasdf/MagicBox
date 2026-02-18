@@ -269,7 +269,7 @@ int32_t sys_execv(const char* path, const char* argv[]) {
     char** user_argv_list = (char**)user_stack_top;
     // 如果跨页了也会触发 swap_page，但可以自动修复，不要紧
     user_argv_list[argc] = NULL; // 最后一个参数置为 NULL
-    for (i = 0; i < argc; i++) {
+    for (uint32_t i = 0; i < argc; i++) {
         user_argv_list[i] = (char*)new_argv_pointers[i];
     }
 

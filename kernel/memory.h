@@ -17,7 +17,10 @@
 
 // low 1MB is 0xc000000000～0xc00fffff
 // heap is close to the low 1MB
-#define K_HEAP_START 0xc0100000
+// 现在我们的 K_HEAP_START 改用动态计算，其为全局变量 kernel_heap_start
+// #define K_HEAP_START 0xc0100000
+
+
 // the base-addr of stack used by kernel is 0xc009f000
 // we are trying to organize 512MB phy-mem,which needs 512MB/4KB -> 2^17bit=128Kb=16KB for bitmap
 // 16KB/[4KB/page] = 4 pages
@@ -60,7 +63,7 @@ struct mem_block_desc{
 
 struct task_struct;
 
-extern struct pool kernel_pool,user_pool; // phisical mem pool
+extern struct buddy_pool kernel_pool,user_pool; // phisical mem pool
 extern void mem_init(void);
 extern uint32_t* pde_ptr(uint32_t vaddr);
 extern uint32_t* pte_ptr(uint32_t vaddr);
@@ -89,4 +92,5 @@ extern uint32_t sys_brk(uint32_t new_brk);
 
 
 extern uint32_t mem_bytes_total;
+extern uint32_t kernel_heap_start;
 #endif

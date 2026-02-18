@@ -4,7 +4,7 @@
 
 > **Note**: This project is intended for learning purposes only, utilizing the traditional 32-bit Protected Mode tech stack.
 
-![MagicBox Preview](https:////wsl.localhost/Ubuntu-22.04/home/cksfafwefasdf/OS_WorkSpace/MagicBox/doc/pic/preview.png)
+![MagicBox Preview](./doc/pic/preview.png)
 
 ## 📚 Learning Objectives
 

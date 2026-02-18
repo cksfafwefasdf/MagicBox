@@ -6,6 +6,7 @@
 #include "debug.h"
 #include "sync.h"
 #include "hashtable.h"
+#include "interrupt.h"
 
 static struct ide_buffer global_ide_buffer; 
 
@@ -39,6 +40,7 @@ static bool buffer_condition(struct dlist_elem* pelem,void* arg){
 
 void ide_buffer_init(){
     printk("ide_buffer_init...\n");
+
     
     lock_init(&global_ide_buffer.lock);
     lock_acquire(&global_ide_buffer.lock);

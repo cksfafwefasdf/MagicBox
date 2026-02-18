@@ -85,10 +85,10 @@ static void cmd_execute(uint32_t argc, char** argv, int32_t pgid_to_set, bool is
             setpgid(pid, pid);
             if (!is_background) {
                 // 前台：移交 TTY 权限并阻塞等待
-                ioctl(stdin_no, TIOCSPGRP, &pid);
+                ioctl(stdin_no, TIOCSPGRP, (uint32_t)&pid);
                 waitpid(pid, NULL, 0);
                 int32_t shell_pid = getpid();
-                ioctl(stdin_no, TIOCSPGRP, &shell_pid);
+                ioctl(stdin_no, TIOCSPGRP, (uint32_t)&shell_pid);
             } else {
                 // 后台：直接返回，控制权留在 Shell
                 printf("[Background] %d\n", pid);
@@ -149,11 +149,11 @@ int main(void) {
 
             if (!is_background) {
                 // 前台管道，Shell 移交 TTY 给整个进程组并等待
-                ioctl(stdin_no, TIOCSPGRP, &pid1);
+                ioctl(stdin_no, TIOCSPGRP, (uint32_t)&pid1);
                 waitpid(pid1, NULL, 0);
                 waitpid(pid2, NULL, 0);
                 int32_t shell_pid = getpid();
-                ioctl(stdin_no, TIOCSPGRP, &shell_pid);
+                ioctl(stdin_no, TIOCSPGRP, (uint32_t)&shell_pid);
             } else {
                 // 后台管道，打印组长 PID，Shell 继续
                 printf("[Background Pipe Group] %d\n", pid1);

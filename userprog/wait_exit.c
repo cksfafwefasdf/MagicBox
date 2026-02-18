@@ -57,7 +57,7 @@ static bool init_adopt_a_child(struct dlist_elem* pelem,void* arg){
 	int32_t pid = (int32_t)arg;
 	struct task_struct* pthread = member_to_entry(struct task_struct,all_list_tag,pelem);
 	if(pthread->parent_pid==pid){
-		pthread->parent_pid = 3; // init 的 pid 是 3
+		pthread->parent_pid = INIT_PID; // init 的 pid 是 1
 	}
 	return false;
 }
@@ -113,9 +113,9 @@ void sys_exit(int32_t status){
 
 	// 检查是否有已经变成僵尸的孩子交给了 Init
     // 如果有，唤醒 PID 3
-    struct task_struct* init_proc = pid2thread(3); // Init 是 PID 3
+    struct task_struct* init_proc = pid2thread(INIT_PID); // Init 是 PID 3
     if (init_proc) {
-        // 扫描全进程表，看看有没有 parent 是 3 且状态是 HANGING 的
+        // 扫描全进程表，看看有没有 parent 是 1 且状态是 HANGING 的
         struct dlist_elem* zombie_elem = dlist_traversal(&thread_all_list, find_hanging_child, (void*)3);
         if (zombie_elem != NULL) {
             // 发现有过继过来的僵尸，立刻叫醒 Init
