@@ -119,21 +119,39 @@ sh install_apps.sh
 
 ### 3. Launching the OS
 
-Navigate to the `disk_env/` directory and execute the following command to start MagicBox in QEMU:
+Navigate to the `disk_env/` directory. You can choose between a standard run or a high-fidelity hardware simulation.
 
-```shell
-cd disk_env
+#### **Standard Run:**
 
+```bash
 qemu-system-i386 \
   -m 32 \
   -drive file=hd60M.img,format=raw,index=0,media=disk \
   -drive file=hd80M.img,format=raw,index=1,media=disk
 ```
 
+#### **Hardware Simulation Mode:** 
+
+To better simulate real hardware behavior (including sync disk I/O and precise clocking), use the following:
+
+```bash
+qemu-system-i386 \
+  -m 32 \
+  -drive file=hd60M.img,format=raw,index=0,media=disk,cache=directsync \
+  -drive file=hd80M.img,format=raw,index=1,media=disk,cache=directsync \
+  -rtc base=localtime,clock=vm \
+  -icount shift=auto,sleep=on \
+  -boot c
+```
+
 > **Note**:
 >
 > - `hd60M.img` contains the MBR, Loader, and the Kernel.
 > - `hd80M.img` is the data disk where your file system and Tar-packaged apps reside.
+
+
+
+[^TIP]: **Memory Support:** Thanks to the newly implemented **Buddy System**, the `-m` parameter now supports up to **3072** (3GB), which is the theoretical limit for physical RAM in 32-bit x86 systems (approaching the PCI/MMIO hole).
 
 
 
