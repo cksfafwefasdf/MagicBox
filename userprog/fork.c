@@ -33,8 +33,11 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 
 	block_desc_init(child_thread->u_block_desc);
 
-	uint32_t bitmap_pg_cnt = DIV_ROUND_UP((0xc0000000-USER_VADDR_START)/PG_SIZE/8,PG_SIZE);
-	void* vaddr_btmp = get_kernel_pages(bitmap_pg_cnt);
+	// uint32_t bitmap_pg_cnt = DIV_ROUND_UP((USER_STACK_BASE-USER_VADDR_START)/PG_SIZE/8,PG_SIZE);
+
+	// 我们现在使用vma链表来管理用户进程的虚拟地址空间，因此位图可以取消了 
+
+	// void* vaddr_btmp = get_kernel_pages(bitmap_pg_cnt);
 	
 	// printk("Child PCB: %x, Bitmp Vaddr: %x, Phys: %x\n", 
     //    child_thread, vaddr_btmp, addr_v2p(vaddr_btmp));
@@ -43,8 +46,8 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 	// 但该地址在虚拟空间中是“已占用”的。
 	// 如果子进程位图是全 0，它以后调用 malloc 可能又申请到 0x400000，逻辑就乱了。
 	// 所以需要拷贝父进程的位图
-	memcpy(vaddr_btmp, parent_thread->userprog_vaddr.vaddr_bitmap.bits, bitmap_pg_cnt * PG_SIZE);
-	child_thread->userprog_vaddr.vaddr_bitmap.bits = vaddr_btmp;
+	// memcpy(vaddr_btmp, parent_thread->userprog_vaddr.vaddr_bitmap.bits, bitmap_pg_cnt * PG_SIZE);
+	// child_thread->userprog_vaddr.vaddr_bitmap.bits = vaddr_btmp;
 	// ASSERT(strlen(child_thread->name)<11);
 	strcat(child_thread->name,"_fork");
 	return 0;

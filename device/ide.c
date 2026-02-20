@@ -239,7 +239,7 @@ void ide_init(){
 
 	disk_num = *((uint8_t*)BIOS_DISK_NUM_ADDR);
 	disk_size = (uint32_t*)kmalloc(disk_num * sizeof(uint32_t));
-	uint32_t* disk_param_addr = DISK_PARAM_ADDR;
+	uint32_t* disk_param_addr = (uint32_t*)DISK_PARAM_ADDR;
 	int d_idx = 0;
 	for(d_idx=0;d_idx<disk_num;d_idx++){
 		disk_size[d_idx] = 0;

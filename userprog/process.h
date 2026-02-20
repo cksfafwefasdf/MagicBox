@@ -5,7 +5,6 @@
 
 struct task_struct;
 
-#define USER_VADDR_START 0x8048000
 // 我们将用户栈栈底设置在用户虚拟地址的最高地址处
 // 初始时，我们为其分配了一个页的栈空间，所以此处要减去0x1000
 #define USER_STACK3_VADDR (0xc0000000-0x1000)

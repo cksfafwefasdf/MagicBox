@@ -81,6 +81,14 @@ struct page* palloc_pages(struct buddy_pool* bpool, uint32_t order) {
     
     // put_str("nr_free--: ");put_int(bpool->areas[k].nr_free);put_str("\n");
 
+#ifdef DEBUG_BUDDY
+    if (k > order) {
+        put_str("[Buddy] Split block at PFN "); put_int(pg - bpool->page_base);
+        put_str(" from Order "); put_int(k);
+        put_str(" down to "); put_int(order); put_str("\n");
+    }
+#endif
+
     // 向上溯源拿到的块如果比需求大，则执行拆分 (Split)
     while (k > order) {
         k--;
@@ -100,6 +108,11 @@ struct page* palloc_pages(struct buddy_pool* bpool, uint32_t order) {
         buddy->flags = 0; // 标记为空闲
         dlist_push_back(&bpool->areas[k].free_list, &buddy->free_list_tag);
         bpool->areas[k].nr_free++;
+#ifdef DEBUG_BUDDY
+        // 打印每一次小的拆分
+        put_str("  --> Remaining buddy at PFN "); put_int(buddy - bpool->page_base);
+        put_str(" added to Order "); put_int(k); put_str("\n");
+#endif
     }
 
     // 标记当前分配出去的块
@@ -187,6 +200,12 @@ void pfree_pages(struct buddy_pool* bpool, struct page* pg, uint32_t order) {
             break;
         }
 
+#ifdef DEBUG_BUDDY
+        // 打印合并动作
+        put_str("[Buddy] Merging PFN "); put_int(curr - bpool->page_base);
+        put_str(" and Buddy PFN "); put_int(buddy - bpool->page_base);
+        put_str(" into Order "); put_int(k + 1); put_str("\n");
+#endif
         // 既然要合并，把伙伴从它所在的阶(k)的空闲链表中摘除
         dlist_remove(&buddy->free_list_tag);
         bpool->areas[k].nr_free--;

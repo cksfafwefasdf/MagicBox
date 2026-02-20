@@ -21,6 +21,7 @@
 #include "stdio.h"
 #include "device.h"
 #include "debug.h"
+#include "vma.h"
 void init(void);
 void print_logo(void);
 static void after_init(void);
@@ -85,7 +86,7 @@ void init(void) {
         // 运行 Shell
         close(fd);
         printf("init: starting shell %s...\n", SHELL_PATH);
-        execv(SHELL_PATH, argv);
+        execv(SHELL_PATH, (const char **)argv);
 
         // 如果 execv 返回了，说明执行失败
         panic("init: shell execv failed!");
@@ -94,7 +95,7 @@ void init(void) {
 }
 
 void print_logo(){
-    const char* jester[] = {
+    char* jester[] = {
         RED"    _________    ",
         "   /         \\   ",
         "  |  \\( o o )/|",
@@ -169,9 +170,7 @@ static void after_init() {
     // 先回收idle，使得并使得main变成idle
     recyle_idle();
     put_str("init all done...\n");
-
     print_logo();
-    
     put_str("start init...\n");
     process_execute(init,"init");
     

@@ -23,14 +23,7 @@
 
 #define K_TEMP_PAGE_VADDR 0xff3ff000  
 
-// phy-mem pool
-// struct pool{
-// 	struct bitmap pool_bitmap; // use to organize the physical_addr of the pool
-// 	struct lock lock; // phy mem pool is a public res
-// 	uint32_t phy_addr_start;
-// 	uint32_t pool_size;
-// 	uint32_t pool_pages; // how many pages the pool has, to cooperate with pool_bitmap
-// };
+#define BOOTSTRAP_VMA_COUNT 32
 
 struct arena{
 	// point to the mem_block which is related to this arena
@@ -40,7 +33,8 @@ struct arena{
 	// otherwise it is the number of the free mem_block
 	uint32_t cnt;
 	bool large; // when malloc above 1024Bytes, large is true
-};
+    uint8_t pad[3]; // 凑够12字节
+}__attribute__((packed));;
 
 // uint8_t* mem_map = NULL;
 
@@ -60,9 +54,76 @@ uint32_t total_pages = 0;
 uint32_t kernel_heap_start = 0; // 在 mem_pool_init 中动态赋值
 
 static void* palloc(struct buddy_pool* m_pool);
-
 int32_t inode_read_data(struct m_inode* inode, uint32_t offset, void* buf, uint32_t count);
+static struct vm_area* find_vma_condition(struct task_struct* task, uint32_t flags);
+static struct vm_area* vma_alloc_bootstrap(void);
 
+// 内核虚拟地址空间的 VMA 链表
+struct dlist kernel_vma_list;
+
+// 保护内核 VMA 链表的信号量
+struct lock kernel_vma_lock;
+
+// 自举期使用的 vma 内存池
+// 由于 kmalloc 依赖虚拟地址分配函数，而虚拟地址分配又依赖于vma
+// 并且vma的添加等操作又依赖于 kmalloc
+// 因此这就形成一个死循环了，为了打破这个死循环，我们在早期初始化时使用静态数组来作为内存池
+// 从这里取出vma来进行初始化，待到vma树建立完毕后再使用kmalloc来创建
+// 这里的这一部分vma由于和内核代码高度相关，因此基本都是只借不还的
+static struct vm_area vma_bootstrap_pool[BOOTSTRAP_VMA_COUNT];
+
+static uint32_t vma_idx = 0;
+
+static struct vm_area* vma_alloc_bootstrap() {
+    if (vma_idx < BOOTSTRAP_VMA_COUNT) {
+        // 拿到当前可用的结构体，然后索引自增
+        struct vm_area* vma = &vma_bootstrap_pool[vma_idx++];
+        // 顺手清理一下，确保它是干净的
+        memset(vma, 0, sizeof(struct vm_area));
+        return vma;
+    }
+    // 如果 64 个全用完了，说明初始化逻辑映射了太多奇怪的东西
+    PANIC("VMA bootstrap pool exhausted!");
+    return NULL;
+}
+
+static void early_vma_init(void) {
+    // 初始化全局链表和锁
+    dlist_init(&kernel_vma_list);
+    lock_init(&kernel_vma_lock);
+
+    // 从静态池拿种子VMA
+    struct vm_area* reserved_vma = vma_alloc_bootstrap(); // 内核保留区
+    struct vm_area* heap_vma = vma_alloc_bootstrap();
+    
+    kernel_heap_start = PAGE_ALIGN_UP(kernel_heap_start);
+
+    reserved_vma->vma_start = KERNEL_VADDR_START;
+    reserved_vma->vma_end   = kernel_heap_start;
+    reserved_vma->vma_flags = VM_READ|VM_WRITE;
+    reserved_vma->vma_inode = NULL;
+    
+    // 填充,预留32MB内核堆空间
+    // 由于 add_vma 函数底层调用了 kmalloc，但是此时我们的堆还没准备好呢
+    // 因此不能用 add_vma 来添加内核堆，我们得手动添加
+    
+    heap_vma->vma_start = kernel_heap_start;
+    heap_vma->vma_end   = PAGE_ALIGN_UP(kernel_heap_start + (32 * 1024 * 1024));
+    heap_vma->vma_flags = VM_READ | VM_WRITE | VM_GROWSUP | VM_ANON;
+    heap_vma->vma_inode = NULL;
+
+    dlist_push_back(&kernel_vma_list, &reserved_vma->vma_tag);
+
+    // 挂载到全局链表
+    // 因为是初始化，此时没竞争，可以不拿锁
+    dlist_push_back(&kernel_vma_list, &heap_vma->vma_tag);
+
+    // 由于我们的内核栈是位于用户PCB中的
+    // 而用户PCB这块区域肯定是被事先分配好的，所以不可能会触发页错误
+    // 因此即使不使用VMA来管理内核栈也不会出问题
+
+    put_str("Kernel global VMA list initialized with static heap.\n");
+}
 
 // 这是一个内部辅助函数，用于在 mem_pool_init 这种极早期阶段手动绑定物理地址和虚拟地址的映射
 static void early_map(uint32_t vaddr, uint32_t paddr) {
@@ -90,16 +151,21 @@ static void mem_pool_init(uint32_t all_mem) {
 	// = 256 pg
 	// page-table use 256 pages by itself
     uint32_t page_table_size = PG_SIZE * 256;
+
 	// 0x100000 是内核的数据大小
 	// page_table_size 是 1MB
 	// base_used_mem 是 2MB
-    uint32_t base_used_mem = 0x100000 + page_table_size;
+    uint32_t base_used_mem = KERNEL_RESERVED_SPACE + page_table_size;
     
     total_pages = all_mem / PG_SIZE;
     uint32_t global_pages_size = total_pages * sizeof(struct page);
     
 	// 按理来说，global_pages 会被放到物理地址的低 2MB 之后
-    global_pages = (struct page*)(0xc0000000 + base_used_mem);
+    global_pages = (struct page*)(KERNEL_VADDR_START + base_used_mem);
+
+
+	// 由于我们直接进行了低端内存映射，因此低512MB的内存都是直接被建立好映射的
+	// 不用去额外建立映射了
 
 	// 在 memset 之前手动建立映射
     uint32_t cur_vaddr = (uint32_t)global_pages;
@@ -164,44 +230,63 @@ void mem_init(void){
 
 	mem_pool_init(mem_bytes_total);
 	block_desc_init(k_block_descs);
-
 	put_str("mem_init done\n");
 }
 
 
 // allocate [pg_cnt] pages from [pool_flags] mem-pool
-static void* vaddr_alloc(enum pool_flags pf,uint32_t pg_cnt){
-	enum intr_status old = intr_disable();
-	int vaddr_start = 0,bit_idx_start=-1;
-	uint32_t cnt = 0;
-	if(pf==PF_KERNEL){
-		bit_idx_start = bitmap_scan(&kernel_vaddr.vaddr_bitmap,pg_cnt);
-		if(bit_idx_start==-1){
-			intr_set_status(old);
-			return NULL;
-		} 
-		while(cnt<pg_cnt){
-			bitmap_set(&kernel_vaddr.vaddr_bitmap,bit_idx_start+cnt,1);
-			cnt++;
-		} 
-		vaddr_start = kernel_vaddr.vaddr_start+bit_idx_start*PG_SIZE;
-	}else{
-		// allocate vaddr for user pool
-		struct task_struct* cur = get_running_task_struct();
-		bit_idx_start = bitmap_scan(&cur->userprog_vaddr.vaddr_bitmap,pg_cnt);
-		if(bit_idx_start==-1){
-			intr_set_status(old);
-			return NULL;
-		}
-		while(cnt<pg_cnt){
-			bitmap_set(&cur->userprog_vaddr.vaddr_bitmap,bit_idx_start+cnt,1);
-			cnt++;
-		}
-		vaddr_start = cur->userprog_vaddr.vaddr_start+bit_idx_start*PG_SIZE;
-		ASSERT((uint32_t)vaddr_start<(0xc0000000-PG_SIZE));
-	}
-	intr_set_status(old);
-	return (void*)vaddr_start;
+static void* vaddr_alloc(enum pool_flags pf, uint32_t pg_cnt, bool force_mmap) {
+    enum intr_status old = intr_disable();
+    uint32_t vaddr_start = 0;
+
+    if (pf == PF_KERNEL) {
+        // 内核态，维持原状，继续使用全局位图
+        int bit_idx_start = bitmap_scan(&kernel_vaddr.vaddr_bitmap, pg_cnt);
+        if (bit_idx_start == -1) {
+            intr_set_status(old);
+            return NULL;
+        }
+        uint32_t cnt = 0;
+        while (cnt < pg_cnt) {
+            bitmap_set(&kernel_vaddr.vaddr_bitmap, bit_idx_start + cnt, 1);
+            cnt++;
+        }
+        vaddr_start = kernel_vaddr.vaddr_start + bit_idx_start * PG_SIZE;
+		intr_set_status(old);
+		return (void*)vaddr_start;
+
+    } else {
+        struct task_struct* cur = get_running_task_struct();
+        uint32_t size = pg_cnt * PG_SIZE;
+
+        // 如果不是强制使用 mmap，先尝试推高堆顶 (brk)
+        if (!force_mmap) {
+            uint32_t old_brk = cur->brk;
+            uint32_t new_brk = old_brk + size;
+            uint32_t actual_brk = sys_brk(new_brk);
+            if (actual_brk >= new_brk) {
+                // sys_brk 成功推高了堆顶，返回旧堆顶作为分配的起始虚拟地址
+                intr_set_status(old);
+                return (void*)old_brk;
+            }
+        }
+        
+
+        // 如果是超大内存，或者 brk 失败了，走 mmap 区域 (Gap 搜索)
+        vaddr_start = vma_find_gap(pf, pg_cnt);
+        
+        if (vaddr_start != 0) {
+            // 把找出来的 Gap 注册到 VMA 链表里
+            // 这样 find_vma 才能搜到它，页错误处理才能正常工作
+            vaddr_start = PAGE_ALIGN_UP(vaddr_start);
+            add_vma(cur, vaddr_start, vaddr_start + size, 0, NULL, VM_READ | VM_WRITE | VM_ANON|VM_GROWSUP, 0);
+            
+            intr_set_status(old);
+            return (void*)vaddr_start;
+        }
+        intr_set_status(old);
+        return NULL; // 彻底没空间了
+    }
 }
 
 // get vaddr's pte pointer
@@ -239,7 +324,7 @@ static void* palloc(struct buddy_pool* m_pool) {
     pg->ref_count = 1;
 
     // 将 struct page 转换为物理地址返回
-    uint32_t page_phyaddr = PAGE_TO_ADDR(&kernel_pool,pg);
+    uint32_t page_phyaddr = PAGE_TO_ADDR(m_pool,pg);
 
     intr_set_status(old);
     return (void *)page_phyaddr;
@@ -281,34 +366,107 @@ static void page_table_add(void* _vaddr,void* _page_phyaddr){
 	intr_set_status(old);
 }
 
-// allocate [pg_cnt] pages from [pf] phy-mem pool
-// if successful, return the virtual addr
-void* malloc_page(enum pool_flags pf,uint32_t pg_cnt){
+// 根据请求的页面数计算需要的伙伴系统 order
+// 主要用于查找最大的，但是小于pg_cnt的一个2^order
+// 例如对于 31，会找到 2^4=16 ，其中order为4
+static uint32_t pg_cnt_to_order(uint32_t pg_cnt) {
+    uint32_t order = 0;
+    while ((1U << order) < pg_cnt) {
+        order++;
+    }
+    return order;
+}
 
-	// uint32_t max_page = (pf==PF_KERNEL?kernel_pool.pool_pages:user_pool.pool_pages);
-	// ASSERT(pg_cnt>0&&pg_cnt<max_page);
+// 由于palloc_pages只能申请2的幂次块，因此该函数用于处理申请129这种非2的幂次的情况
+// 对于 129页，我们会先申请一个256页的块
+// 然后循环依次将剩下的127块释放
+static struct page* palloc_pages_exact(struct buddy_pool* bpool, uint32_t pg_cnt) {
+    uint32_t order = pg_cnt_to_order(pg_cnt);
+    
+    // 申请 2^order 个物理页
+    struct page* first_pg = palloc_pages(bpool, order);
+    if (first_pg == NULL) return NULL;
 
-	void* vaddr_start = vaddr_alloc(pf,pg_cnt);
-	if(vaddr_start==NULL){
-		return NULL;
+	// 先全部锁死，不准合并，之后再精准释放
+	for (uint32_t i = 0; i < (1U << order); i++) {
+    	(first_pg + i)->flags |= 1; 
 	}
 
-	uint32_t vaddr = (uint32_t)vaddr_start,cnt = pg_cnt;
-	struct buddy_pool* mem_pool = pf&PF_KERNEL?&kernel_pool:&user_pool;
+    // 将多余的物理页 [pg_cnt, 2^order) 释放回伙伴系统
+    // 这里应该是安全的，因为伙伴系统会自动合并这些小块
+    for (uint32_t i = pg_cnt; i < (1U << order); i++) {
+		struct page* target = first_pg + i;
+		target->flags &= ~1; // 只解锁这一页
+		target->order = 0; // 归还前必须重置
+        // 释放时必须指定 order 为 0，让它一页页合并回去
+        pfree_pages(bpool, target, 0);
+    }
 
-	// virtual-page is consecutive but phy-page is not
-	// we can only allocate phy-page one by one
-	// so we need create the relation between virtual-page and phy-page one by one
-	while (cnt-->0){
-		void* page_phyaddr = palloc(mem_pool);
-		if(page_phyaddr==NULL){
-			return NULL;
-		}
-		
-		page_table_add((void*)vaddr,page_phyaddr);
-		vaddr+=PG_SIZE;
-	}
-	return vaddr_start;
+    return first_pg;
+}
+
+// 分配物理上连续的若干页，虚拟地址也连续
+void* malloc_page(enum pool_flags pf, uint32_t pg_cnt) {
+    ASSERT(pg_cnt > 0);
+    
+    // 统一申请虚拟地址 (申请多少给多少)
+    // 通过该接口申请的页默认使用大内存分配
+    bool force_mmap = pg_cnt>=32?true:false;
+    void* vaddr_start = vaddr_alloc(pf, pg_cnt, force_mmap);
+    if (vaddr_start == NULL) return NULL;
+
+    struct buddy_pool* mem_pool = (pf & PF_KERNEL) ? &kernel_pool : &user_pool;
+
+    // 统一申请物理地址，这些物理地址是物理上连续的
+    struct page* first_pg = palloc_pages_exact(mem_pool, pg_cnt);
+    if (first_pg == NULL) {
+        // 这里可以做 vaddr_remove 的回滚
+		// 但是我们目前先直接PANIC
+		PANIC("malloc_page: first_pg == NULL");
+        return NULL;
+    }
+
+    // 统一建立页表映射
+    uint32_t vaddr = (uint32_t)vaddr_start;
+    uint32_t paddr = PAGE_TO_ADDR(mem_pool, first_pg);
+    
+    for (uint32_t i = 0; i < pg_cnt; i++) {
+        page_table_add((void*)vaddr, (void*)paddr);
+        // 设置引用计数，每一页都应该为 1，因为它们现在被映射了
+        (first_pg + i)->ref_count = 1;
+        
+        vaddr += PG_SIZE;
+        paddr += PG_SIZE; 
+    }
+
+	// put_str("Mapped PADDR: "); put_int(paddr); put_str("\n");
+	
+	// put_str("vaddr_start: "); put_int(vaddr_start);put_str("\n");
+
+    return vaddr_start;
+}
+
+// 分配虚拟地址连续，但是物理地址不连续的若干页
+static void* vmalloc_page(enum pool_flags pf, uint32_t pg_cnt,bool force_mmap) {
+    // 获取虚拟地址（内核走位图/固定堆，用户走 VMA Gap）
+    void* vaddr_start = vaddr_alloc(pf, pg_cnt,force_mmap);
+    if (vaddr_start == NULL) return NULL;
+
+    if (pf == PF_KERNEL) { // 内核态，必须立即分配物理页，内核不容许 Page Fault（除非是置换逻辑）
+        uint32_t vaddr = (uint32_t)vaddr_start;
+        uint32_t cnt = pg_cnt;
+        while (cnt-- > 0) {
+            void* page_phyaddr = palloc(&kernel_pool);
+            if (page_phyaddr == NULL) return NULL; // 实际中内核分配失败通常是致命的
+            page_table_add((void*)vaddr, page_phyaddr);
+            vaddr += PG_SIZE;
+        }
+    } else {
+        // 用户态，既然 vaddr_alloc 已经 add_vma 了，我们直接返回！
+        // 物理页？不存在的。等用户写数据时，swap_page 会来补齐。
+    }
+
+    return vaddr_start;
 }
 
 // allocate 1 page from kernel phy-mem pool
@@ -335,30 +493,24 @@ void* get_user_pages(uint32_t pg_cnt){
 // create relationship between vaddr and paddr in [pf] pool
 // we cannot control the value of the paddr !!! it is decided by OS !
 // only surport to allocate 1 page
+// 引入vma后，此函数只管分物理页和挂页表。
+// 我们靠 vma_find_gap 函数来保证虚拟地址不冲突
 void* mapping_v2p(enum pool_flags pf,uint32_t vaddr){
 	struct buddy_pool* mem_pool = pf&PF_KERNEL?&kernel_pool:&user_pool;
 	lock_acquire(&mem_pool->lock);
 	struct task_struct* cur = get_running_task_struct();
 	int32_t bit_idx = -1;
 
-	if(cur->pgdir!=NULL&&pf==PF_USER){
-		// if cur is a user proc
-		// check which pages do vaddr in
-		bit_idx = (vaddr-cur->userprog_vaddr.vaddr_start)/PG_SIZE;
-		ASSERT(bit_idx>=0);
-		bitmap_set(&cur->userprog_vaddr.vaddr_bitmap,bit_idx,1);
-
-	}else if(cur->pgdir==NULL&&pf==PF_KERNEL){
+	// 内核态下，我们仍然先保留位图来管理虚拟地址空间
+	// 用户态下我们使用vma来管理
+	if(cur->pgdir==NULL&&pf==PF_KERNEL){
 		// if cur is a kernel thread
 		bit_idx = (vaddr-kernel_vaddr.vaddr_start)/PG_SIZE;
 		ASSERT(bit_idx>0);
 		bitmap_set(&kernel_vaddr.vaddr_bitmap,bit_idx,1);
-	}else{
-		printk("PANIC Info: name=%s, pgdir=%x, pf=%d, vaddr=%x\n", 
-                cur->name, cur->pgdir, pf, vaddr);
-		PANIC("get_a_page: not allow kernel to alloc userspace or user to alloc kernelspace by get_a_page!!!\n");
 	}
-
+	// 由于我们在 add_vma 时已经确认了这块地的合法性
+	// 因此此处不用再去操作相关的东西了，只用绑定物理地址和虚拟地址就行
 	void *page_phyaddr = palloc(mem_pool);
 	if(page_phyaddr==NULL){
 		lock_release(&mem_pool->lock);
@@ -370,7 +522,6 @@ void* mapping_v2p(enum pool_flags pf,uint32_t vaddr){
 
 	return (void*)vaddr;
 }
-
 // use vaddr to get paddr
 uint32_t addr_v2p(uint32_t vaddr){
 	// all of the ptrs is vaddr
@@ -420,6 +571,8 @@ void* do_alloc(uint32_t size, enum pool_flags PF){
 	struct buddy_pool* mem_pool;
 	struct mem_block_desc* descs;
 	struct task_struct* cur_thread = get_running_task_struct();
+    // 阈值128KB。Linux 常用这个值作为 brk 和 mmap 的分界线
+    const uint32_t MMAP_THRESHOLD = 128 * 1024;
 
 	// which pool will we use
 	if(PF == PF_KERNEL){
@@ -445,7 +598,9 @@ void* do_alloc(uint32_t size, enum pool_flags PF){
 	if(size>1024){
 		uint32_t page_cnt = DIV_ROUND_UP(size+sizeof(struct arena),PG_SIZE);
 
-		a = malloc_page(PF,page_cnt);
+        bool force_mmap = (PF == PF_USER && size > MMAP_THRESHOLD);
+
+		a = vmalloc_page(PF,page_cnt,force_mmap);
 
 		if(a!=NULL){
 			memset(a,0,page_cnt*PG_SIZE);
@@ -474,7 +629,8 @@ void* do_alloc(uint32_t size, enum pool_flags PF){
 		// if free list is empty, then allocate an arena
 		if(dlist_empty(&descs[desc_idx].free_list)){
 			
-			a = malloc_page(PF,1);
+            // 小空间默认走brk逻辑
+			a = vmalloc_page(PF,1,false);
 			
 			if(a==NULL){
 				lock_release(&mem_pool->lock);
@@ -503,6 +659,7 @@ void* do_alloc(uint32_t size, enum pool_flags PF){
 		// mem_block has member dlist_elem
 		struct dlist_elem *tmp = dlist_pop_front(&(descs[desc_idx].free_list));
 		b = member_to_entry(struct mem_block,free_elem,tmp);
+        
 		memset(b,0,descs[desc_idx].block_size);
 
 		a= block2arena(b);
@@ -551,7 +708,7 @@ static void page_table_pte_remove(uint32_t vaddr){
 }
 
 // remove [pg_cnt] virtual pages, the beginning of v-page is _vaddr
-static void vaddr_remove(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt){
+void vaddr_remove(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt){
 	enum intr_status old = intr_disable();
 	uint32_t bit_idx_start = 0,vaddr = (uint32_t)_vaddr,cnt=0;
 	if(pf==PF_KERNEL){
@@ -560,57 +717,74 @@ static void vaddr_remove(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt){
 			bitmap_set(&kernel_vaddr.vaddr_bitmap,bit_idx_start+cnt++,0);
 		}
 	}else{
-		struct task_struct* cur_thread = get_running_task_struct();
-		bit_idx_start = (vaddr-cur_thread->userprog_vaddr.vaddr_start)/PG_SIZE;
-		while(cnt<pg_cnt){
-			bitmap_set(&cur_thread->userprog_vaddr.vaddr_bitmap,bit_idx_start+cnt++,0);
-		}
+		// 用户态, 使用 VMA 逻辑
+        struct task_struct* cur = get_running_task_struct();
+        uint32_t start = (uint32_t)_vaddr;
+        uint32_t end = start + pg_cnt * PG_SIZE;
+
+        struct vm_area* vma = find_vma(cur, start);
+        if (vma == NULL) return;
+
+        // 若完全覆盖，此时直接移除vma
+        if (start == vma->vma_start && end == vma->vma_end) {
+            remove_vma(vma);
+        } else if (start == vma->vma_start && end < vma->vma_end) { // 若释放开头，则起点后移
+            vma->vma_start = end;
+            if (vma->vma_inode) {
+                vma->vma_pgoff += pg_cnt;
+            }
+        } else if (start > vma->vma_start && end == vma->vma_end) { // 若释放末尾，则终点前移
+            vma->vma_end = start;
+        } else if (start > vma->vma_start && end < vma->vma_end) { // 若挖洞（释放中间部分），则分裂
+            // 先在 end 处切一刀，分成 [vma_start, end] 和 [end, vma_end]
+            struct vm_area* next_part = vma_split(vma, end);
+            if (next_part == NULL) {
+                PANIC("vaddr_remove: split failed, out of memory!");
+            }
+            // 此时 vma 变成了 [vma_start, end]，现在把它变成 [vma_start, start]
+            // 这样中间 [start, end] 这一段就自然被“挖除”了
+            vma->vma_end = start;
+        }
+        // 如果释放的虚拟内存位于堆顶区域，同步更新brk
+        if (end >= cur->brk && start < cur->brk) {
+            cur->brk = start;
+        }
 	}
 	intr_set_status(old);
 }
 
-// recycle [pg_cnt] phy pages whose virtual addr is begin with _vaddr
-void mfree_page(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt){
-	uint32_t pg_phy_addr;
-	uint32_t vaddr = (int32_t)_vaddr,page_cnt = 0;
-	ASSERT(pg_cnt>=1&&vaddr%PG_SIZE==0);
-	pg_phy_addr = addr_v2p(vaddr);
-	// 0x102000 = (low 1MB kernel space) + (kernel pdt 1KB) = (kernel pt 1KB) 
-	ASSERT((pg_phy_addr%PG_SIZE)==0&&pg_phy_addr>=0x102000);
+// 仅释放物理页映射，保留虚拟地址空间 (不调用 vaddr_remove) 
+// 适用于：堆(brk)中 Arena 的释放，保持堆的连续性
+static void mfree_physical_pages(void* _vaddr, uint32_t pg_cnt) {
+    uint32_t vaddr = (uint32_t)_vaddr;
+    
+    for (uint32_t i = 0; i < pg_cnt; i++) {
+        uint32_t cur_vaddr = vaddr + i * PG_SIZE;
+        
+        // 检查页表
+        uint32_t* pte = pte_ptr(cur_vaddr);
+        // 如果 P 位为 1，说明已经建立了物理映射，需要回收
+        if (pte && (*pte & PG_P_1)) { 
+            uint32_t pg_phy_addr = addr_v2p(cur_vaddr);
+            
+            // 释放物理页返回物理内存池
+            pfree(pg_phy_addr);
+            
+            // 清除页表项 (PTE) 并刷新 TLB
+            // 以便后续触发缺页操作重新分配
+            page_table_pte_remove(cur_vaddr);
+        }
+    }
+}
 
-	if(pg_phy_addr>=user_pool.phy_addr_start){
-		vaddr -= PG_SIZE;
-		// we can only allocate or release the phy pages one by one
-		while(page_cnt<pg_cnt){
-			vaddr += PG_SIZE;
-			pg_phy_addr = addr_v2p(vaddr);
-
-			ASSERT((pg_phy_addr%PG_SIZE)==0&&pg_phy_addr>=user_pool.phy_addr_start);
-			pfree(pg_phy_addr);
-
-			page_table_pte_remove(vaddr);
-
-			page_cnt++;
-		}
-		// we can allocate or release the virtual pages continuously
-		vaddr_remove(pf,_vaddr,pg_cnt);
-	}else{
-		vaddr -=PG_SIZE;
-		while(page_cnt<pg_cnt){
-			vaddr+=PG_SIZE;
-			pg_phy_addr = addr_v2p(vaddr);
-			// printk("pg_phy_addr:%x\n",pg_phy_addr);
-			ASSERT((pg_phy_addr%PG_SIZE)==0&&pg_phy_addr>=kernel_pool.phy_addr_start&&pg_phy_addr<user_pool.phy_addr_start);
-			
-			pfree(pg_phy_addr);
-
-			page_table_pte_remove(vaddr);
-
-			page_cnt++;
-		}
-
-		vaddr_remove(pf,_vaddr,pg_cnt);
-	}
+// 释放物理页映射，并销毁虚拟地址空间记录
+// 适用于：大内存(mmap)释放，或者内核固定分配的释放
+void mfree_page(enum pool_flags pf, void* _vaddr, uint32_t pg_cnt) {
+    // 先回收物理部分
+    mfree_physical_pages(_vaddr, pg_cnt);
+    
+    // 再回收虚拟部分（位图或 VMA）
+    vaddr_remove(pf, _vaddr, pg_cnt);
 }
 
 void kfree(void* ptr) {
@@ -624,39 +798,94 @@ void ufree(void* ptr) {
 }
 
 // 核心的内存释放引擎
+// 用户通常的malloc和free操作是不会将堆的vma挖出洞来的，只是会回收物理内存而已
+// 除非用户手动调用munmap等操作，不然的话即使释放到堆vma中间的部分，他也只是物理清空
+// 虚拟不收缩，直到重新访问时触发页错误来分配
 void do_free(void* ptr,enum pool_flags PF){
-	ASSERT(ptr!=NULL);
-	if(ptr!=NULL){
+    // put_str("ptr: ");put_int(ptr);put_str("\n");
+	
+    ASSERT(ptr!=NULL);
+	if(ptr==NULL) return;
 
-		struct buddy_pool* mem_pool = (PF == PF_KERNEL) ? &kernel_pool : &user_pool;
+    struct buddy_pool* mem_pool = (PF == PF_KERNEL) ? &kernel_pool : &user_pool;
 
-		lock_acquire(&mem_pool->lock);
-		struct mem_block* b = ptr;
-		struct arena* a = block2arena(b);
-		if(!(a->large==0||a->large==1)){
-			printk("a large is: %d, addr is: %x\n",a->large,ptr);
-		}
-		
-		ASSERT(a->large==0||a->large==1);
-		if(a->desc==NULL&&a->large==true){
-			mfree_page(PF,a,a->cnt);
-		}else{
-			dlist_push_back(&a->desc->free_list,&b->free_elem);
-			// check if all mem_block in the arena is empty
-			// if so, then release the whole arena 
-			if(++(a->cnt)==a->desc->block_per_arena){
-				uint32_t block_idx;
-				// remove free_elem in the mem_block from the free_list one by one 
-				for(block_idx=0;block_idx<a->desc->block_per_arena;block_idx++){
-					struct mem_block* b = arena2block(a,block_idx);
-					ASSERT(dlist_find(&a->desc->free_list,&b->free_elem));
-					dlist_remove(&b->free_elem);
-				}
-				mfree_page(PF,a,1);
-			}
-		}
-		lock_release(&mem_pool->lock);
-	}
+    lock_acquire(&mem_pool->lock);
+    
+    struct mem_block* b = ptr;
+    struct arena* a = block2arena(b);
+
+    // 找到进程唯一的堆 VMA
+    // 它是通过 execv 初始化，且由 sys_brk 负责伸缩的那个区域
+    // 它是第一个被创建的，具有VM_READ|VM_WRITE|VM_GROWSUP|VM_ANON属性的区域
+    struct task_struct* cur = get_running_task_struct();
+    struct vm_area* heap_vma = find_vma_condition(cur, VM_READ|VM_WRITE|VM_GROWSUP|VM_ANON);
+
+    if(heap_vma==NULL&&PF == PF_USER){
+        PANIC("do_free fail to find heap_vma!\n");
+    }
+
+    bool is_in_heap = false;
+    // 判定当前释放的 Arena 是否落在堆范围内
+    // 只要起始地址落入即可，因为 Arena 是连续分配的
+    uint32_t addr = (uint32_t)a;
+    if(PF!=PF_KERNEL){
+        is_in_heap = (addr >= heap_vma->vma_start && addr < heap_vma->vma_end);
+    }
+    
+
+    uint32_t vaddr = (uint32_t)ptr;
+    // 物理检查，不依赖内存读取，直接查页表
+    uint32_t* pte = pte_ptr(vaddr);
+    
+    // 如果 PTE 根本不存在，或者 P 位为 0
+    if (pte == NULL || !(*pte & PG_P_1)) {
+        // 只有当这个地址连 VMA 合同都没有的时候，才是真正的非法释放
+        struct vm_area* vma = find_vma(get_running_task_struct(), vaddr);
+        if (vma == NULL) {
+            printk("CRITICAL: Invalid Free at %x (No VMA)!\n", vaddr);
+            PANIC("Invalid free!");
+        } else {
+            // 否则只是惰性分配导致的空页面释放
+            // 由于我们只在触发页错误时采取分配物理内存
+            // 如果一个页被逻辑上分配了虚拟内存后，但是从来没有去访问过
+            // 那么这个页是不会有对应的物理内存的，如果对这样的页进行释放的话我们直接返回就行
+            // printk("INFO: %x was touched before, but P-bit is gone. Page-table value: %x\n", vaddr, (pte ? *pte : 0));
+            debug_printk("DEBUG: Pointer %x has no physical page. (Page already recycled)\n", vaddr);
+            return; 
+        }
+    }
+
+    ASSERT(a->large==0||a->large==1);
+
+    if(a->desc==NULL&&a->large==true){
+        if (is_in_heap) {
+            // 堆内大对象。只回收物理内存，保留虚拟占位，防止堆穿孔。
+            mfree_physical_pages(a, a->cnt);
+        } else {
+            // 独立映射区对象。物理和虚拟记录（VMA）一并销毁。
+            mfree_page(PF, a, a->cnt);
+        }
+    }else{
+
+        dlist_push_back(&a->desc->free_list,&b->free_elem);
+        // check if all mem_block in the arena is empty
+        // if so, then release the whole arena 
+        if(++(a->cnt)==a->desc->block_per_arena){
+            uint32_t block_idx;
+            // remove free_elem in the mem_block from the free_list one by one 
+            for(block_idx=0;block_idx<a->desc->block_per_arena;block_idx++){
+                struct mem_block* b = arena2block(a,block_idx);
+                ASSERT(dlist_find(&a->desc->free_list,&b->free_elem));
+                dlist_remove(&b->free_elem);
+            }
+            // 物理回收，节省物理内存
+            // 虚拟内存保留，维持堆的连续性，不调用 vaddr_remove
+            // 后续如果再被分配到，可以通过缺页中断来重新进行物理页的分配
+            mfree_physical_pages(a,1);
+        }
+    }
+    lock_release(&mem_pool->lock);
+	
 }
 
 void sys_free_mem(){
@@ -733,15 +962,18 @@ void copy_page_tables(struct task_struct* from, struct task_struct* to, void* pa
 	intr_set_status(old_status);
 }
 
-static bool is_vaddr_mapped(struct task_struct* cur, uint32_t vaddr) {
-    // 确保是用户空间地址
-    if (vaddr < cur->userprog_vaddr.vaddr_start || vaddr >= 0xc0000000) {
-        return false;
+
+static bool is_vaddr_mapped(struct task_struct* task, uint32_t vaddr) {
+    // 先检查页目录项 
+    uint32_t* pde = pde_ptr(vaddr);
+    if (!(*pde & PG_P_1)) {
+        // 如果 PDE 都不存在，说明对应的页表页还没分配，物理页肯定没映射
+        return false; 
     }
-    // 计算在位图中的索引
-    uint32_t bit_idx = (vaddr - cur->userprog_vaddr.vaddr_start) / PG_SIZE;
-    // 检查位图 bitmap_bit_check
-    return bitmap_bit_check(&cur->userprog_vaddr.vaddr_bitmap, bit_idx);
+
+    // 只有 PDE 存在，访问 pte_ptr 才不会导致崩溃
+    uint32_t* pte = pte_ptr(vaddr);
+    return (*pte & PG_P_1);
 }
 
 // 该函数对应两者情况
@@ -757,19 +989,28 @@ void swap_page(uint32_t err_code,void* err_vaddr){
 	// 硬件给出的 vaddr 可能是 0xbffffabc，我们需要把它对齐到 0xbffff000
     uint32_t page_vaddr = vaddr & 0xfffff000;
 
+    // 防止swap_page递归重入，掩盖错误的第一现场
+    // 如果报错地址小于 0x1000（第一页），通常不是懒加载，而是代码 Bug，
+    // 直接杀掉，不要尝试查找 VMA：
+    if (vaddr < 0x1000) {
+        printk("CRITICAL: Null Pointer Access at %x! Terminating.\n", vaddr);
+        while(1);
+    }
+
 	// 先尝试在 VMA 合同库里找找看，这个地址合法吗？
     struct vm_area* vma = find_vma(cur, page_vaddr);
 
+#ifdef DEBUG_VMA
+    printk("page_vaddr:%x vma:%x\n",page_vaddr,vma);
+#endif
+    // 如果 vma 都不存在，那么说明不是懒加载，而是真正的段错误 
 	if (vma == NULL) {
-		printk("VMA Search Failed! vaddr: %x\n", page_vaddr);
-		// 打印当前进程所有的 vma 范围，看看 0xBFFFF000 在不在里面
+        printk("VMA Search Failed! vaddr: %x\n", page_vaddr);
+        // vma = find_vma_condition(cur, VM_READ|VM_WRITE|VM_GROWSDOWN|VM_ANON);
 		goto segmentation_fault;
 	}
+    
 	
-	// 如果 vma 都不存在，那么说明不是懒加载，而是真正的段错误 
-	if (vma == NULL) {
-        goto segmentation_fault;
-    }
 
 	// 尝试栈自动扩容，由于我们在process.c中的start_process函数中
 	// 只默认为用户进程栈的高4KB映射了物理内存
@@ -790,16 +1031,20 @@ void swap_page(uint32_t err_code,void* err_vaddr){
 	// 检查是否已经映射过（物理页是否已存在）
     // 如果 is_vaddr_mapped 为 true 却依然触发缺页，可能是 P=0 但位图没清，
     // 在没有置换到交换分区（Swap Partition）前，这种情况通常是异常。
+    
 	if (is_vaddr_mapped(cur, page_vaddr)) {
         // 如果物理页已经存在，但仍然缺页，可能是权限问题（比如写保护）
         // 但写保护通常由 write_protect 处理，这里直接 panic 方便调试
         PANIC("swap_page: page already mapped but fault again!");
     }
-
+    // while(1);
 	// 合法合同且尚未映射，开始分配物理页
     // mapping_v2p 内部会完成 palloc 物理页 + 修改位图 + 建立页表映射
-    mapping_v2p(PF_USER, page_vaddr);
-
+    void* ret_vaddr =  mapping_v2p(PF_USER, page_vaddr);
+    if (ret_vaddr == NULL) {
+        // 物理内存耗尽，且没有置换算法
+        PANIC("Out of Memory! Cannot allocate physical page for vaddr\n");
+    }
 
 	// 根据合同内容初始化物理页数据
     if (vma->vma_inode != NULL) {
@@ -893,21 +1138,26 @@ void write_protect(uint32_t err_code, void* err_vaddr) {
 	
     struct task_struct* cur = get_running_task_struct();
 
+    debug_printk("write_protect:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
+
     // 内核触发写保护：直接 PANIC，因为内核不参与 COW
     if (cur->pgdir == NULL || (uint32_t)err_vaddr >= 0xC0000000) {
         PANIC("Kernel Write Protection Error!");
     }
 
 	uint32_t vaddr = (uint32_t)err_vaddr;
+
+    struct vm_area* vma = find_vma(cur, vaddr);
+    if (vma == NULL){
+        PANIC("write_protect: vma == NULL");
+    }
     
 	// 先判断当前发送只读页错误的地址是不是位于数据段
 	// 要是位于代码段的话那么本来也就不让改写
 	// 直接发信号终止程序
 
-	// 现在我们已经开始接入 vma 了
-	// 在后续的实现中我们需要改进成使用 vma->flags & PF_W
 	// 来判断是否为代码段
-	if (vaddr < cur->end_code) {
+    if (!(vma->vma_flags & VM_WRITE)) {
         printk("PID %d (%s) attempt to write Read-Only Segment at %x\n", cur->pid, cur->name, vaddr);
         send_signal(cur, SIGSEGV);
 		intr_set_status(_old);
@@ -940,74 +1190,77 @@ void sys_test(){
 
 }
 
-// 检查虚拟地址池中从 vaddr 开始的 pg_cnt 个页是否都是空闲的
-static bool vaddr_range_is_free(struct virtual_addr* vaddr_pool, uint32_t vaddr, uint32_t pg_cnt) {
-    // 计算该虚拟地址在位图中的起始偏移（第几个 bit）
-    uint32_t bit_idx_start = (vaddr - vaddr_pool->vaddr_start) / PG_SIZE;
-    
-    // 逐页检查位图状态
-	uint32_t i;
-    for (i = 0; i < pg_cnt; i++) {
-        // 如果 bitmap_bit_check 返回 true，说明该位是 1，即已被占用
-        if (bitmap_bit_check(&vaddr_pool->vaddr_bitmap, bit_idx_start + i)) {
-            return false; 
+// 查找带有特定权限的vma，若有多个，返回第一个
+static struct vm_area* find_vma_condition(struct task_struct* task, uint32_t flags){
+    struct vm_area* heap_vma = NULL;
+    struct dlist_elem* e = task->vma_list.head.next;
+    while (e != &task->vma_list.tail) {
+        struct vm_area* v = member_to_entry(struct vm_area, vma_tag, e);
+        // 堆的特征：起始地址对齐，且没有关联文件 inode
+        // 最好不要用find_vma来找，因为
+        if (v->vma_flags == (flags)) {
+            heap_vma = v;
+            break;
         }
+        e = e->next;
     }
-    return true;
+    return heap_vma;
 }
 
 // 修改进程的堆顶边界 (brk) 
+// 堆顶边界可以以任意值扩展
+// 但是实际的物理映射的建立和销毁是以页为单位的
+// 也就是说假如没有页对齐的话，用户即使只向上推1B，我们也会建立一个页的物理页来对齐进行映射
+// 在此之后再怎么推，只要不超过这个页，那么这个映射就不会被修改，而只是单纯的推高brk和vma的end的数值
+// 只有一个页的虚拟地址被完全回收时，我们才会将相应的物理页销毁，否则即使只剩1B我们也得留着
 uint32_t sys_brk(uint32_t new_brk) {
     struct task_struct* cur = get_running_task_struct();
-	// 若new_brk == 0，表示是查询当前堆顶
     if (new_brk == 0) return cur->brk;
-	// 非法缩减，将堆顶缩到数据区了，缩减失败，同样返回当前堆顶
     if (new_brk < cur->end_data) return cur->brk;
 
-    uint32_t old_brk_page = cur->brk & 0xfffff000;
-    uint32_t new_brk_page = new_brk & 0xfffff000;
+    struct vm_area* heap_vma = find_vma_condition(cur, VM_READ|VM_WRITE|VM_GROWSUP|VM_ANON);
+    ASSERT(heap_vma != NULL);
 
-    if (new_brk > cur->brk) {
-        if (new_brk_page > old_brk_page) {
-            // 安全检查, 检查 [old_brk_page + PG_SIZE, new_brk_page] 范围在位图中是否可用
-            // 这一步可以防止堆撞上栈或 mmap 区域
-			// 需要新分配的起始虚拟地址（当前堆顶所在页的下一页）
-            uint32_t start_vaddr = old_brk_page + PG_SIZE;
-            // 需要分配的总页数
-            uint32_t pg_cnt = (new_brk_page - old_brk_page) / PG_SIZE;
-            if (!vaddr_range_is_free(&cur->userprog_vaddr, start_vaddr, pg_cnt)) {
-                printk("sys_brk: vaddr collision! range [%x, %x] is occupied.\n", 
-                        start_vaddr, new_brk_page);
-				PANIC("sys_brk: vaddr_range_is_free failed!\n");
-                return cur->brk; // 发现前方有 mmap 或其他映射，扩张失败
-            }
+    uint32_t old_brk_aligned = PAGE_ALIGN_UP(cur->brk);
+    uint32_t new_brk_aligned = PAGE_ALIGN_UP(new_brk);
+
+    //  缩小堆
+    if (new_brk < cur->brk) {
+        // 只有当对齐后的边界发生回退，才需要真正“收地”
+        if (new_brk_aligned < old_brk_aligned) {
+            // 释放不再需要的物理页，并清理页表映射
+            // 释放范围是 [new_brk_aligned, old_brk_aligned]
+            uint32_t release_pg_cnt = (old_brk_aligned - new_brk_aligned) / PG_SIZE;
+            mfree_page(PF_USER, (void*)new_brk_aligned, release_pg_cnt);
             
-            //  分配
-            uint32_t vaddr = start_vaddr;
-            while (vaddr <= new_brk_page) {
-                if (mapping_v2p(PF_USER, vaddr) == NULL) {
-                    // 这里的错误处理：如果分配了一半失败了，理论上应该回滚，
-                    // 但简易内核可以记录当前分配到的位置
-					PANIC("sys_brk: mapping_v2p failed!\n");
-                    return cur->brk; 
-                }
-                vaddr += PG_SIZE;
-            }
+            // 更新 VMA 边界
+            heap_vma->vma_end = new_brk_aligned;
         }
-    } else if (new_brk < cur->brk) {
-        // 缩减时的安全检查：不能释放包含 end_data 的那一页
-        uint32_t data_end_page = cur->end_data & 0xfffff000;
-        
-        if (new_brk_page < old_brk_page) {
-            uint32_t vaddr = old_brk_page;
-            // 只有当 vaddr 超过了数据段所在的页，才允许释放
-            while (vaddr > new_brk_page && vaddr > data_end_page) {
-                mfree_page(PF_USER, (void*)vaddr, 1);
-                vaddr -= PG_SIZE;
-            }
+        cur->brk = new_brk; // 记录用户的精确 brk
+        return cur->brk;
+    }
+
+    // 扩大堆
+    // 如果对齐后的边界没变，说明还在同一页内，直接更新 brk 即可
+    if (new_brk_aligned <= old_brk_aligned) {
+        cur->brk = new_brk;
+        return cur->brk;
+    }
+
+    // 检查是否撞上后续 VMA
+    struct dlist_elem* next_elem = heap_vma->vma_tag.next;
+    if (next_elem != &cur->vma_list.tail) {
+        struct vm_area* next_vma = member_to_entry(struct vm_area, vma_tag, next_elem);
+        if (new_brk_aligned > next_vma->vma_start) {
+            return cur->brk; // 空间不足
         }
     }
 
+    if (new_brk_aligned >= USER_STACK_BASE) return cur->brk;
+
+    // 更新 VMA 边界（画饼，不实际分配内容，直到发生页错误，让swap_page来分配）
+    heap_vma->vma_end = new_brk_aligned;
     cur->brk = new_brk;
+
     return cur->brk;
 }

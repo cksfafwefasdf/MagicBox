@@ -131,7 +131,7 @@ struct task_struct{
 	// 避免了循环依赖
 	struct dlist vma_list;
 
-	struct virtual_addr userprog_vaddr;
+	// struct virtual_addr userprog_vaddr;
 	struct mem_block_desc u_block_desc[DESC_TYPE_CNT];
 	uint32_t cwd_inode_nr;
 	int16_t parent_pid;

@@ -92,9 +92,9 @@ void user_vaddr_space_clear(struct task_struct* cur) {
     release_pg_table(cur);
 
     // 重置用户虚拟地址位图，让 execv 后的进程从干净的状态开始
-    if (cur->userprog_vaddr.vaddr_bitmap.bits != NULL) {
-        memset(cur->userprog_vaddr.vaddr_bitmap.bits, 0, cur->userprog_vaddr.vaddr_bitmap.btmp_bytes_len);
-    }
+    // if (cur->userprog_vaddr.vaddr_bitmap.bits != NULL) {
+    //     memset(cur->userprog_vaddr.vaddr_bitmap.bits, 0, cur->userprog_vaddr.vaddr_bitmap.btmp_bytes_len);
+    // }
 
     // 刷新 TLB，确保旧映射彻底消失
     page_dir_activate(cur);
@@ -117,8 +117,13 @@ void start_process(void* filename_){
 	proc_stack->eip = function; // The addr of the user process that is to be executed
 	proc_stack->cs = SELECTOR_U_CODE;
 	proc_stack->eflags = (EFLAGS_IOPL_0|EFLAGS_MBS|EFLAGS_IF_1);
-	// 为用户栈分配物理地址，我们在此只分配了一个页的大小给用户栈
-	proc_stack->esp = (void*)((uint32_t)mapping_v2p(PF_USER,USER_STACK3_VADDR)+PG_SIZE);
+	// 这个函数主要是main内核线程用来起init进程用的
+	// 为了在init进程中一开始就发生页错误，我们先给他预留4KB的栈空间
+	// proc_stack->esp = (void*)((uint32_t)mapping_v2p(PF_USER,USER_STACK3_VADDR)+PG_SIZE);
+
+    proc_stack->esp = (void*)(USER_STACK_BASE);
+
+
 	proc_stack->ss = SELECTOR_U_STACK;
 	asm volatile ("movl %0,%%esp;jmp intr_exit"::"g"(proc_stack):"memory");
 }
@@ -166,14 +171,14 @@ uint32_t* create_page_dir(void){
 	return page_dir_vaddr;
 }
 
-void create_user_vaddr_bitmap(struct task_struct* user_prog){
-	user_prog->userprog_vaddr.vaddr_start = USER_VADDR_START;
-	// 除以8是因为8位1字节
-	uint32_t bitmap_pg_cnt = DIV_ROUND_UP((0xc0000000-USER_VADDR_START)/PG_SIZE/8,PG_SIZE);
-	user_prog->userprog_vaddr.vaddr_bitmap.bits = get_kernel_pages(bitmap_pg_cnt);
-	user_prog->userprog_vaddr.vaddr_bitmap.btmp_bytes_len = (0xc0000000-USER_VADDR_START)/PG_SIZE/8;
-	bitmap_init(&user_prog->userprog_vaddr.vaddr_bitmap);
-}
+// void create_user_vaddr_bitmap(struct task_struct* user_prog){
+// 	user_prog->userprog_vaddr.vaddr_start = USER_VADDR_START;
+// 	// 除以8是因为8位1字节
+// 	uint32_t bitmap_pg_cnt = DIV_ROUND_UP((0xc0000000-USER_VADDR_START)/PG_SIZE/8,PG_SIZE);
+// 	user_prog->userprog_vaddr.vaddr_bitmap.bits = get_kernel_pages(bitmap_pg_cnt);
+// 	user_prog->userprog_vaddr.vaddr_bitmap.btmp_bytes_len = (0xc0000000-USER_VADDR_START)/PG_SIZE/8;
+// 	bitmap_init(&user_prog->userprog_vaddr.vaddr_bitmap);
+// }
 
 // 主要是用来给main线程起用户进程
 // 当一切准备就绪后，起用户进程都是通过 fork + execv 来起的
@@ -186,12 +191,20 @@ void process_execute(void* filename,char* name){
 	prio = DEFAULT_PRIO;
 
 	init_thread(thread,name,prio);
-	create_user_vaddr_bitmap(thread);
+	// create_user_vaddr_bitmap(thread);
 	// start_process(filename) will be called by kernel_thread 
 	thread_create(thread,start_process,filename);
 
-	add_vma(thread, 0xBFFFF000, 0xC0000000, 0, NULL, PF_R | PF_W, 0);
-	thread->start_stack = 0xc0000000;
+	// 添加堆的vma
+	// 由于我们是通过内核main线程调用该函数启动的程序
+	// 因此这部分代码是在内核段中的，我们无需多处理，直接将其置为 USER_VADDR_START
+	add_vma(thread, USER_VADDR_START, USER_VADDR_START, 0, NULL, VM_READ | VM_WRITE | VM_GROWSUP | VM_ANON,0);
+	thread->end_data = USER_VADDR_START;
+
+	// 添加栈的vma
+	add_vma(thread, USER_STACK_BASE-USER_STACK_SIZE, USER_STACK_BASE, 0, NULL, VM_READ | VM_WRITE | VM_GROWSDOWN | VM_ANON, 0);
+	
+	thread->start_stack = USER_STACK_BASE;
 
 	thread->pgdir = create_page_dir();
 	

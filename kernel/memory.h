@@ -38,6 +38,11 @@
 // the number of item in page directory table or page table
 #define TABLE_ITEM_NR (PG_SIZE/TABLE_ITEM_SIZE_BYTES)
 
+// 向上对齐到页边界
+#define PAGE_ALIGN_UP(vaddr) (((vaddr) + PG_SIZE - 1) & ~(PG_SIZE - 1))
+// 向下对齐到页边界（顺便提供，方便以后用）
+#define PAGE_ALIGN_DOWN(vaddr) ((vaddr) & ~(PG_SIZE - 1))
+
 enum pool_flags{
 	PF_KERNEL = 1,
 	PF_USER = 2
@@ -80,6 +85,7 @@ extern void copy_page_tables(struct task_struct* from,struct task_struct* to,voi
 extern void sys_test(void);
 extern void swap_page(uint32_t err_code,void* err_vaddr);
 extern void write_protect(uint32_t err_code,void* err_vaddr);
+extern void vaddr_remove(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt);
 
 extern void* kmalloc(uint32_t size);
 extern void* umalloc(uint32_t size);
@@ -88,9 +94,12 @@ extern void ufree(void* ptr);
 extern void kfree(void* ptr);
 extern void do_free(void* ptr,enum pool_flags PF);
 
+
 extern uint32_t sys_brk(uint32_t new_brk);
 
 
 extern uint32_t mem_bytes_total;
 extern uint32_t kernel_heap_start;
+extern struct dlist kernel_vma_list;
+extern struct lock kernel_vma_lock;
 #endif

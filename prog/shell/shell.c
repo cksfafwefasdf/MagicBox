@@ -74,7 +74,7 @@ static void cmd_execute(uint32_t argc, char** argv, int32_t pgid_to_set, bool is
                 }
             }
         }
-        execv(exec_path, argv);
+        execv(exec_path, (const char **)argv);
         exit(-1);
     } else {
         // 父进程环境：准备 Fork
@@ -111,7 +111,6 @@ int main(void) {
 
         // 后台运行符 '&' 识别逻辑 -
         bool is_background = false;
-        int32_t len = strlen(cmd_line);
         // 查找最后一个非空字符是否为 '&'
         char* back_ptr = strrchr(cmd_line, '&');
         if (back_ptr != NULL && (*(back_ptr + 1) == '\0' || *(back_ptr + 1) == ' ')) {

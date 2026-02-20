@@ -82,12 +82,20 @@ static int32_t load(const char* pathname){
 			// 	goto done;
 			// }
 
+			// VMA_READ 的flag的定义和 PF_R 的定义不一样，所以得翻译一下
+			uint32_t vma_flags = 0;
+
+			// 2. 翻译权限 (从 ELF 转换到你的 VM_ 标志)
+			if (prog_header.p_flags & PF_R) vma_flags |= VM_READ;
+			if (prog_header.p_flags & PF_W) vma_flags |= VM_WRITE;
+			if (prog_header.p_flags & PF_X) vma_flags |= VM_EXEC;
+
 			add_vma(cur, 
                     prog_header.p_vaddr, // start
                     prog_header.p_vaddr + prog_header.p_memsz, // end (含BSS)
                     prog_header.p_offset, // 文件偏移
                     file_inode, // 关联 inode
-                    prog_header.p_flags, // 权限
+                    vma_flags, // 权限
 					prog_header.p_filesz); // 大小
 
 			// 在写汇编或 C 代码时，我们可以定义无数个 .section .data1、.section .data2
@@ -135,17 +143,26 @@ static int32_t load(const char* pathname){
 		prog_idx++;
 	}
 
-	// 为堆 (Heap) 签署一个初始合同
-    // 初始大小为 0，但 VMA 必须存在，后续 sbrk 会通过修改 vma_end 来扩容
-	// 堆栈是非文件区域，filesz要设置为0
-    add_vma(cur, max_vaddr, max_vaddr, 0, NULL, PF_R | PF_W,0);
+	// 找到程序最高的地址后，强行对齐到 4KB 边界
+	// 否则的化，例如 .bss 结束于 0x804D010。
+	// 如果不进行 PAGE_ALIGN_UP，堆（Heap）会从 0x804D010 开始。
+	// 此时，.bss 段的末尾和堆的起始处物理上挤在同一个 4KB 页面内（即 0x804D000 这一页）。
+	// 这意味着，这一个物理页既要承载全局变量，又要承载堆内存。
+	// 此时要是处理一些缺页错误啥的，可能会将原本bss段的数据都给破坏了！
+	// 为了简单，我们直接将堆设在bss段紧邻的下一个页的起始处
+	max_vaddr = PAGE_ALIGN_UP(max_vaddr); // 
 
-	cur->end_data = max_vaddr; // 程序的终点即为堆的起点
+	// 这样堆就会从 0x0804e000 或更高的地方开始
+	// 初始给他划分一页的逻辑空间，物理空间等到缺页了再去映射
+	add_vma(cur, max_vaddr, max_vaddr + PG_SIZE, 0, NULL, VM_READ | VM_WRITE | VM_GROWSUP | VM_ANON, 0);
+	// 程序的终点即为堆的起点
+	// 其实这个数据主要是用来记录堆的起点的，因此它需要跟随向上对齐一页后的max_vaddr
+	cur->end_data = max_vaddr; 
     cur->brk = max_vaddr; // 初始时堆顶等于堆起点
 	// 程序的栈起始位置
 	// 由于我们划分了高1GB的虚拟地址给内核空间，而栈是从高向低生长的
 	// 因此设置高1GB的最开始的地址 0xc0000000 作为栈底是合适的，可用空间很大
-    cur->start_stack = 0xc0000000; 
+    cur->start_stack = USER_STACK_BASE; 
 
 	// printk("load: start_code:%x end_data:%x start_stack:%x\n",cur->start_code,cur->end_data,cur->start_stack);
 
@@ -221,7 +238,7 @@ int32_t sys_execv(const char* path, const char* argv[]) {
 
 	// 目前，我们的malloc和free直接绕过了堆的vma进行操作
 	// 因此目前堆的vma只是一个占位，等待后期完善
-    add_vma(cur, 0xc0000000 - 0x800000, 0xc0000000, 0, NULL, PF_R | PF_W,0);
+    add_vma(cur, USER_STACK_BASE - USER_STACK_SIZE, USER_STACK_BASE, 0, NULL, VM_READ | VM_WRITE | VM_GROWSDOWN | VM_ANON,0);
 
 	// printk("argv[0]:%s \n",k_arg_page + arg_offsets[0]);
     // 加载新程序，传入内核空间的 path 副本
@@ -247,7 +264,7 @@ int32_t sys_execv(const char* path, const char* argv[]) {
 
     // 准备新程序的用户栈
     // 栈底设为 0xc0000000
-    uint32_t user_stack_top = 0xc0000000;
+    uint32_t user_stack_top = (uint32_t)USER_STACK_BASE;
     uint32_t new_argv_pointers[MAX_ARG_NR] = {0};
 
     // 将内核备份的参数拷贝到新栈顶

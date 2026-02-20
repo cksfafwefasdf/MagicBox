@@ -21,9 +21,9 @@ static void release_prog_resource(struct task_struct* release_thread){
 
 	release_pg_block(release_thread);
 
-	uint32_t bitmap_pg_cnt = (release_thread->userprog_vaddr.vaddr_bitmap.btmp_bytes_len)/PG_SIZE;
-	uint8_t* user_vaddr_pool_bitmap = release_thread->userprog_vaddr.vaddr_bitmap.bits;
-	mfree_page(PF_KERNEL,user_vaddr_pool_bitmap,bitmap_pg_cnt);
+	// uint32_t bitmap_pg_cnt = (release_thread->userprog_vaddr.vaddr_bitmap.btmp_bytes_len)/PG_SIZE;
+	// uint8_t* user_vaddr_pool_bitmap = release_thread->userprog_vaddr.vaddr_bitmap.bits;
+	// mfree_page(PF_KERNEL,user_vaddr_pool_bitmap,bitmap_pg_cnt);
 	uint8_t local_fd = 0;
 	while(local_fd<MAX_FILES_OPEN_PER_PROC){
 		if(release_thread->fd_table[local_fd]!=-1){

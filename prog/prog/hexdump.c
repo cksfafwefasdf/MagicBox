@@ -30,7 +30,6 @@ int main(int argc, char** argv) {
             exit(-1);
         }
     }
-	printf("path: %s\n",path);
 
     int32_t fd = open(path, O_RDONLY);
 
