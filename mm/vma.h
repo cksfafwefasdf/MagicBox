@@ -41,6 +41,6 @@ extern void add_vma_sorted(struct dlist* plist, uint32_t start, uint32_t end,
              uint32_t pgoff, struct m_inode* inode, uint32_t flags, uint32_t filesz);
 extern struct vm_area* find_vma(struct task_struct* task, uint32_t vaddr);
 extern void clear_vma_list(struct task_struct* task);
-extern uint32_t vma_find_gap(enum pool_flags pf, uint32_t pg_cnt);
+extern uint32_t vma_find_gap(struct task_struct* task ,uint32_t pg_cnt);
 extern struct vm_area* vma_split(struct vm_area* vma, uint32_t addr);
 #endif

@@ -209,15 +209,14 @@ bool copy_vma_list(struct task_struct* parent, struct task_struct* child) {
 // 从搜索起点开始，挨个对比相邻 VMA 之间的缝隙。
 // 仅做虚拟地址的区间搜索，不建立实际映射
 // 用于替代原本实现中的虚拟地址位图扫描搜索
-uint32_t vma_find_gap(enum pool_flags pf, uint32_t pg_cnt) {
+uint32_t vma_find_gap(struct task_struct* task ,uint32_t pg_cnt) {
     uint32_t size = pg_cnt * PG_SIZE;
-    struct task_struct* cur = get_running_task_struct();
     
-    // 确定边界，用户态从 0x08048000 开始，内核态从 0xC0000000 开始
-    uint32_t search_ptr = (pf == PF_KERNEL) ? KERNEL_VADDR_START : USER_VADDR_START;
-    uint32_t upper_limit = (pf == PF_KERNEL) ? 0xFFFFFFFF : USER_STACK_BASE - USER_STACK_SIZE; // 避开栈
+    // 确定边界，用户态从 0x08048000 开始
+    uint32_t search_ptr = USER_VADDR_START;
+    uint32_t upper_limit = USER_STACK_BASE - USER_STACK_SIZE; // 避开栈
     
-    struct dlist* plist = (pf == PF_KERNEL) ? &kernel_vma_list : &cur->vma_list;
+    struct dlist* plist = &task->vma_list;
     
     if (dlist_empty(plist)) return search_ptr;
 

@@ -87,6 +87,7 @@ The project follows a modular design, separating kernel core logic, hardware dri
 .
 ├── boot/               # MBR & Kernel Loader (Entry point to protected mode)
 ├── device/             # Hardware Drivers (Keyboard, IDE, Timer, Console)
+├── mm/             	# Memory Management Subsystem (Buddy System, VMA, Arena)
 ├── fs/                 # File System (Inode, Directory, and Pipe management)
 ├── kernel/             # Kernel Core (Interrupts, Memory management, Init)
 ├── lib/                # Library routines

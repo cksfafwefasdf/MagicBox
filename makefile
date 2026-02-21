@@ -6,7 +6,7 @@ ENTRY_POINT = 0xc0001500
 AS = nasm
 CC = gcc
 LD = ld
-LIB = -I lib/ -I lib/kernel/ -I lib/user/ -I lib/common/ -I kernel/ -I device/ -I thread/ -I userprog/	-I fs/ -I shell/
+LIB = -I lib/ -I lib/kernel/ -I lib/user/ -I lib/common/ -I kernel/ -I device/ -I thread/ -I userprog/	-I fs/ -I shell/ -I mm/
 ASFLAGS = -f elf
 CFLAGS = -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes -D DEBUG\
      -Wmissing-prototypes -m32 -fno-stack-protector -fcommon -Wno-error=implicit-function-declaration
@@ -32,7 +32,7 @@ $(BUILD_DIR)/main.o:kernel/main.c lib/kernel/print.h lib/stdint.h kernel/init.h
 	$(CC) $< $(CFLAGS) -o $@
 
 # C code
-$(BUILD_DIR)/init.o:kernel/init.c kernel/init.h lib/kernel/print.h lib/stdint.h kernel/interrupt.h device/timer.h thread/thread.h kernel/memory.h device/console.h device/keyboard.h userprog/tss.h userprog/syscall-init.h device/ide.h fs/fs.h
+$(BUILD_DIR)/init.o:kernel/init.c kernel/init.h lib/kernel/print.h lib/stdint.h kernel/interrupt.h device/timer.h thread/thread.h mm/memory.h device/console.h device/keyboard.h userprog/tss.h userprog/syscall-init.h device/ide.h fs/fs.h
 	$(CC) $< $(CFLAGS) -o $@
 
 $(BUILD_DIR)/interrupt.o:kernel/interrupt.c kernel/interrupt.h lib/stdint.h kernel/global.h lib/kernel/io.h lib/kernel/print.h
@@ -50,13 +50,13 @@ $(BUILD_DIR)/string.o:lib/string.c lib/string.h lib/stdint.h lib/assert.h
 $(BUILD_DIR)/bitmap.o:lib/kernel/bitmap.c lib/kernel/bitmap.h lib/stdint.h lib/string.h kernel/debug.h kernel/interrupt.h lib/kernel/print.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/memory.o:kernel/memory.c kernel/memory.h lib/stdint.h lib/kernel/print.h kernel/debug.h lib/string.h kernel/global.h thread/sync.h kernel/interrupt.h lib/kernel/stdio-kernel.h
+$(BUILD_DIR)/memory.o:mm/memory.c mm/memory.h lib/stdint.h lib/kernel/print.h kernel/debug.h lib/string.h kernel/global.h thread/sync.h kernel/interrupt.h lib/kernel/stdio-kernel.h
 	$(CC) $< $(CFLAGS) -o $@
 
 $(BUILD_DIR)/dlist.o:lib/kernel/dlist.c lib/kernel/dlist.h kernel/interrupt.h  lib/stdint.h lib/stdbool.h kernel/debug.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/thread.o:thread/thread.c thread/thread.h  lib/string.h lib/stdint.h kernel/global.h kernel/memory.h kernel/interrupt.h kernel/debug.h lib/kernel/print.h lib/kernel/dlist.h userprog/process.h thread/sync.h kernel/main.h lib/stdio.h fs/fs.h fs/file.h
+$(BUILD_DIR)/thread.o:thread/thread.c thread/thread.h  lib/string.h lib/stdint.h kernel/global.h mm/memory.h kernel/interrupt.h kernel/debug.h lib/kernel/print.h lib/kernel/dlist.h userprog/process.h thread/sync.h kernel/main.h lib/stdio.h fs/fs.h fs/file.h
 	$(CC) $< $(CFLAGS) -o $@
 
 $(BUILD_DIR)/sync.o:thread/sync.c thread/sync.h kernel/interrupt.h kernel/debug.h
@@ -74,7 +74,7 @@ $(BUILD_DIR)/ioqueue.o:device/ioqueue.c device/ioqueue.h  kernel/debug.h kernel/
 $(BUILD_DIR)/tss.o:userprog/tss.c userprog/tss.h lib/stdint.h kernel/global.h lib/kernel/print.h lib/string.h thread/thread.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/process.o:userprog/process.c userprog/process.h thread/thread.h kernel/memory.h lib/stdint.h kernel/debug.h userprog/tss.h device/console.h lib/string.h kernel/global.h kernel/interrupt.h lib/kernel/dlist.h lib/kernel/print.h
+$(BUILD_DIR)/process.o:userprog/process.c userprog/process.h thread/thread.h mm/memory.h lib/stdint.h kernel/debug.h userprog/tss.h device/console.h lib/string.h kernel/global.h kernel/interrupt.h lib/kernel/dlist.h lib/kernel/print.h
 	$(CC) $< $(CFLAGS) -o $@
 
 $(BUILD_DIR)/syscall-init.o:userprog/syscall-init.c userprog/syscall-init.h lib/stdint.h thread/thread.h lib/kernel/print.h lib/user/syscall.h device/console.h lib/string.h fs/fs.h userprog/fork.h thread/thread.h userprog/exec.h userprog/wait_exit.h device/ide.h fs/pipe.h
@@ -107,7 +107,7 @@ $(BUILD_DIR)/dir.o:fs/dir.c fs/dir.h fs/inode.h fs/file.h device/ide.h lib/kerne
 $(BUILD_DIR)/fork.o:userprog/fork.c userprog/fork.h lib/stdint.h thread/thread.h lib/string.h userprog/process.h kernel/debug.h fs/file.h kernel/interrupt.h lib/kernel/dlist.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/exec.o:userprog/exec.c userprog/exec.h lib/stdint.h lib/stdbool.h kernel/global.h fs/fs.h kernel/memory.h lib/string.h thread/thread.h lib/stdio.h lib/user/syscall.h
+$(BUILD_DIR)/exec.o:userprog/exec.c userprog/exec.h lib/stdint.h lib/stdbool.h kernel/global.h fs/fs.h mm/memory.h lib/string.h thread/thread.h lib/stdio.h lib/user/syscall.h
 	$(CC) $< $(CFLAGS) -o $@
 
 $(BUILD_DIR)/assert.o:lib/assert.c lib/assert.h lib/stdio.h
@@ -119,7 +119,7 @@ $(BUILD_DIR)/wait_exit.o:userprog/wait_exit.c userprog/wait_exit.h thread/thread
 $(BUILD_DIR)/pipe.o:fs/pipe.c fs/pipe.h lib/stdbool.h lib/stdint.h fs/fs.h fs/file.h device/ioqueue.h thread/thread.h lib/stdio.h lib/kernel/stdio-kernel.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/hashtable.o:lib/kernel/hashtable.c lib/kernel/hashtable.h lib/kernel/dlist.h lib/stdint.h lib/stdbool.h kernel/memory.h
+$(BUILD_DIR)/hashtable.o:lib/kernel/hashtable.c lib/kernel/hashtable.h lib/kernel/dlist.h lib/stdint.h lib/stdbool.h mm/memory.h
 	$(CC) $< $(CFLAGS) -o $@
 
 $(BUILD_DIR)/ide_buffer.o:device/ide_buffer.c device/ide_buffer.h device/ide.h lib/stdint.h lib/stdbool.h lib/kernel/dlist.h lib/kernel/hashtable.h thread/sync.h lib/kernel/stdio-kernel.h
@@ -140,10 +140,10 @@ $(BUILD_DIR)/block_dev.o:device/block_dev.c device/block_dev.h device/ide.h fs/f
 $(BUILD_DIR)/signal.o:kernel/signal.c kernel/signal.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/vma.o:userprog/vma.c userprog/vma.h
+$(BUILD_DIR)/vma.o:mm/vma.c mm/vma.h
 	$(CC) $< $(CFLAGS) -o $@
 
-$(BUILD_DIR)/buddy.o:kernel/buddy.c kernel/buddy.h
+$(BUILD_DIR)/buddy.o:mm/buddy.c mm/buddy.h
 	$(CC) $< $(CFLAGS) -o $@
 
 # ASM code
@@ -157,7 +157,7 @@ $(BUILD_DIR)/print.o:lib/kernel/print.s
 $(BUILD_DIR)/switch.o:thread/switch.s
 	$(AS) $< $(ASFLAGS) -o $@
 
-$(BUILD_DIR)/page.o:kernel/page.s
+$(BUILD_DIR)/page.o:mm/page.s
 	$(AS) $< $(ASFLAGS) -o $@
 # link file
 $(BUILD_DIR)/kernel.bin:$(OBJS)

@@ -56,74 +56,6 @@ uint32_t kernel_heap_start = 0; // 在 mem_pool_init 中动态赋值
 static void* palloc(struct buddy_pool* m_pool);
 int32_t inode_read_data(struct m_inode* inode, uint32_t offset, void* buf, uint32_t count);
 static struct vm_area* find_vma_condition(struct task_struct* task, uint32_t flags);
-static struct vm_area* vma_alloc_bootstrap(void);
-
-// 内核虚拟地址空间的 VMA 链表
-struct dlist kernel_vma_list;
-
-// 保护内核 VMA 链表的信号量
-struct lock kernel_vma_lock;
-
-// 自举期使用的 vma 内存池
-// 由于 kmalloc 依赖虚拟地址分配函数，而虚拟地址分配又依赖于vma
-// 并且vma的添加等操作又依赖于 kmalloc
-// 因此这就形成一个死循环了，为了打破这个死循环，我们在早期初始化时使用静态数组来作为内存池
-// 从这里取出vma来进行初始化，待到vma树建立完毕后再使用kmalloc来创建
-// 这里的这一部分vma由于和内核代码高度相关，因此基本都是只借不还的
-static struct vm_area vma_bootstrap_pool[BOOTSTRAP_VMA_COUNT];
-
-static uint32_t vma_idx = 0;
-
-static struct vm_area* vma_alloc_bootstrap() {
-    if (vma_idx < BOOTSTRAP_VMA_COUNT) {
-        // 拿到当前可用的结构体，然后索引自增
-        struct vm_area* vma = &vma_bootstrap_pool[vma_idx++];
-        // 顺手清理一下，确保它是干净的
-        memset(vma, 0, sizeof(struct vm_area));
-        return vma;
-    }
-    // 如果 64 个全用完了，说明初始化逻辑映射了太多奇怪的东西
-    PANIC("VMA bootstrap pool exhausted!");
-    return NULL;
-}
-
-static void early_vma_init(void) {
-    // 初始化全局链表和锁
-    dlist_init(&kernel_vma_list);
-    lock_init(&kernel_vma_lock);
-
-    // 从静态池拿种子VMA
-    struct vm_area* reserved_vma = vma_alloc_bootstrap(); // 内核保留区
-    struct vm_area* heap_vma = vma_alloc_bootstrap();
-    
-    kernel_heap_start = PAGE_ALIGN_UP(kernel_heap_start);
-
-    reserved_vma->vma_start = KERNEL_VADDR_START;
-    reserved_vma->vma_end   = kernel_heap_start;
-    reserved_vma->vma_flags = VM_READ|VM_WRITE;
-    reserved_vma->vma_inode = NULL;
-    
-    // 填充,预留32MB内核堆空间
-    // 由于 add_vma 函数底层调用了 kmalloc，但是此时我们的堆还没准备好呢
-    // 因此不能用 add_vma 来添加内核堆，我们得手动添加
-    
-    heap_vma->vma_start = kernel_heap_start;
-    heap_vma->vma_end   = PAGE_ALIGN_UP(kernel_heap_start + (32 * 1024 * 1024));
-    heap_vma->vma_flags = VM_READ | VM_WRITE | VM_GROWSUP | VM_ANON;
-    heap_vma->vma_inode = NULL;
-
-    dlist_push_back(&kernel_vma_list, &reserved_vma->vma_tag);
-
-    // 挂载到全局链表
-    // 因为是初始化，此时没竞争，可以不拿锁
-    dlist_push_back(&kernel_vma_list, &heap_vma->vma_tag);
-
-    // 由于我们的内核栈是位于用户PCB中的
-    // 而用户PCB这块区域肯定是被事先分配好的，所以不可能会触发页错误
-    // 因此即使不使用VMA来管理内核栈也不会出问题
-
-    put_str("Kernel global VMA list initialized with static heap.\n");
-}
 
 // 这是一个内部辅助函数，用于在 mem_pool_init 这种极早期阶段手动绑定物理地址和虚拟地址的映射
 static void early_map(uint32_t vaddr, uint32_t paddr) {
@@ -273,7 +205,7 @@ static void* vaddr_alloc(enum pool_flags pf, uint32_t pg_cnt, bool force_mmap) {
         
 
         // 如果是超大内存，或者 brk 失败了，走 mmap 区域 (Gap 搜索)
-        vaddr_start = vma_find_gap(pf, pg_cnt);
+        vaddr_start = vma_find_gap(cur, pg_cnt);
         
         if (vaddr_start != 0) {
             // 把找出来的 Gap 注册到 VMA 链表里
@@ -1017,8 +949,6 @@ void swap_page(uint32_t err_code,void* err_vaddr){
         // vma = find_vma_condition(cur, VM_READ|VM_WRITE|VM_GROWSDOWN|VM_ANON);
 		goto segmentation_fault;
 	}
-    
-	
 
 	// 尝试栈自动扩容，由于我们在process.c中的start_process函数中
 	// 只默认为用户进程栈的高4KB映射了物理内存
