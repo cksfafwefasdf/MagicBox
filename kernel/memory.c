@@ -410,7 +410,8 @@ void* malloc_page(enum pool_flags pf, uint32_t pg_cnt) {
     ASSERT(pg_cnt > 0);
     
     // 统一申请虚拟地址 (申请多少给多少)
-    // 通过该接口申请的页默认使用大内存分配
+    // 内核态是不管 force_mmap 标志的，他还是用位图来分配
+    // 因此这个标志主要还是给用户态用，我们沿用用户态的标准，大于128KB将其置为true
     bool force_mmap = pg_cnt>=32?true:false;
     void* vaddr_start = vaddr_alloc(pf, pg_cnt, force_mmap);
     if (vaddr_start == NULL) return NULL;
@@ -462,7 +463,7 @@ static void* vmalloc_page(enum pool_flags pf, uint32_t pg_cnt,bool force_mmap) {
             vaddr += PG_SIZE;
         }
     } else {
-        // 用户态，既然 vaddr_alloc 已经 add_vma 了，我们直接返回！
+        // 用户态，既然 vaddr_alloc 已经 add_vma 了，我们直接返回
         // 物理页？不存在的。等用户写数据时，swap_page 会来补齐。
     }
 
@@ -878,10 +879,17 @@ void do_free(void* ptr,enum pool_flags PF){
                 ASSERT(dlist_find(&a->desc->free_list,&b->free_elem));
                 dlist_remove(&b->free_elem);
             }
-            // 物理回收，节省物理内存
-            // 虚拟内存保留，维持堆的连续性，不调用 vaddr_remove
-            // 后续如果再被分配到，可以通过缺页中断来重新进行物理页的分配
-            mfree_physical_pages(a,1);
+            
+            if(PF==PF_KERNEL){
+                // 对于内核来说，我们仍然使用位图来管理空间，因此还是沿用原本的 mfree_page
+                // 不要制造缺页
+                mfree_page(PF,a,1);
+            }else{
+                // 物理回收，节省物理内存
+                // 虚拟内存保留，维持堆的连续性，不调用 vaddr_remove
+                // 后续如果再被分配到，可以通过缺页中断来重新进行物理页的分配
+                mfree_physical_pages(a,1);
+            }
         }
     }
     lock_release(&mem_pool->lock);

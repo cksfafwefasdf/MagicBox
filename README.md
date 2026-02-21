@@ -18,10 +18,25 @@
 ## 🛠 Technical Overview
 
 - **Interrupts & Synchronization**: Utilizes the **8259A PIC** to handle hardware interrupts. Kernel-level thread synchronization is managed through **mutexes and semaphores**, ensuring safe access to critical sections such as disk I/O operations and process lists.
-- **Memory Management (Buddy System & VMA):** The system features a hybrid memory management architecture. Page-level physical memory is managed by a **Buddy System allocator** (`buddy.c`), supporting efficient allocation and merging of power-of-two blocks. This overhaul enables the system to manage up to **3GB of physical RAM**, far exceeding the previous 128MB limit imposed by static bitmaps. Small memory objects (2B–1024B) are still handled by a Slab/Arena allocator. On top of this, a **VMA (Virtual Memory Area)** framework is preliminarily introduced to provide demand paging (lazy loading) for ELF segments and **Copy-On-Write (COW)**, significantly reducing physical memory footprints during `fork()` and `execv()` operations.
+
+- **Memory Management: Hybrid Dual-Track Architecture**
+
+  This project implements a practical hybrid memory management system, balancing the deterministic needs of the kernel with the flexibility required by user-level processes:
+
+  - **Physical Layer (Buddy System):** The physical memory is managed by a **Buddy System allocator** (`buddy.c`), replacing legacy bitmaps. By supporting power-of-two block allocation and merging, the system can now manage up to **3GB of RAM**, effectively overcoming the previous 128MB limitation.
+  - **Kernel Virtual Space (Bitmap-based):** For the kernel virtual address space (3GB–4GB), the system continues to use a **Static Bitmap allocator**.
+    - **Design Choice:** This ensures immediate and deterministic mapping for critical kernel tasks, avoiding the complexity of VMA tracking in the kernel and preventing potential reentrancy/deadlock issues during early memory allocation.
+  - **User Virtual Space (VMA Framework):** The user-level address space has been refactored to use a **VMA (Virtual Memory Area) framework**, decoupling it from the old bitmap-based management.
+    - **Demand Paging:** Supports lazy loading for ELF segments, heap, and stack. Physical pages are only allocated and mapped when a Page Fault is triggered by actual access.
+    - **Dynamic Management:** Supports VMA splitting, merging, and gap searching, providing the necessary infrastructure for `sys_brk` heap scaling and Copy-On-Write (COW) during `fork()` and `execv()`.
+  - **Small Object Allocation:** A **Arena allocator** remains integrated on top of the Buddy System to handle micro-allocations (2B–1024B) efficiently, reducing internal fragmentation for small data structures.
+
 - **Unified FS & "Everything is a File"**: Features an **Inode-based** hierarchical file system. Following the "Everything is a File" philosophy, `sys_read` and `sys_write` perform logical dispatching by identifying file types—including regular files, **Linux-style anonymous pipes**, **persistent FIFOs**, and **TTY devices**. This allows IPC and hardware access to be managed through a unified file descriptor (FD) interface.
-- **Task Scheduling**: Implements a **priority-based Round-Robin** scheduling algorithm. In a design reminiscent of Linux 0.12, a task's `priority` directly determines its allocated clock **ticks**. The system decrements the current task's remaining time slice during timer interrupts, triggering a reschedule only when ticks are exhausted. This non-preemptive approach maintains simplicity while distributing CPU time based on task priority.
+
+- **Task Scheduling**: Implements a **Round-Robin** scheduling algorithm. In a design reminiscent of Linux 0.12, a task's `priority` directly determines its allocated clock **ticks**. The system decrements the current task's remaining time slice during timer interrupts, triggering a reschedule only when ticks are exhausted. This non-preemptive approach maintains simplicity while distributing CPU time based on task priority.
+
 - **Signal System**: Provides a basic signal subsystem (supporting `SIGINT`, `SIGKILL`, `SIGCHLD`, `SIGSEGV`, etc.). By manually constructing **user-mode stack frames** within the kernel, the system enables "upcalls" to user-defined handlers. Execution context is restored via `sys_sigreturn`, allowing for custom signal handling logic.
+
 - **Resource Recovery**: Implements a two-stage resource reclamation logic. `sys_exit` releases immediate process-private resources (such as FDs), while the destruction of core structures like page directories and kernel stacks is deferred to the parent process during `wait`/`waitpid`. This ensures stable process state synchronization and memory safety.
 
 ------
