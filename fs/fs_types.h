@@ -21,9 +21,8 @@ enum bitmap_type{
 	BLOCK_BITMAP
 };
 
-// 我们现在代码中的inode基本上都可以直接无脑创建成 inode 以防出错
-// 只在同步回磁盘时写成 d_inode 来瘦身
 // 内存inode
+// VFS 直接操作的inode 对象
 struct inode{
 	enum file_types i_type;
 	uint32_t i_size;
