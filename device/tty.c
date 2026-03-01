@@ -9,7 +9,7 @@
 #include "termios.h"
 #include "errno.h"
 #include "fs_types.h"
-#include "file.h"
+#include "sifs_file.h"
 #include "fs.h"
 
 struct tty_struct console_tty;
@@ -18,10 +18,10 @@ struct file_operations tty_dev_fops = {
     .read = tty_dev_read,
     .write = tty_dev_write,
     .open = NULL,
-    .close = NULL
+    .release = NULL
 };
 
-int32_t tty_write(const char* buf, uint32_t count) {
+int32_t tty_write(char* buf, uint32_t count) {
     uint32_t i = 0;
     while (i < count) {
         console_put_char(buf[i]);
@@ -181,10 +181,10 @@ int32_t sys_ioctl(int fd, uint32_t cmd, uint32_t arg) {
 
     if (file->fd_inode == NULL) return -EBADF; // 错误码 2：该描述符是空的
 
-    if (file->fd_inode->di.i_type != FT_CHAR_SPECIAL) return -ENOTTY; // 只有字符设备（TTY）支持此操作
+    if (file->fd_inode->i_type != FT_CHAR_SPECIAL) return -ENOTTY; // 只有字符设备（TTY）支持此操作
 
-    struct m_inode* inode = file->fd_inode;
-    if (MAJOR(inode->di.i_rdev) != TTY_MAJOR) return -ENOTTY;
+    struct inode* inode = file->fd_inode;
+    if (MAJOR(inode->i_rdev) != TTY_MAJOR) return -ENOTTY;
 
     // 走到这里，说明是正经的 TTY，开始工作
     return tty_ioctl(&console_tty, cmd, arg);
@@ -198,7 +198,7 @@ int32_t tty_dev_read(struct file* file, void* buf, uint32_t count) {
 }
 
 // 适配 write
-int32_t tty_dev_write(struct file* file, const void* buf, uint32_t count) {
+int32_t tty_dev_write(struct file* file, void* buf, uint32_t count) {
     return tty_write(buf, count);
 }
 

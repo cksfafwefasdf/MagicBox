@@ -6,7 +6,6 @@
 #include "bitmap.h"
 #include "signal.h"
 #include "unistd.h"
-#include "fs_types.h"
 
 // each process can open 8 files at most
 #define MAX_FILES_OPEN_PER_PROC 8

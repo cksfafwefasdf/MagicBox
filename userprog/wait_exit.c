@@ -4,7 +4,7 @@
 #include "fs.h"
 #include "dlist.h"
 #include "wait_exit.h"
-#include "file.h"
+#include "sifs_file.h"
 #include "debug.h"
 #include "memory.h"
 #include "process.h"

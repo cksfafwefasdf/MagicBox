@@ -4,20 +4,21 @@
 #include "interrupt.h"
 #include "ioqueue.h"
 #include "debug.h"
-#include "inode.h"
-#include "file.h"
+#include "sifs_inode.h"
+#include "sifs_file.h"
 #include "signal.h"
 #include "errno.h"
+#include "fs_types.h"
 
 int32_t sys_pipe(int32_t pipefd[2]) {
 
     // 创建一个匿名 Inode
-    struct m_inode* inode = make_anonymous_inode();
+    struct inode* inode = make_anonymous_inode();
     if (inode == NULL) {
         return -1;
     }
 
-    inode->di.i_type = FT_PIPE;
+    inode->i_type = FT_PIPE;
 
     if (init_pipe(inode) != 0) {
         // 释放 inode，先 panic
@@ -25,12 +26,12 @@ int32_t sys_pipe(int32_t pipefd[2]) {
         return -1;
     }
 
-	struct pipe* p = (struct pipe*)inode->di.i_pipe_ptr;
+	struct pipe_inode_info* pii = (struct pipe_inode_info*)&inode->pipe_i;
     
-    p->reader_count = 1;
-    p->writer_count = 1;
+    pii->reader_count = 1;
+    pii->writer_count = 1;
     
-    inode->di.i_type = FT_PIPE;
+    inode->i_type = FT_PIPE;
     inode->i_open_cnts = 2;
 
     // 尝试分配全局资源
@@ -71,12 +72,12 @@ int32_t sys_pipe(int32_t pipefd[2]) {
     return 0;
 }
 
-int32_t init_pipe(struct m_inode* inode) {
+int32_t init_pipe(struct inode* inode) {
     // 关中断保护分配过程，防止竞态（尤其是 FIFO 多进程同时 open 时）
     enum intr_status old_status = intr_disable();
 
     // 如果已经有缓冲区了，直接返回成功（针对 FIFO 已经被别人打开的情况）
-    if (inode->di.i_pipe_ptr != 0) {
+    if (inode->pipe_i.base != 0) {
         intr_set_status(old_status);
         return 0;
     }
@@ -93,16 +94,17 @@ int32_t init_pipe(struct m_inode* inode) {
     }
 
     ioqueue_init(&p->queue);
-    p->reader_count = 0;
-    p->writer_count = 0;
-    inode->di.i_pipe_ptr = (uint32_t)p;
+    inode->pipe_i.reader_count = 0;
+    inode->pipe_i.writer_count = 0;
+    inode->pipe_i.base = p;
 
     intr_set_status(old_status);
     return 0;
 }
 
 int32_t pipe_read(struct file* file, void* buf, uint32_t count) {
-    struct pipe* p = (struct pipe*)file->fd_inode->di.i_pipe_ptr;
+    struct pipe_inode_info* pii = (struct pipe_inode_info*)&file->fd_inode->pipe_i;
+    struct pipe* p = pii->base;
     char* buffer = buf;
     uint32_t bytes_read = 0;
 
@@ -119,7 +121,7 @@ int32_t pipe_read(struct file* file, void* buf, uint32_t count) {
 
             // p->writer_count == 0) 写端全关了，返回 0 (EOF)
 			// bytes_read > 0 如果已经读到一部分数据了，POSIX 要求立刻返回已读字节
-            if (bytes_read > 0 || p->writer_count == 0) {
+            if (bytes_read > 0 || pii->writer_count == 0) {
                 intr_set_status(old_status);
                 break; 
             }
@@ -137,8 +139,8 @@ int32_t pipe_read(struct file* file, void* buf, uint32_t count) {
 }
 
 int32_t pipe_write(struct file* file, const void* buf, uint32_t count) {
-    
-    struct pipe* p = (struct pipe*)file->fd_inode->di.i_pipe_ptr;
+    struct pipe_inode_info* pii = (struct pipe_inode_info*)&file->fd_inode->pipe_i;
+    struct pipe* p = pii->base;
     const char* buffer = buf;
     uint32_t bytes_written = 0;
 
@@ -146,7 +148,7 @@ int32_t pipe_write(struct file* file, const void* buf, uint32_t count) {
         enum intr_status old_status = intr_disable();
         
         // 每次循环先看一眼还有没有读者，这是 Broken Pipe 的根本检查点
-        if (p->reader_count == 0) {
+        if (pii->reader_count == 0) {
             intr_set_status(old_status);
             // 发送 SIGPIPE 给当前进程
             send_signal(get_running_task_struct(), SIGPIPE);
@@ -160,7 +162,7 @@ int32_t pipe_write(struct file* file, const void* buf, uint32_t count) {
         } else {
             // 缓冲区满了
             // 再次确保读者还在，否则睡下去就醒不来了
-            if (p->reader_count == 0) {
+            if (pii->reader_count == 0) {
                 intr_set_status(old_status);
                 return -EPIPE;
             }
@@ -174,17 +176,18 @@ int32_t pipe_write(struct file* file, const void* buf, uint32_t count) {
     return bytes_written;
 }
 
-void pipe_release(struct file* f) {
-    struct m_inode* inode = f->fd_inode;
-    struct pipe* p = (struct pipe*)inode->di.i_pipe_ptr;
-    if(!p) return;
+int32_t pipe_release(struct file* f) {
+    struct inode* inode = f->fd_inode;
+    struct pipe_inode_info* pii = (struct pipe_inode_info*)&inode->pipe_i;
+    struct pipe* p = pii->base;
+    if(!p) return 0;
 
     // 严格根据读写权限减少计数
     if (f->fd_flag & O_RDONLY) {
-        p->reader_count--;
+        pii->reader_count--;
     }
     if (f->fd_flag & O_WRONLY) {
-        p->writer_count--;
+        pii->writer_count--;
     }
 
     // 唤醒逻辑，必须跨端唤醒，读端唤醒写端，写端唤醒读端
@@ -197,17 +200,6 @@ void pipe_release(struct file* f) {
         ioq_wakeup(&p->queue.consumer);
     }
 
-    // release 函数只负责状态的维护，不负责缓冲区的释放
-
-    // 为保证资源管理的一致性，缓冲区的回收逻辑放到 inode_close 中进行
-
-    // 资源彻底回收
-    // if (p->reader_count == 0 && p->writer_count == 0) {
-    //     mfree_page(PF_KERNEL,p, 1); // 释放 ioqueue 所在的物理页
-    //     inode->di.i_pipe_ptr = 0; // 预防野指针
-    //     // 匿名 Inode 的销毁不在此处进行，我们在sys_close中统一进行！
-	// 	// 该函数只释放与管道本身直接相关的结构
-		
-    // }
+    return 0;
 }
 

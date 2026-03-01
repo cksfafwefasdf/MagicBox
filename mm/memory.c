@@ -54,7 +54,7 @@ uint32_t total_pages = 0;
 uint32_t kernel_heap_start = 0; // 在 mem_pool_init 中动态赋值
 
 static void* palloc(struct buddy_pool* m_pool);
-int32_t inode_read_data(struct m_inode* inode, uint32_t offset, void* buf, uint32_t count);
+int32_t inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_t count);
 static struct vm_area* find_vma_condition(struct task_struct* task, uint32_t flags);
 
 // 这是一个内部辅助函数，用于在 mem_pool_init 这种极早期阶段手动绑定物理地址和虚拟地址的映射

@@ -3,6 +3,8 @@
 #include "string.h"
 #include "unistd.h"
 
+#define BUF_SIZE 512
+
 int main(int argc,char** argv){
 	if(argc>2){
 		printf("cat: only support 1 argument.\neg: cat filename\n");
@@ -10,13 +12,13 @@ int main(int argc,char** argv){
 	}
 
 	if(argc==1){
-		char buf[512] = {0};
-		read(0,buf,512);
+		char buf[BUF_SIZE] = {0};
+		read(0,buf,BUF_SIZE);
 		printf("%s",buf);
 		exit(0);
 	}
 
-	int buf_size = 1024;
+	int buf_size = BUF_SIZE;
 	char *path = argv[1];
 	
 	void *buf = malloc(buf_size);

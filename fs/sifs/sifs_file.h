@@ -1,5 +1,5 @@
-#ifndef __FS_FILE_H
-#define __FS_FILE_H
+#ifndef __FS_SIFS_FILE_H
+#define __FS_SIFS_FILE_H
 
 #include "stdint.h"
 #include "unistd.h"

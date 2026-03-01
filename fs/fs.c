@@ -1,5 +1,5 @@
 #include "fs.h"
-#include "dir.h"
+#include "sifs_dir.h"
 #include "debug.h"
 #include "string.h"
 #include "stdio-kernel.h"
@@ -17,11 +17,12 @@
 #include "fs_types.h"
 #include "stdio.h"
 #include "ide.h"
-#include "file.h"
-#include "inode.h"
+#include "sifs_file.h"
+#include "sifs_inode.h"
 #include "ide_buffer.h"
 #include "debug.h"
 #include "interrupt.h"
+#include "fifo.h"
 
 struct partition* cur_part;
 struct dir* cur_dir;
@@ -31,7 +32,7 @@ static void partition_format(struct partition* part){
 	uint32_t boot_sector_sects = 1;
 	uint32_t super_block_sects = 1;
 	uint32_t inode_bitmap_sects = DIV_ROUND_UP(MAX_FILES_PER_PART,BITS_PER_SECTOR);
-	uint32_t inode_table_sects = DIV_ROUND_UP(((sizeof(struct d_inode)*MAX_FILES_PER_PART)),SECTOR_SIZE);
+	uint32_t inode_table_sects = DIV_ROUND_UP(((sizeof(struct sifs_inode)*MAX_FILES_PER_PART)),SECTOR_SIZE);
 	uint32_t used_sects = boot_sector_sects+super_block_sects+inode_bitmap_sects+inode_table_sects;
 	uint32_t free_sects = part->sec_cnt - used_sects;
 
@@ -117,10 +118,10 @@ static void partition_format(struct partition* part){
 	// init inode list and write it to sb.inode_table_lba
 	// flush the buf
 	memset(buf,0,buf_size);
-	struct d_inode* i = (struct d_inode*)buf;
+	struct sifs_inode* i = (struct sifs_inode*)buf;
 	i->i_size = sb.dir_entry_size*2; // dict '.' and '..'
 	// i->i_no = 0; // 0th is used for root dict 
-	i->i_sectors[0] = sb.data_start_lba;
+	i->sii.i_sectors[0] = sb.data_start_lba;
 	i->i_type = FT_DIRECTORY;
 
 	bwrite_multi(hd,sb.inode_table_lba,buf,sb.inode_table_sects);
@@ -416,7 +417,7 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
 	uint32_t path_searched_depth = path_depth_cnt(searched_record.searched_path);
 	// to process the situation /a/b/c (/a/b is a regular file or not exists)
 	if(pathname_depth!=path_searched_depth){
-		printk("cannot access %s: Not a directory, subpath %s is't exist\n",\
+		printk("sys_open: cannot access %s: Not a directory, subpath %s is't exist\n",\
 		pathname,searched_record.searched_path);
 		dir_close(searched_record.parent_dir);
 		return -1;
@@ -453,55 +454,13 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
     if (fd != -1) {
         struct task_struct* cur = get_running_task_struct();
         struct file* f = &file_table[cur->fd_table[fd]];
-        struct m_inode* inode = f->fd_inode;
+        struct inode* inode = f->fd_inode;
 
-        if (inode->di.i_type == FT_FIFO) {
-            // 如果 FIFO 还没分配内存缓冲区，则分配 (第一次打开)，该逻辑在 init_pipe 中处理
-			// FIFO 本质上就只是 PIPE 在文件系统上的一个封装
-			// PIPE 只能用于相互认识的进程之间的通信，比如 父进程和 fork 后的子进程
-			// FIFO 用于解决相互不认识的进程之间的通信，只要知道FIFO的路径名
-			// 这两个进程就能相互通信
-            if (init_pipe(inode) != 0) {
-				sys_close(fd);
-				return -1;
+        if (inode->i_type == FT_FIFO) {
+            int32_t ret = fifo_open(inode,f);
+			if(ret == -1){
+				PANIC("fail to init fifo inode.");
 			}
-
-            struct pipe* p = (struct pipe*)inode->di.i_pipe_ptr;
-
-            // 根据当前打开标志更新 reader/writer 计数
-            if (flags & O_WRONLY || flags & O_RDWR) p->writer_count++;
-            if (!(flags & O_WRONLY) || flags & O_RDWR) p->reader_count++;
-
-            // 处理 POSIX 阻塞逻辑
-            // 如果是读打开，循环等待直到有写者，如果是写打开，循环等待直到有读者。
-			enum intr_status old_status = intr_disable();
-			if (flags & O_WRONLY) {
-                // 对于写者，如果当前没读者，要睡在生产者队列等读者来
-				// 使用 while 是为了防止虚假唤醒。
-				// 比如一个读者刚被唤醒，结果唯一的写者突然闪退了（或者被信号杀掉了）
-				// 此时读者必须再次检查 writer_count，如果还是 0，就得继续睡。
-                while (p->reader_count == 0) {
-                    // 唤醒可能正在 open 阶段等待写者的读者
-                    if (p->queue.consumer != NULL) ioq_wakeup(&p->queue.consumer);
-                    
-                    ioq_wait(&p->queue.producer); // 阻塞自己
-                }
-                // 成功等到读者，唤醒它
-                if (p->queue.consumer != NULL) ioq_wakeup(&p->queue.consumer);
-                
-            } else {
-                // 对于读者，如果当前没写者，要睡在消费者队列等写者来
-                while (p->writer_count == 0) {
-                    // 唤醒可能正在 open 阶段等待读者的写者
-                    if (p->queue.producer != NULL) ioq_wakeup(&p->queue.producer);
-                    
-                    ioq_wait(&p->queue.consumer); // 阻塞自己
-                }
-                // 成功等到写者，唤醒它
-                if (p->queue.producer != NULL) ioq_wakeup(&p->queue.producer);
-            }
-
-			intr_set_status(old_status);
         }
     }
 
@@ -534,7 +493,7 @@ int32_t sys_close(int32_t fd) {
     // 无论 f_count 是多少，只要本进程关闭了这一个 FD，
     // 就应该对应地减少管道的 reader/writer_count 并唤醒对端。
 	// 这些操作都会在 pipe_release 做
-    if (file->fd_inode->di.i_type == FT_PIPE || file->fd_inode->di.i_type == FT_FIFO) {
+    if (file->fd_inode->i_type == FT_PIPE || file->fd_inode->i_type == FT_FIFO) {
         pipe_release(file);
     }
 
@@ -565,11 +524,11 @@ int32_t sys_write(int32_t fd,void* buf, uint32_t count) {
         return -1;
     }
 
-    struct m_inode* inode = wr_file->fd_inode;
+    struct inode* inode = wr_file->fd_inode;
     ASSERT(inode != NULL);
 
     // 根据 inode 类型进行分发
-    enum file_types type = inode->di.i_type;
+    enum file_types type = inode->i_type;
 
     switch (type) {
         case FT_PIPE:
@@ -579,7 +538,7 @@ int32_t sys_write(int32_t fd,void* buf, uint32_t count) {
 
         case FT_CHAR_SPECIAL:
             // 字符设备逻辑
-            uint32_t major = MAJOR(inode->di.i_rdev);
+            uint32_t major = MAJOR(inode->i_rdev);
             if (major == TTY_MAJOR) return tty_write(buf, count);
             if (major == CONSOLE_MAJOR) return console_dev_write(wr_file, buf, count);
 			printk("sys_write: char device major %d not supported!\n", major);
@@ -617,11 +576,11 @@ int32_t sys_read(int32_t fd, void* buf, uint32_t count) {
         return -1;
     }
 
-    struct m_inode* inode = rd_file->fd_inode;
+    struct inode* inode = rd_file->fd_inode;
     ASSERT(inode != NULL);
 
     // 根据 Inode 类型进行统一分发
-    enum file_types type = inode->di.i_type;
+    enum file_types type = inode->i_type;
 
     switch (type) {
         case FT_PIPE:
@@ -631,7 +590,7 @@ int32_t sys_read(int32_t fd, void* buf, uint32_t count) {
 
         case FT_CHAR_SPECIAL: {
             // 字符设备分发
-            uint32_t major = MAJOR(inode->di.i_rdev);
+            uint32_t major = MAJOR(inode->i_rdev);
             if (major == TTY_MAJOR) {
                 return tty_read(buf, count);
             }
@@ -665,8 +624,8 @@ int32_t sys_lseek(int32_t fd,int32_t offset,enum whence whence){
 	struct file* pf = &file_table[_fd];
 
 	int32_t new_pos = 0;
-	int32_t file_size = (int32_t)pf->fd_inode->di.i_size;
-	enum file_types type = pf->fd_inode->di.i_type;
+	int32_t file_size = (int32_t)pf->fd_inode->i_size;
+	enum file_types type = pf->fd_inode->i_type;
 
 	// 先计算指针位置
 	switch (whence){
@@ -687,12 +646,12 @@ int32_t sys_lseek(int32_t fd,int32_t offset,enum whence whence){
 	// 根据计算出的结果进行边界检查
 	if (type == FT_REGULAR || type == FT_DIRECTORY) {
 		// 普通文件和目录：严格受 i_size 限制
-		if (new_pos < 0 || (uint32_t)new_pos > pf->fd_inode->di.i_size) {
+		if (new_pos < 0 || (uint32_t)new_pos > pf->fd_inode->i_size) {
 			return -1;
 		}
 	} else if (type == FT_BLOCK_SPECIAL) {
 		// 块设备, 检查是否超过分区物理边界
-		struct partition* part = get_part_by_rdev(pf->fd_inode->di.i_rdev);
+		struct partition* part = get_part_by_rdev(pf->fd_inode->i_rdev);
 		uint32_t part_size = part->sec_cnt * SECTOR_SIZE;
 		if (new_pos < 0 || (uint32_t)new_pos >= part_size) {
 			return -1;
@@ -759,6 +718,7 @@ int32_t sys_unlink(const char* _pathname){
 	return 0;
 }
 
+// mkdir 和 rmdir 是放到 i_op 中的成员，他就是和文件系统强相关的，所以直接写sifs没问题
 int32_t sys_mkdir(const char* _pathname){
 	uint8_t rollback_step = 0;
 	void* io_buf = kmalloc(SECTOR_SIZE*2);
@@ -800,7 +760,7 @@ int32_t sys_mkdir(const char* _pathname){
 		goto rollback;
 	}
 
-	struct m_inode new_dir_inode;
+	struct inode new_dir_inode;
 	inode_init(part,inode_no,&new_dir_inode,FT_DIRECTORY);
 
 	uint32_t block_bitmap_idx = 0;
@@ -813,7 +773,7 @@ int32_t sys_mkdir(const char* _pathname){
 		goto rollback;
 	}
 
-	new_dir_inode.di.i_sectors[0] = block_lba;
+	new_dir_inode.sifs_i.i_sectors[0] = block_lba;
 
 	block_bitmap_idx = block_lba - part->sb->data_start_lba;
 	ASSERT(block_bitmap_idx!=0);
@@ -831,9 +791,9 @@ int32_t sys_mkdir(const char* _pathname){
 	memcpy(p_de->filename,"..",2);
 	p_de->i_no = parent_dir->inode->i_no;
 	p_de->f_type = FT_DIRECTORY;
-	bwrite_multi(part->my_disk,new_dir_inode.di.i_sectors[0],io_buf,1);
+	bwrite_multi(part->my_disk,new_dir_inode.sifs_i.i_sectors[0],io_buf,1);
 
-	new_dir_inode.di.i_size = 2*part->sb->dir_entry_size;
+	new_dir_inode.i_size = 2*part->sb->dir_entry_size;
 
 	struct dir_entry new_dir_entry;
 	memset(&new_dir_entry,0,sizeof(struct dir_entry));
@@ -981,7 +941,7 @@ int32_t sys_readdir(int32_t fd, struct dir_entry* de) {
     int32_t _fd = fd_local2global(fd);
     struct file* f = &file_table[_fd];
 
-    if (f->fd_inode == NULL || f->fd_inode->di.i_type != FT_DIRECTORY) {
+    if (f->fd_inode == NULL || f->fd_inode->i_type != FT_DIRECTORY) {
         return -1;
     }
 
@@ -1018,7 +978,7 @@ void sys_rewinddir(int32_t fd) {
     int32_t global_fd = fd_local2global(fd);
     struct file* f = &file_table[global_fd];
 
-    if (f->fd_inode->di.i_type != FT_DIRECTORY) {
+    if (f->fd_inode->i_type != FT_DIRECTORY) {
         printk("sys_rewinddir: fd %d is not a directory (flag: %d)\n", fd, f->fd_flag);
         return;
     }
@@ -1060,8 +1020,8 @@ int32_t sys_rmdir(const char* _pathname){
 }
 
 static uint32_t get_parent_dir_inode_nr(struct partition* part, uint32_t child_inode_nr,void* io_buf){
-	struct m_inode* child_dir_inode = inode_open(part,child_inode_nr);
-	uint32_t block_lba = child_dir_inode->di.i_sectors[0];
+	struct inode* child_dir_inode = inode_open(part,child_inode_nr);
+	uint32_t block_lba = child_dir_inode->sifs_i.i_sectors[0];
 	ASSERT(block_lba>=part->sb->data_start_lba);
 	inode_close(child_dir_inode);
 	bread_multi(part->my_disk,block_lba,io_buf,1);
@@ -1072,17 +1032,17 @@ static uint32_t get_parent_dir_inode_nr(struct partition* part, uint32_t child_i
 }
 
 static int get_child_dir_name(struct partition* part, uint32_t p_inode_nr,uint32_t c_inode_nr,char* path,void* io_buf){
-	struct m_inode* parent_dir_inode = inode_open(part,p_inode_nr);
+	struct inode* parent_dir_inode = inode_open(part,p_inode_nr);
 	uint8_t block_idx = 0;
 	uint32_t all_blocks_addr[TOTAL_BLOCK_COUNT] = {0},block_cnt = DIRECT_INDEX_BLOCK;
 	while(block_idx<DIRECT_INDEX_BLOCK){
-		all_blocks_addr[block_idx] = parent_dir_inode->di.i_sectors[block_idx];
+		all_blocks_addr[block_idx] = parent_dir_inode->sifs_i.i_sectors[block_idx];
 		block_idx++;
 	}
 	// the first first-level index block
 	int tfflib = DIRECT_INDEX_BLOCK;
-	if(parent_dir_inode->di.i_sectors[tfflib]){
-		bread_multi(part->my_disk,parent_dir_inode->di.i_sectors[tfflib],all_blocks_addr+tfflib,1);
+	if(parent_dir_inode->sifs_i.i_sectors[tfflib]){
+		bread_multi(part->my_disk,parent_dir_inode->sifs_i.i_sectors[tfflib],all_blocks_addr+tfflib,1);
 		block_cnt = TOTAL_BLOCK_COUNT;
 	}
 	inode_close(parent_dir_inode);
@@ -1123,7 +1083,7 @@ char* sys_getcwd(char* buf,uint32_t size){
 	int32_t child_inode_nr = cur_thread->cwd_inode_nr;
 	ASSERT(child_inode_nr>=0&&child_inode_nr<MAX_FILES_PER_PART);
 
-    struct m_inode* temp_inode = inode_open(cur_part, cur_thread->cwd_inode_nr); 
+    struct inode* temp_inode = inode_open(cur_part, cur_thread->cwd_inode_nr); 
     struct partition* part = get_part_by_rdev(temp_inode->i_dev);
     inode_close(temp_inode);
 
@@ -1194,7 +1154,7 @@ int32_t sys_stat(const char* _pathname,struct stat* buf){
 	if(!strcmp(path,"/")||!strcmp(path,"/.")||!strcmp(path,"/..")){
 		buf->st_filetype = FT_DIRECTORY;
 		buf->st_ino = 0;
-		buf->st_size = root_dir.inode->di.i_size;
+		buf->st_size = root_dir.inode->i_size;
 		return 0;
 	}
 
@@ -1206,8 +1166,8 @@ int32_t sys_stat(const char* _pathname,struct stat* buf){
 	struct partition* part = get_part_by_rdev(searched_record.i_dev);
 
 	if(inode_no!=-1){
-		struct m_inode* obj_inode = inode_open(part,inode_no); 
-		buf->st_size = obj_inode->di.i_size;
+		struct inode* obj_inode = inode_open(part,inode_no); 
+		buf->st_size = obj_inode->i_size;
 		inode_close(obj_inode);
 		buf->st_filetype = searched_record.file_type;
 		buf->st_ino = inode_no;
@@ -1449,10 +1409,11 @@ int32_t sys_mknod(const char* _pathname, enum file_types type, uint32_t dev) {
     // 初始化特殊的设备 Inode
     // 设备文件不占用磁盘数据块（i_sectors 全 0），其设备号存在 i_rdev 中
 	// 因此其不用申请空闲磁盘块
-    struct m_inode new_inode;
+    struct inode new_inode;
     inode_init(part, inode_no, &new_inode, type);
-    new_inode.di.i_rdev = dev; 
-    new_inode.di.i_size = 0;   // 特殊文件大小通常为 0
+    new_inode.i_rdev = dev; 
+    new_inode.sifs_i.i_rdev = dev; 
+    new_inode.i_size = 0;   // 特殊文件大小通常为 0
 
     // 同步新 Inode 到磁盘
     memset(io_buf, 0, SECTOR_SIZE * 2);
@@ -1527,10 +1488,10 @@ int32_t sys_dup2(uint32_t old_local_fd, uint32_t new_local_fd) {
 	// 管道特有逻辑, 增加端点计数
     // 如果不加这个，执行 dup2(pd[1], 1) 后 close(pd[1])，
     // pipe_release 会以为写端全关了，导致读者收到 EOF，但实际上 stdout 还在指向写端。
-    if (f->fd_inode->di.i_type == FT_PIPE) {
-        struct pipe* p = (struct pipe*)f->fd_inode->di.i_pipe_ptr;
-        if (f->fd_flag & O_RDONLY) p->reader_count++;
-        if (f->fd_flag & O_WRONLY) p->writer_count++;
+    if (f->fd_inode->i_type == FT_PIPE) {
+        struct pipe_inode_info* pii = (struct pipe_inode_info*)&f->fd_inode->pipe_i;
+        if (f->fd_flag & O_RDONLY) pii->reader_count++;
+        if (f->fd_flag & O_WRONLY) pii->writer_count++;
     }
 
     return new_local_fd;

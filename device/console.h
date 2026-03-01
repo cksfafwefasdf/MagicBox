@@ -12,5 +12,5 @@ extern void console_release(void);
 extern void console_put_char(uint8_t char_asci);
 extern void console_put_str(char* str);
 extern void console_put_int_HAX(uint32_t num);
-extern int32_t console_dev_write(struct file* file, const void* buf, uint32_t count);
+extern int32_t console_dev_write(struct file* file, void* buf, uint32_t count);
 #endif

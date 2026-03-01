@@ -38,10 +38,10 @@ extern struct file_operations tty_dev_fops;
 extern int tty_read(char* buf, uint32_t count);
 extern void tty_init(void);
 extern void tty_input_handler(char c);
-extern int tty_write(const char* buf, uint32_t count);
+extern int tty_write(char* buf, uint32_t count);
 extern void tty_dev_init(void);
 extern int32_t tty_dev_read(struct file* file, void* buf, uint32_t count);
-extern int32_t tty_dev_write(struct file* file, const void* buf, uint32_t count);
+extern int32_t tty_dev_write(struct file* file, void* buf, uint32_t count);
 extern int32_t sys_ioctl(int fd, uint32_t cmd, uint32_t arg);
 extern int32_t tty_ioctl(struct tty_struct* tty, uint32_t cmd, uint32_t arg); 
 

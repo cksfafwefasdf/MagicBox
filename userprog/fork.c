@@ -3,7 +3,7 @@
 #include "string.h"
 #include "process.h"
 #include "debug.h"
-#include "file.h"
+#include "sifs_file.h"
 #include "interrupt.h"
 #include "dlist.h"
 #include "fork.h"
@@ -93,10 +93,10 @@ static void update_f_cnts(struct task_struct* thread) {
 
 			// 管道特有逻辑，维护端点存活计数
             // 如果是管道，必须根据读写标志位增加对应的 reader/writer 计数
-            if (f->fd_inode->di.i_type == FT_PIPE) {
-                struct pipe* p = (struct pipe*)f->fd_inode->di.i_pipe_ptr;
-                if (f->fd_flag & O_RDONLY) p->reader_count++;
-                if (f->fd_flag & O_WRONLY) p->writer_count++;
+            if (f->fd_inode->i_type == FT_PIPE) {
+                struct pipe_inode_info* pii = (struct pipe_inode_info*)&f->fd_inode->pipe_i;
+                if (f->fd_flag & O_RDONLY) pii->reader_count++;
+                if (f->fd_flag & O_WRONLY) pii->writer_count++;
             }
         }
         local_fd++;

@@ -4,7 +4,7 @@
 #include "thread.h"
 #include "device.h"
 #include "char_dev.h"
-#include "file.h"
+#include "sifs_file.h"
 
 static struct lock console_lock;
 
@@ -13,11 +13,11 @@ struct file_operations console_dev_fops = {
     .read = NULL, 
     .write = console_dev_write,
     .open = NULL,
-    .close = NULL
+    .release = NULL
 };
 
 // 适配 VFS 的写函数
-int32_t console_dev_write(struct file* file, const void* buf, uint32_t count) {
+int32_t console_dev_write(struct file* file, void* buf, uint32_t count) {
     const char* data = buf;
     uint32_t i = 0;
     while (i < count) {

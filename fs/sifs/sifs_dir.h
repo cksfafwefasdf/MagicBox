@@ -1,5 +1,5 @@
-#ifndef __FS_DIR_H
-#define __FS_DIR_H
+#ifndef __FS_SIFS_DIR_H
+#define __FS_SIFS_DIR_H
 #include "stdint.h"
 #include "stdbool.h"
 #include "unistd.h"

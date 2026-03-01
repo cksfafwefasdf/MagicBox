@@ -104,7 +104,7 @@ struct file_operations ide_dev_fops = {
     .read = ide_dev_read,
     .write = ide_dev_write,
     .open = NULL,  // 块设备 open 通常在 sys_open 统一处理
-    .close = NULL
+    .release = NULL
 };
 
 static void ide_set_multiple_mode(struct disk* hd, uint8_t sec_per_block) {
@@ -596,9 +596,9 @@ void sys_read_sectors(const char* hd_name, uint32_t lba, uint8_t* buf, uint32_t 
 // buf 用户缓冲区
 // count 读取字节数
 int32_t ide_dev_read(struct file* file, void* buf, uint32_t count) {
-    struct m_inode* inode = file->fd_inode;
-	printk("inode->di.i_rdev:%x\n",inode->di.i_rdev);
-    struct partition* part = get_part_by_rdev(inode->di.i_rdev);
+    struct inode* inode = file->fd_inode;
+	printk("inode->i_rdev:%x\n",inode->i_rdev);
+    struct partition* part = get_part_by_rdev(inode->i_rdev);
     uint32_t part_size_bytes = part->sec_cnt * SECTOR_SIZE;
 
 	// 边界检查
@@ -663,9 +663,9 @@ int32_t ide_dev_read(struct file* file, void* buf, uint32_t count) {
 
 // 磁盘设备 VFS 读取接口
 // 参数含义同 ide_dev_read
-int32_t ide_dev_write(struct file* file, const void* buf, uint32_t count) {
-    struct m_inode* inode = file->fd_inode;
-    struct partition* part = get_part_by_rdev(inode->di.i_rdev);
+int32_t ide_dev_write(struct file* file, void* buf, uint32_t count) {
+    struct inode* inode = file->fd_inode;
+    struct partition* part = get_part_by_rdev(inode->i_rdev);
     uint32_t part_size_bytes = part->sec_cnt * SECTOR_SIZE;
 
     // 边界检查

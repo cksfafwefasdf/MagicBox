@@ -18,7 +18,6 @@ void sema_wait(struct semaphore* psema){
 	while(psema->value==0){
 		// 此处断言也得取消，理由和 signal 中类似
 		// ASSERT(!dlist_find(&psema->waiters,&get_running_task_struct()->general_tag));
-		struct task_struct* cur = get_running_task_struct();
 		dlist_push_back(&psema->waiters,&get_running_task_struct()->general_tag);
 		thread_block(TASK_BLOCKED);
 	}

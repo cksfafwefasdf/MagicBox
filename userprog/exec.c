@@ -10,7 +10,7 @@
 #include "syscall.h"
 #include "stdio-kernel.h"
 #include "debug.h"
-#include "file.h"
+#include "sifs_file.h"
 #include "process.h"
 #include "wait_exit.h"
 #include "vma.h"
@@ -49,7 +49,7 @@ static int32_t load(const char* pathname){
 
 	int32_t global_fd = fd_local2global(fd);
 
-	struct m_inode* file_inode = file_table[global_fd].fd_inode; // 获取 inode，以便于填充vma
+	struct inode* file_inode = file_table[global_fd].fd_inode; // 获取 inode，以便于填充vma
 
 	ASSERT(global_fd!=-1);
 

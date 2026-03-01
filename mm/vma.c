@@ -1,6 +1,7 @@
 #include "vma.h"
 #include "thread.h"
-#include "inode.h"
+#include "sifs_inode.h"
+#include "sifs_file.h"
 #include "ide.h"
 #include "debug.h"
 #include "stdio-kernel.h"
@@ -53,7 +54,7 @@ static bool vma_after_address(struct dlist_elem* elem, void* arg) {
 // 该函数不进行任务绑定，只是单纯的插入
 // 以便于在内核态下也可以对这个函数进行调用
 void add_vma_sorted(struct dlist* plist, uint32_t start, uint32_t end, 
-             uint32_t pgoff, struct m_inode* inode, uint32_t flags, uint32_t filesz) {
+             uint32_t pgoff, struct inode* inode, uint32_t flags, uint32_t filesz) {
 
     // 寻找插入位置（第一个起始地址比待插元素大的元素）
     struct dlist_elem* next_elem = dlist_traversal(plist, vma_after_address, &start);
@@ -131,7 +132,7 @@ void add_vma_sorted(struct dlist* plist, uint32_t start, uint32_t end,
 }
 
 // 任务绑定, 给特定进程添加 VMA
-void add_vma(struct task_struct* task, uint32_t start, uint32_t end, uint32_t pgoff, struct m_inode* inode, uint32_t flags, uint32_t filesz) {
+void add_vma(struct task_struct* task, uint32_t start, uint32_t end, uint32_t pgoff, struct inode* inode, uint32_t flags, uint32_t filesz) {
     add_vma_sorted(&task->vma_list, start, end, pgoff, inode, flags, filesz);
 }
 

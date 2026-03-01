@@ -15,7 +15,7 @@ OBJDUMP := objdump
 # 自动化目录管理
 # 定义参与内核编译的子目录（白名单）
 # 这里不包含用户程序目录 prog/，因为那里的 main 函数会与内核 main 冲突
-KERNEL_SUBDIRS := kernel device thread userprog fs lib mm lib/kernel lib/user lib/common
+KERNEL_SUBDIRS := kernel device thread userprog fs lib mm lib/kernel lib/user lib/common fs/sifs
 
 # 自动获取所有 C 和 ASM 源文件
 # 使用 wildcard 查找
@@ -41,7 +41,7 @@ VPATH := $(subst $(space),:,$(KERNEL_SUBDIRS))
 
 # 编译选项 
 LIB := -I lib/ -I lib/kernel/ -I lib/user/ -I lib/common/ \
-       -I kernel/ -I device/ -I thread/ -I userprog/ -I fs/ -I shell/ -I mm/
+       -I kernel/ -I device/ -I thread/ -I userprog/ -I fs/ -I shell/ -I mm/ -I fs/sifs/
 
 ASFLAGS := -f elf
 
