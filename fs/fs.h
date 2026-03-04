@@ -15,10 +15,12 @@ extern int32_t sys_read(int32_t fd,void* buf,uint32_t count);
 extern int32_t sys_lseek(int32_t fd,int32_t offset,enum whence whence);
 extern int32_t sys_unlink(const char* pathname);
 extern int32_t sys_mkdir(const char* pathname);
-extern int32_t sys_closedir(int32_t fd_dir);
-extern int32_t sys_opendir(const char* name);
+// 对于文件夹的 open 和 close 统一放到 sys_open 和 sys_close 中
+// 校验文件夹只能以只读方式打开即可
+// extern int32_t sys_closedir(int32_t fd_dir);
+// extern int32_t sys_opendir(const char* name);
 extern void sys_rewinddir(int32_t fd);
-extern int32_t sys_readdir(int32_t fd, struct dir_entry* de);
+extern int32_t sys_readdir(int32_t fd, struct dirent* de);
 extern int32_t sys_rmdir(const char* pathname);
 extern int32_t sys_chdir(const char* path);
 extern char* sys_getcwd(char* buf,uint32_t size);

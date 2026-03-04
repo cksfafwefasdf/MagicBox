@@ -12,10 +12,8 @@
 #include "interrupt.h"
 #include "process.h"
 
-
 // System-wide Open File Table
 struct file file_table[MAX_FILE_OPEN_IN_SYSTEM];
-
 
 int32_t get_free_slot_in_global(void){
 	uint32_t fd_idx = 3;
@@ -98,87 +96,120 @@ void bitmap_sync(struct partition* part,uint32_t bit_idx,enum bitmap_type btmp_t
 }
 
 // create a regular file
-int32_t file_create(struct dir* parent_dir,char* filename,uint8_t flag){
-	void* io_buf = kmalloc(SECTOR_SIZE*2);
-	if(io_buf==NULL){
-		printk("in file_create: kmalloc for io_buf failed!\n");
-		return -1;
-	}
+int32_t sifs_file_create(struct inode* parent_inode, char* filename, uint8_t flag) {
+    void* io_buf = kmalloc(SECTOR_SIZE * 2);
+    if (io_buf == NULL) {
+        printk("in sifs_file_create: kmalloc for io_buf failed!\n");
+        return -1;
+    }
 
-	struct partition* part = get_part_by_rdev(parent_dir->inode->i_dev);
+    struct partition* part = get_part_by_rdev(parent_inode->i_dev);
+    uint8_t rollback_step = 0;
 
-	uint8_t rollback_step = 0;
+    // 分配 Inode 编号
+    int32_t inode_no = inode_bitmap_alloc(part);
+    if (inode_no == -1) {
+        printk("in sifs_file_create: allocate inode failed!\n");
+        kfree(io_buf);
+        return -1;
+    }
 
-	int32_t inode_no = inode_bitmap_alloc(part);
-	if(inode_no==-1){
-		printk("in file_create: allocate inode failed!\n");
-		return -1;
-	}
-	
-	// malloc space for inode
-	// this space should be in the kernel heap space
-	
-	struct inode* new_file_inode = (struct inode*)kmalloc(sizeof(struct inode));
-	
+    // 为新 Inode 分配内核堆内存
+    struct inode* new_file_inode = (struct inode*)kmalloc(sizeof(struct inode));
+    if (new_file_inode == NULL) {
+        printk("in sifs_file_create: kmalloc for inode failed!\n");
+        rollback_step = 1;
+        goto rollback;
+    }
 
-	if(new_file_inode==NULL){
-		printk("in file_create: kmalloc for inode failed!\n");
-		rollback_step = 1;
-		goto rollback;
-	}
+    // 初始化 Inode (设置类型、大小、块索引等)
+    inode_init(part, inode_no, new_file_inode, FT_REGULAR);
+    
+    // 在全局文件表中获取空位
+    int fd_idx = get_free_slot_in_global();
+    if (fd_idx == -1) {
+        printk("exceed max open files!\n");
+        rollback_step = 2;
+        goto rollback;
+    }
 
-	inode_init(part,inode_no,new_file_inode,FT_REGULAR);
-	
-	// printk("file_create:::new_file_inode addr: %x\n",new_file_inode);
-	int fd_idx = get_free_slot_in_global();
-	if(fd_idx==-1){
-		printk("exceed max open files!\n");
-		rollback_step = 2;
-		goto rollback;
-	}
+    // 填充全局 file 结构
+    file_table[fd_idx].fd_inode = new_file_inode;
+    file_table[fd_idx].fd_pos = 0;
+    file_table[fd_idx].fd_flag = flag;
+    file_table[fd_idx].f_count = 1;
+    file_table[fd_idx].fd_inode->write_deny = false;
 
-	file_table[fd_idx].fd_inode = new_file_inode;
-	file_table[fd_idx].fd_pos = 0;
-	file_table[fd_idx].fd_flag = flag;
-	file_table[fd_idx].fd_inode->write_deny = false;
-	file_table[fd_idx].f_count = 1;
+    // 在父目录中创建目录项
+    struct sifs_dir_entry new_dir_entry;
+    memset(&new_dir_entry, 0, sizeof(struct sifs_dir_entry));
+    sifs_create_dir_entry(filename, inode_no, FT_REGULAR, &new_dir_entry);
 
-	struct dir_entry new_dir_entry;
-	memset(&new_dir_entry,0,sizeof(struct dir_entry));
+    // 使用 parent_inode 
+    if (!sifs_sync_dir_entry(parent_inode, &new_dir_entry, io_buf)) {
+        printk("sync dir_entry to disk failed!\n");
+        rollback_step = 3;
+        goto rollback;
+    }
 
-	create_dir_entry(filename,inode_no,FT_REGULAR,&new_dir_entry);
+    // 同步元数据到磁盘
+    memset(io_buf, 0, SECTOR_SIZE * 2);
+    inode_sync(part, parent_inode, io_buf); // 同步父目录更新后的 i_size
+    memset(io_buf, 0, SECTOR_SIZE * 2);
+    inode_sync(part, new_file_inode, io_buf); // 同步新文件的 Inode
+    bitmap_sync(part, inode_no, INODE_BITMAP); // 同步 Inode 位图
 
-	if(!sync_dir_entry(parent_dir,&new_dir_entry,io_buf)){
-		printk("sync dir_entry to disk failed!\n");
-		rollback_step = 3;
-		goto rollback;
-	}
-	memset(io_buf,0,SECTOR_SIZE*2);
-	// printk("file_create1:::part:%x dir_inode:%x\n",part->i_rdev,parent_dir->inode->i_dev);
-	inode_sync(part,parent_dir->inode,io_buf);
-	memset(io_buf,0,SECTOR_SIZE*2);
-	// printk("file_create2:::part:%x dir_inode:%x\n",part->i_rdev,new_file_inode->i_dev);
-	inode_sync(part,new_file_inode,io_buf);
-	bitmap_sync(part,inode_no,INODE_BITMAP);
+    // 将新 Inode 加入分区的 open_inodes 链表
+    // 这样以后其他进程 open 这个文件时，就能从内存链表中找到，保证唯一性
+    dlist_push_front(&part->open_inodes, &new_file_inode->inode_tag);
+    new_file_inode->i_open_cnts = 1;
 
-	dlist_push_front(&part->open_inodes,&new_file_inode->inode_tag);
-	new_file_inode->i_open_cnts = 1;
-
-	kfree(io_buf);
-	return pcb_fd_install(fd_idx);
+    kfree(io_buf);
+    return pcb_fd_install(fd_idx); // 安装到进程的 FD 表中
 
 rollback:
-	switch (rollback_step){
-		case 3:
-			memset(&file_table[fd_idx],0,sizeof(struct file));
-		case 2:
-			kfree(new_file_inode);
-		case 1:
-			bitmap_set(&part->inode_bitmap,inode_no,0);
-			break;
-	}
-	kfree(io_buf);
-	return -1;
+    switch (rollback_step) {
+        case 3:
+            memset(&file_table[fd_idx], 0, sizeof(struct file));
+        case 2:
+            kfree(new_file_inode);
+        case 1:
+            bitmap_set(&part->inode_bitmap, inode_no, 0);
+            break;
+    }
+    kfree(io_buf);
+    return -1;
+}
+
+// if success, then return 0
+// else return -1
+int32_t file_close(struct file* file){
+	if (file == NULL || file->fd_inode == NULL) {
+        return -1;
+    }
+
+	file->f_count--;
+	// 只有当这个文件是以“独占写”或“执行”模式打开，且我们要彻底释放它时才恢复
+	if (file->fd_inode->i_open_cnts == 1 && file->f_count == 1) {
+        file->fd_inode->write_deny = false;
+    }
+
+	// 只有当 file 的 f_count 为 0 时
+	// 说明这个全局表项可以清空了
+	// 因此，改该全局表项对应的 inode 的打开数量也要减1
+	// 这个打开计数是在 inode_close 中减少的
+	if (file->f_count == 0) {
+        // 这时才真正去減少 Inode 的计数
+        // 因为这个“打开文件句柄”已经彻底沒人用了
+        inode_close(file->fd_inode); 
+        
+        // 此时将指針置空是安全的，因为没有 FD 指向这里了
+        file->fd_inode = NULL; 
+        file->fd_pos = 0;
+        file->fops = NULL;
+        file->fd_flag = 0;
+    }
+	return 0;
 }
 
 int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
@@ -208,34 +239,6 @@ int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
 		}
 	}
 	return pcb_fd_install(fd_idx);
-}
-
-// if success, then return 0
-// else return -1
-int32_t file_close(struct file* file){
-	if(file==NULL){
-		return -1;
-	}
-
-	file->f_count--;
-	// 只有当这是最后一个指向该 inode 的 file 时才真正释放保护
-	if (file->fd_inode->i_open_cnts == 1) {
-        file->fd_inode->write_deny = false;
-    }
-
-	// 只有当 file 的 f_count 为 0 时
-	// 说明这个全局表项可以清空了
-	// 因此，改该全局表项对应的 inode 的打开数量也要减1
-	// 这个打开计数是在 inode_close 中减少的
-	if (file->f_count == 0) {
-        // 這時才真正去減少 Inode 的計數
-        // 因為這個“打開文件句柄”已經徹底沒人用了
-        inode_close(file->fd_inode); 
-        
-        // 此時將指針置空是安全的，因為沒有 FD 指向這裡了
-        file->fd_inode = NULL; 
-    }
-	return 0;
 }
 
 int32_t file_write(struct file* file,const void* buf,uint32_t count){

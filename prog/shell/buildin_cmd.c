@@ -159,70 +159,69 @@ void buildin_ls(uint32_t argc, char** argv) {
 
     // 处理目录逻辑
     if (file_stat.st_filetype == FT_DIRECTORY) {
-        int32_t fd = opendir(pathname); // 现在返回的是 fd
+        int32_t fd = open(pathname,O_RDONLY); 
         if (fd == -1) {
             printf("ls: opendir %s failed\n", pathname);
             return;
         }
 
-        struct dir_entry dir_e; // 用户态缓冲区
+        struct dirent dir_e; 
         char sub_pathname[MAX_PATH_LEN] = {0};
         uint32_t pathname_len = strlen(pathname);
         memcpy(sub_pathname, pathname, pathname_len);
 
-        // 确保路径以 / 结尾，方便拼接子文件名
         if (sub_pathname[pathname_len - 1] != '/') {
             sub_pathname[pathname_len] = '/';
             pathname_len++;
         }
 
-        rewinddir(fd); // 传入 fd 重置偏移量
+        rewinddir(fd); 
 
         if (long_info) {
             printf("total: %d\n", file_stat.st_size);
-            // readdir 传入 fd 和缓冲区地址
             while (readdir(fd, &dir_e) > 0) {
-                char ftype = (dir_e.f_type == FT_DIRECTORY) ? 'd' : '-';
+        
+                char ftype = (dir_e.d_type == FT_DIRECTORY) ? 'd' : '-';
 
-                // 拼接子文件完整路径以获取 stat 信息
                 sub_pathname[pathname_len] = 0;
-                strcat(sub_pathname, dir_e.filename);
+                
+                strcat(sub_pathname, dir_e.d_name);
                 
                 memset(&file_stat, 0, sizeof(struct stat));
                 if (stat(sub_pathname, &file_stat) == -1) {
-                    printf("ls: cannot access %s\n", dir_e.filename);
-                    closedir(fd);
+                    printf("ls: cannot access %s\n", dir_e.d_name);
+                    close(fd);
                     return;
                 }
-				if(FT_DIRECTORY==dir_e.f_type){
-					printf("%c %d %d " BLUE "%s" RESET "\n", ftype, dir_e.i_no, file_stat.st_size, dir_e.filename);
-				}else if(FT_CHAR_SPECIAL==dir_e.f_type){
-					printf("%c %d %d " RED "%s" RESET "\n", ftype, dir_e.i_no, file_stat.st_size, dir_e.filename);
-				}else if(FT_BLOCK_SPECIAL==dir_e.f_type){
-					printf("%c %d %d " YELLOW "%s" RESET "\n", ftype, dir_e.i_no, file_stat.st_size, dir_e.filename);
-				}else{
-					printf("%c %d %d %s\n", ftype, dir_e.i_no, file_stat.st_size, dir_e.filename);
-				}
 
+                if (FT_DIRECTORY == dir_e.d_type) {
+                    printf("%c %d %d " BLUE "%s" RESET "\n", ftype, dir_e.d_ino, file_stat.st_size, dir_e.d_name);
+                } else if (FT_CHAR_SPECIAL == dir_e.d_type) {
+                    printf("%c %d %d " RED "%s" RESET "\n", ftype, dir_e.d_ino, file_stat.st_size, dir_e.d_name);
+                } else if (FT_BLOCK_SPECIAL == dir_e.d_type) {
+                    printf("%c %d %d " YELLOW "%s" RESET "\n", ftype, dir_e.d_ino, file_stat.st_size, dir_e.d_name);
+                } else {
+                    printf("%c %d %d %s\n", ftype, dir_e.d_ino, file_stat.st_size, dir_e.d_name);
+                }
             }
         } else {
-            // 简略模式：只打印文件名
+            // 简略模式
             while (readdir(fd, &dir_e) > 0) {
-				if(FT_DIRECTORY==dir_e.f_type){
-					printf(BLUE "%s " RESET, dir_e.filename);
-				}else if(FT_CHAR_SPECIAL==dir_e.f_type){
-					printf(RED "%s " RESET, dir_e.filename);
-				}else if(FT_BLOCK_SPECIAL==dir_e.f_type){
-					printf(YELLOW "%s " RESET, dir_e.filename);
-				}else{
-					printf("%s ", dir_e.filename);
-				}
+                if (FT_DIRECTORY == dir_e.d_type) {
+                    printf(BLUE "%s " RESET, dir_e.d_name);
+                } else if (FT_CHAR_SPECIAL == dir_e.d_type) {
+                    printf(RED "%s " RESET, dir_e.d_name);
+                } else if (FT_BLOCK_SPECIAL == dir_e.d_type) {
+                    printf(YELLOW "%s " RESET, dir_e.d_name);
+                } else {
+                    printf("%s ", dir_e.d_name);
+                }
             }
             printf("\n");
         }
-        closedir(fd); // 关闭 fd
+        close(fd); 
     } else {
-		// 处理普通文件逻辑
+        // 处理普通文件逻辑保持不变
         if (long_info) {
             printf("- %d %d %s\n", file_stat.st_ino, file_stat.st_size, pathname);
         } else {
@@ -269,13 +268,19 @@ int32_t buildin_rmdir(uint32_t argc,char** argv){
 	if(argc!=2){
 		printf("rmdir: only support 1 argument!\n");
 	}else{
+		if(!strcmp(".",argv[1])||!strcmp("..",argv[1])){
+			printf("cannot remove '.' or '..'!\n");
+			return ret;
+		}
 		make_clear_abs_path(argv[1],final_path);
-		if(strcmp("/",final_path)){
-			if(rmdir(final_path)==0){
-				ret = 0;
-			}else{
-				printf("rmdir: remove %s failed.\n",argv[1]);
-			}
+		if(!strcmp("/",final_path)){
+			printf("cannot remove the root!\n");
+			return ret;
+		}
+		if(rmdir(final_path)==0){
+			ret = 0;
+		}else{
+			printf("rmdir: remove %s failed.\n",argv[1]);
 		}
 	}
 	return ret;

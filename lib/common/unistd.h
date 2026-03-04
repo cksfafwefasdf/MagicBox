@@ -48,13 +48,16 @@ enum whence{
 	SEEK_END // SEEK_END = 3
 };
 
-// 不要把 dir 数据结构包含进来，因为dir数据结构中包含着一个inode类型的成员
-// 将其包含进来会导致一连串的连锁反应
-// 从而使得内核代码和用户代码严重耦合
-struct dir_entry{
-	char filename[MAX_FILE_NAME_LEN];
-	uint32_t i_no;
-	enum file_types f_type;
+
+// 这是一个用户和内核之间的abi接口，这是VFS真正操纵的目录项结构体
+// 我们现在取消了 dir 结构体，我们将 dir 结构体并入到 file 结构体中
+// 将 dir 也看做一种文件，然后通过文件类型来分发操作
+struct dirent {
+    uint32_t d_ino; // Inode 编号
+    uint32_t d_off; // 在目录文件中的偏移
+    uint16_t d_reclen; // 当前 dirent 的长度
+    uint8_t  d_type; // 文件类型
+    char d_name[MAX_FILE_NAME_LEN]; // 文件名字符串
 };
 
 struct sigaction {

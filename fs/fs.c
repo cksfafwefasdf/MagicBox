@@ -25,7 +25,7 @@
 #include "fifo.h"
 
 struct partition* cur_part;
-struct dir* cur_dir;
+struct inode* cur_dir_inode;
 
 // logic formatlize 
 static void partition_format(struct partition* part){
@@ -58,7 +58,7 @@ static void partition_format(struct partition* part){
 
 	sb.data_start_lba = sb.inode_table_lba+sb.inode_table_sects;
 	sb.root_inode_no = 0;
-	sb.dir_entry_size = sizeof(struct dir_entry);
+	sb.dir_entry_size = sizeof(struct sifs_dir_entry);
 
 	printk("%s info:\n",part->name);
 	printk("\tmagic:0x%x\n\
@@ -129,7 +129,7 @@ static void partition_format(struct partition* part){
 	// write root dict to sb.data_start_lba
 	// write dict '.' and '..'
 	memset(buf,0,buf_size);
-	struct dir_entry* p_de = (struct dir_entry*)buf;
+	struct sifs_dir_entry* p_de = (struct sifs_dir_entry*)buf;
 
 	// init current dict '.'
 	memcpy(p_de->filename,".",1);
@@ -247,7 +247,7 @@ void filesys_init(){
 	// mount default_part, quick mount
 	dlist_traversal(&partition_list,mount_partition,(void*)default_part);
 	open_root_dir(cur_part);
-	cur_dir = &root_dir;
+	cur_dir_inode = root_dir_inode;
 
 	uint32_t fd_idx = 0;
 	while(fd_idx<MAX_FILE_OPEN_IN_SYSTEM){
@@ -290,79 +290,87 @@ int32_t path_depth_cnt(char* pathname){
 
 // search_file 只关闭中间搜索过程中的“中间父目录”，最终的父目录无论如何他都不关闭
 // 由调用者关闭
-static int search_file(const char* pathname, struct path_search_record* searched_record) {
+static int32_t search_file(const char* pathname, struct path_search_record* searched_record) {
     // 处理根目录特例
     if (!strcmp(pathname, "/") || !strcmp(pathname, "/.") || !strcmp(pathname, "/..")) {
-        searched_record->parent_dir = dir_open(cur_part, 0);
+        // 由于 root_dir 是全局 file，其 inode 应该始终打开
+        searched_record->parent_inode = inode_open(cur_part, root_dir_inode->i_no); 
         searched_record->file_type = FT_DIRECTORY;
         searched_record->searched_path[0] = 0;
-        searched_record->i_dev = root_dir.inode->i_dev;
-        return 0;
+        searched_record->i_dev = root_dir_inode->i_dev;
+        return root_dir_inode->i_no;
     }
 
     uint32_t path_len = strlen(pathname);
     ASSERT(pathname[0] == '/' && path_len > 1 && path_len < MAX_PATH_LEN);
     
     char* sub_path = (char*)pathname;
-    struct dir* parent_dir = dir_open(cur_part, 0); 
+    // 初始起点，直接使用全局根目录的 inode
+    struct inode* parent_inode = inode_open(cur_part, root_dir_inode->i_no);
+    // struct inode* parent_inode = root_dir.fd_inode; 
 
-    struct dir_entry dir_e;
+    struct sifs_dir_entry dir_e; // 使用磁盘镜像结构
     char name[MAX_FILE_NAME_LEN] = {0};
 
-    searched_record->parent_dir = parent_dir;
+    searched_record->parent_inode = parent_inode;
     searched_record->file_type = FT_UNKNOWN;
-    searched_record->i_dev = parent_dir->inode->i_dev;
+    searched_record->i_dev = parent_inode->i_dev;
 
-    uint32_t parent_inode_no = 0; // 用于记录当前目录的父目录inode
+    uint32_t parent_inode_no = parent_inode->i_no; 
     struct partition* part;
 
     sub_path = _path_parse(sub_path, name);
 
     while (name[0]) {
         ASSERT(strlen(searched_record->searched_path) < 512);
-
         part = get_part_by_rdev(searched_record->i_dev);
 
         // 记录已经扫描过的路径
         strcat(searched_record->searched_path, "/");
         strcat(searched_record->searched_path, name);
 
-        // 在当前目录查找该名字
-        if (search_dir_entry(part, parent_dir, name, &dir_e)) {
+        // 在当前 inode 指向的目录中查找该名字
+        if (sifs_search_dir_entry(part, parent_inode, name, &dir_e)) {
             memset(name, 0, MAX_FILE_NAME_LEN);
+            // console_put_str(sub_path);console_put_str("\n");
             if (sub_path) {
                 sub_path = _path_parse(sub_path, name);
             }
 
             if (FT_DIRECTORY == dir_e.f_type) {
-                // 如果是目录，则进入该目录继续查找
-                parent_inode_no = parent_dir->inode->i_no;
-                if (parent_dir != &root_dir) { 
-                    dir_close(parent_dir); 
+                // 记录当前目录作为“下一轮的父目录”
+                parent_inode_no = parent_inode->i_no;
+
+                // 如果当前目录不是根目录，需要释放其引用计数（因为它即将被替换）
+                if (parent_inode != root_dir_inode) {
+                    inode_close(parent_inode);
                 }
-                parent_dir = dir_open(part, dir_e.i_no);
-                searched_record->parent_dir = parent_dir;
-                searched_record->i_dev = parent_dir->inode->i_dev;
+
+                // 进入下一级目录
+                parent_inode = inode_open(part, dir_e.i_no);
+                searched_record->parent_inode = parent_inode;
+                searched_record->i_dev = parent_inode->i_dev;
                 continue;
             } else {
-                // 只要不是目录（包括普通文件、字符设备、块设备），就说明已经找到了目标路径的最末端
-				// 直接返回 
+                // 找到了目标文件（普通文件等）
                 searched_record->file_type = dir_e.f_type;
                 return dir_e.i_no;
             }
         } else {
-            // 找不到该名字，直接返回-1，由调用者决定是报错还是创建文件
+            // 找不到该名字
             return -1;
         }
     }
 
-    // 如果执行到这里，说明循环是因为 name[0] 为空退出的，
-    // 这意味着路径以 "/" 结尾，且最后一个名字也是目录（例如 "/dev/"）
+    // 路径以 "/" 结尾的情况处理 (例如 "/dev/")
+    // 为了符合逻辑，parent_inode 应当回退到该目录的父目录
+    part = get_part_by_rdev(searched_record->parent_inode->i_dev);
     
-    // 为了符合 sys_open 的逻辑，我们需要让 parent_dir 指向该目录的父目录
-    part = get_part_by_rdev(searched_record->parent_dir->inode->i_dev);
-    dir_close(searched_record->parent_dir);
-    searched_record->parent_dir = dir_open(part, parent_inode_no);
+    // 关闭当前指向的目录，重新打开它的父目录
+    if (searched_record->parent_inode != root_dir_inode) {
+        inode_close(searched_record->parent_inode);
+    }
+    searched_record->parent_inode = inode_open(part, parent_inode_no);
     
     searched_record->file_type = FT_DIRECTORY;
     return dir_e.i_no;
@@ -391,11 +399,6 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
 	char pathname[MAX_PATH_LEN] = {0};
     make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
 
-	if(pathname[strlen(pathname)-1]=='/'){
-		printk("can't open a directory %s\n",pathname);
-		return -1;
-	}
-
 	// ASSERT(flags<=7);
 	int32_t fd = -1;
 
@@ -409,17 +412,24 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
 
 	// 只有找到了文件，才去校验它是不是目录
 	if (found && searched_record.file_type == FT_DIRECTORY) {
-		printk("can't open a directory with open()...\n");
-		dir_close(searched_record.parent_dir);
-		return -1;
+		// printk("can't open a directory with open()...\n");
+		// inode_close(searched_record.parent_inode);
+		// 如果是目录，检查 flags 是否合法
+        // 目录不允许写入、截断或创建
+        if (flags & (O_WRONLY | O_RDWR | O_CREATE)) {
+            printk("sys_open: directory %s is read-only\n", pathname);
+            inode_close(searched_record.parent_inode);
+            return -1;
+        }
+        // 校验通过，允许进入下面的 file_open 流程
 	}
 
 	uint32_t path_searched_depth = path_depth_cnt(searched_record.searched_path);
 	// to process the situation /a/b/c (/a/b is a regular file or not exists)
-	if(pathname_depth!=path_searched_depth){
+	if(pathname_depth!=path_searched_depth && strcmp(pathname, "/")){
 		printk("sys_open: cannot access %s: Not a directory, subpath %s is't exist\n",\
 		pathname,searched_record.searched_path);
-		dir_close(searched_record.parent_dir);
+		inode_close(searched_record.parent_inode);
 		return -1;
 	}
 
@@ -427,25 +437,25 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
 		printk("in path %s,file %s is't exist\n",\
 		searched_record.searched_path,\
 		(strrchr(searched_record.searched_path,'/')+1));
-		dir_close(searched_record.parent_dir);
+		inode_close(searched_record.parent_inode);
 		return -1;
 	}else if(found && (flags & O_CREATE)){
 		printk("%s has already exist!\n",pathname);
-		dir_close(searched_record.parent_dir);
+		inode_close(searched_record.parent_inode);
 		return -1;
 	}
 
 	switch (flags&O_CREATE){
 		case  O_CREATE:
 			printk("creating file\n");
-			fd = file_create(searched_record.parent_dir,(strrchr(pathname,'/')+1),flags);
-			dir_close(searched_record.parent_dir);
+			fd = sifs_file_create(searched_record.parent_inode,(strrchr(pathname,'/')+1),flags);
+			inode_close(searched_record.parent_inode);
 			break;
 		default: // file is existed, open the file
 			// O_RDONLY,O_WRONLY,O_RDWRget_part_by_rdev
 			struct partition* part = get_part_by_rdev(searched_record.i_dev);
 			fd = file_open(part,inode_no,flags);
-			dir_close(searched_record.parent_dir); // 关掉父文件夹，解析任务已经完成了
+			inode_close(searched_record.parent_inode); // 关掉父文件夹，解析任务已经完成了
 			break;
 	}
 
@@ -666,305 +676,244 @@ int32_t sys_lseek(int32_t fd,int32_t offset,enum whence whence){
 	return pf->fd_pos;
 }
 
-int32_t sys_unlink(const char* _pathname){
-	char pathname[MAX_PATH_LEN] = {0};
+int32_t sys_unlink(const char* _pathname) {
+    char pathname[MAX_PATH_LEN] = {0};
     make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
 
-	ASSERT(strlen(pathname)<MAX_PATH_LEN);
+    struct path_search_record searched_record;
+    memset(&searched_record, 0, sizeof(struct path_search_record));
+    
+    // 查找文件
+    int inode_no = search_file(pathname, &searched_record);
+    
+    // 根目录不允许 unlink (inode 0 通常是根目录)
+    ASSERT(inode_no != 0);
+    
+    if (inode_no == -1) {
+        printk("file %s not found!\n", pathname);
+        // 如果 search_file 失败，内部可能已经打开了 parent_inode，需要释放
+        if (searched_record.parent_inode && searched_record.parent_inode != root_dir_inode) {
+            inode_close(searched_record.parent_inode);
+        }
+        return -1;
+    }
 
-	struct path_search_record searched_record;
-	memset(&searched_record,0,sizeof(struct path_search_record));
-	int inode_no = search_file(pathname,&searched_record);
-	ASSERT(inode_no!=0);
-	if(inode_no==-1){
-		printk("file %s not found!\n",pathname);
-		dir_close(searched_record.parent_dir);
-		return -1;
-	}
+    // 检查文件类型，unlink 只能删除非目录文件
+    if (searched_record.file_type == FT_DIRECTORY) {
+        printk("can't delete a directory with unlink(), use rmdir() instead!\n");
+        if (searched_record.parent_inode != root_dir_inode) {
+            inode_close(searched_record.parent_inode);
+        }
+        return -1;
+    }
 
-	if(searched_record.file_type==FT_DIRECTORY){
-		printk("can't delete a direcotry with unlink(), use rmdir() instead !\n");
-		dir_close(searched_record.parent_dir);
-		return -1;
-	}
+    // 检查文件是否正在被系统打开
+    // 我们通常不允许删除已打开的文件
+    uint32_t file_idx = 0;
+    while (file_idx < MAX_FILE_OPEN_IN_SYSTEM) {
+        if (file_table[file_idx].fd_inode != NULL && (uint32_t)inode_no == file_table[file_idx].fd_inode->i_no) {
+            break;
+        }
+        file_idx++;
+    }
 
-	uint32_t file_idx = 0;
-	while(file_idx<MAX_FILE_OPEN_IN_SYSTEM){
-		if(file_table[file_idx].fd_inode!=NULL&&(uint32_t)inode_no==file_table[file_idx].fd_inode->i_no){
-			break;
-		}
-		file_idx++;
-	}
-	if(file_idx<MAX_FILE_OPEN_IN_SYSTEM){
-		dir_close(searched_record.parent_dir);
-		printk("file %s is in use, not allow to delete!\n",pathname);
-		return -1;
-	}
-	ASSERT(file_idx==MAX_FILE_OPEN_IN_SYSTEM);
+    if (file_idx < MAX_FILE_OPEN_IN_SYSTEM) {
+        if (searched_record.parent_inode != root_dir_inode) {
+            inode_close(searched_record.parent_inode);
+        }
+        printk("file %s is in use, not allowed to delete!\n", pathname);
+        return -1;
+    }
 
-	void* io_buf = kmalloc(SECTOR_SIZE*2);
-	if(io_buf==NULL){
-		dir_close(searched_record.parent_dir);
-		printk("sys_unlink: malloc for io_buf failed!\n");
-		return -1;
-	}
+    // 执行删除逻辑
+    void* io_buf = kmalloc(SECTOR_SIZE * 2);
+    if (io_buf == NULL) {
+        if (searched_record.parent_inode != root_dir_inode) {
+            inode_close(searched_record.parent_inode);
+        }
+        printk("sys_unlink: malloc for io_buf failed!\n");
+        return -1;
+    }
 
-	struct dir* parent_dir =  searched_record.parent_dir;
-	struct partition* part = get_part_by_rdev(parent_dir->inode->i_dev);
-	delete_dir_entry(part,parent_dir,inode_no,io_buf);
-	inode_release(part,inode_no);
-	kfree(io_buf);
-	dir_close(searched_record.parent_dir);
-	return 0;
+    struct inode* parent_inode = searched_record.parent_inode;
+    struct partition* part = get_part_by_rdev(parent_inode->i_dev);
+
+    // 从父目录中删除目录项 (使用重构后的 inode 版函数)
+    if (sifs_delete_dir_entry(part, parent_inode, inode_no, io_buf)) {
+        // 彻底释放文件的 inode 及其占用的磁盘块
+        inode_release(part, inode_no);
+    } else {
+        printk("sys_unlink: delete_dir_entry failed!\n");
+        kfree(io_buf);
+        if (searched_record.parent_inode != root_dir_inode) {
+            inode_close(searched_record.parent_inode);
+        }
+        return -1;
+    }
+
+    kfree(io_buf);
+    
+    // 清理 search_file 留在内存里的父目录句柄
+    if (searched_record.parent_inode != root_dir_inode) {
+        inode_close(searched_record.parent_inode);
+    }
+    
+    return 0;
 }
 
 // mkdir 和 rmdir 是放到 i_op 中的成员，他就是和文件系统强相关的，所以直接写sifs没问题
-int32_t sys_mkdir(const char* _pathname){
-	uint8_t rollback_step = 0;
-	void* io_buf = kmalloc(SECTOR_SIZE*2);
-	if(io_buf==NULL){
-		printk("sys_mkdir: kmalloc for io_buf failed!\n");
-		return -1;
-	}
-	char pathname[MAX_PATH_LEN] = {0};
-    make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
+int32_t sys_mkdir(const char* _pathname) {
+    uint8_t rollback_step = 0;
+    void* io_buf = kmalloc(SECTOR_SIZE * 2);
+    if (io_buf == NULL) {
+        printk("sys_mkdir: kmalloc for io_buf failed!\n");
+        return -1;
+    }
 
-	struct path_search_record searched_record;
-	memset(&searched_record,0,sizeof(struct path_search_record));
-	int inode_no =-1;
-	inode_no = search_file(pathname,&searched_record);
+    char pathname[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, pathname); 
 
-	if(inode_no!=-1){
-		printk("sys_mkdir: file or directory %s is exist!\n",pathname);
-		rollback_step = 1;
-		goto rollback;
-	}else{
-		uint32_t pathname_depth = path_depth_cnt((char*) pathname);
-		uint32_t path_searched_depth = path_depth_cnt(searched_record.searched_path); 
-		if(pathname_depth!=path_searched_depth){
-			printk("sys_mkdir: cannot access %s: Not a directory, subpath %s is't exist\n",pathname,searched_record.searched_path);
-			rollback_step = 1;
-			goto rollback;
-		}
-	}
-
-	struct dir* parent_dir = searched_record.parent_dir;
-	char* dir_name = strrchr(searched_record.searched_path,'/')+1;
-
-	struct partition* part =  get_part_by_rdev(searched_record.i_dev);
-
-	inode_no = inode_bitmap_alloc(part);
-	if(inode_no==-1){
-		printk("sys_mkdir: allocate inode failed\n");
-		rollback_step = 1;
-		goto rollback;
-	}
-
-	struct inode new_dir_inode;
-	inode_init(part,inode_no,&new_dir_inode,FT_DIRECTORY);
-
-	uint32_t block_bitmap_idx = 0;
-	int32_t block_lba = -1;
-
-	block_lba = block_bitmap_alloc(part);
-	if(block_lba==-1){
-		printk("sys_mkdir: block_bitmap_alloc for create directory failed!\n");
-		rollback_step = 2;
-		goto rollback;
-	}
-
-	new_dir_inode.sifs_i.i_sectors[0] = block_lba;
-
-	block_bitmap_idx = block_lba - part->sb->data_start_lba;
-	ASSERT(block_bitmap_idx!=0);
-	
-
-	memset(io_buf,0,SECTOR_SIZE*2);
-	struct dir_entry* p_de = (struct dir_entry*) io_buf;
-
-
-	memcpy(p_de->filename,".",1);
-	p_de->i_no = inode_no;
-	p_de->f_type = FT_DIRECTORY;
-
-	p_de++;
-	memcpy(p_de->filename,"..",2);
-	p_de->i_no = parent_dir->inode->i_no;
-	p_de->f_type = FT_DIRECTORY;
-	bwrite_multi(part->my_disk,new_dir_inode.sifs_i.i_sectors[0],io_buf,1);
-
-	new_dir_inode.i_size = 2*part->sb->dir_entry_size;
-
-	struct dir_entry new_dir_entry;
-	memset(&new_dir_entry,0,sizeof(struct dir_entry));
-	create_dir_entry(dir_name,inode_no,FT_DIRECTORY,&new_dir_entry);
-	memset(io_buf,0,SECTOR_SIZE*2);
-	if(!sync_dir_entry(parent_dir,&new_dir_entry,io_buf)){
-		printk("sys_mkdir: sync_dir_entry to disk failed!\n");
-		rollback_step = 2;
-		goto rollback;
-	}
-
-    memset(io_buf, 0, SECTOR_SIZE * 2);
-	// printk("sys_mkdir:::part:%x dir_inode:%x\n",part->i_rdev,parent_dir->inode->i_dev);
-    inode_sync(part, parent_dir->inode, io_buf);
-
-	memset(io_buf,0,SECTOR_SIZE*2);
-	// printk("sys_mkdir:::part:%x dir_inode:%x\n",part->i_rdev,new_dir_inode.i_dev);
-	inode_sync(part,&new_dir_inode,io_buf);
-
-	
-
-	bitmap_sync(part,block_bitmap_idx,BLOCK_BITMAP);
-	bitmap_sync(part,inode_no,INODE_BITMAP);
-
-	kfree(io_buf);
-
-	dir_close(searched_record.parent_dir);
-	return 0;
-
-rollback:
-	switch (rollback_step){
-		case  2:
-			bitmap_set(&part->inode_bitmap,inode_no,0);
-		case 1:
-			dir_close(searched_record.parent_dir);
-			break;
-	}
-	kfree(io_buf);
-	return -1;
-}
-
-int32_t sys_opendir(const char* _pathname) {
-	char name[MAX_PATH_LEN] = {0};
-    make_abs_pathname(_pathname, name); // 统一转成绝对路径
-    ASSERT(strlen(name) < MAX_PATH_LEN);
-    
     struct path_search_record searched_record;
-    // 初始化结构体
     memset(&searched_record, 0, sizeof(struct path_search_record));
     
-    int inode_no = -1;
-	struct partition *part;
+    // 搜索路径
+    int32_t inode_no = search_file(pathname, &searched_record);
 
-	
-
-    // 处理根目录
-    if (strcmp(name, "/") == 0 || strcmp(name, "/.") == 0 || strcmp(name, "/..") == 0) {
-        inode_no = cur_part->sb->root_inode_no;
-        searched_record.file_type = FT_DIRECTORY;
-        // 根目录没有父目录，设为 NULL 以免后面 dir_close 出错
-        searched_record.parent_dir = NULL; 
-		part = cur_part;
+    // 校验目录是否已存在
+    if (inode_no != -1) {
+        printk("sys_mkdir: file or directory %s already exists!\n", pathname);
+        rollback_step = 1; // 需要释放 parent_inode
+        goto rollback;
     } else {
-        // search_file 内部会填充 searched_record
-        inode_no = search_file(name, &searched_record);
-		part = get_part_by_rdev(searched_record.i_dev);
+        // 校验父目录是否存在
+        uint32_t pathname_depth = path_depth_cnt((char*)pathname);
+        uint32_t path_searched_depth = path_depth_cnt(searched_record.searched_path);
+        if (pathname_depth != path_searched_depth) {
+            printk("sys_mkdir: subpath %s does not exist\n", searched_record.searched_path);
+            rollback_step = 1;
+            goto rollback;
+        }
     }
 
-    // 校验是否找到以及类型是否正确
+    struct inode* parent_inode = searched_record.parent_inode;
+    // 获取待创建的目录名（最后一级路径）
+    char* dir_name = strrchr(pathname, '/') + 1;
+    struct partition* part = get_part_by_rdev(parent_inode->i_dev);
+
+    // 分配 Inode
+    inode_no = inode_bitmap_alloc(part);
     if (inode_no == -1) {
-        printk("opendir: %s not found\n", name);
-        return -1;
+        printk("sys_mkdir: allocate inode failed\n");
+        rollback_step = 1;
+        goto rollback;
     }
 
-    if (searched_record.file_type != FT_DIRECTORY) {
-        printk("opendir: %s is not a directory, type is %d\n", name, searched_record.file_type);
-        // 如果 search_file 打开了父目录，需要关闭
-        if (searched_record.parent_dir) {
-            dir_close(searched_record.parent_dir);
-        }
-        return -1;
+    // 初始化内存中的新 Inode (局部变量即可，因为稍后会同步到磁盘)
+    struct inode new_dir_inode;
+    inode_init(part, inode_no, &new_dir_inode, FT_DIRECTORY);
+
+    // 为新目录分配第一个数据块，用于存储 . 和 ..
+    int32_t block_lba = block_bitmap_alloc(part);
+    if (block_lba == -1) {
+        printk("sys_mkdir: block_bitmap_alloc failed!\n");
+        rollback_step = 2; // 需要回滚 inode 位图
+        goto rollback;
+    }
+    new_dir_inode.sifs_i.i_sectors[0] = block_lba;
+
+    // 初始化新目录的数据块 (写入 . 和 ..)
+    memset(io_buf, 0, SECTOR_SIZE * 2);
+    struct sifs_dir_entry* p_de = (struct sifs_dir_entry*)io_buf;
+
+    // 初始化 "."
+    memcpy(p_de->filename, ".", 1);
+    p_de->i_no = inode_no;
+    p_de->f_type = FT_DIRECTORY;
+
+    // 初始化 ".."
+    p_de++;
+    memcpy(p_de->filename, "..", 2);
+    p_de->i_no = parent_inode->i_no; // 指向父目录 inode
+    p_de->f_type = FT_DIRECTORY;
+
+    // 写入物理磁盘
+    bwrite_multi(part->my_disk, block_lba, io_buf, 1);
+
+    new_dir_inode.i_size = 2 * part->sb->dir_entry_size;
+
+    // 在父目录中同步新目录的目录项
+    struct sifs_dir_entry new_dir_entry;
+    memset(&new_dir_entry, 0, sizeof(struct sifs_dir_entry));
+    sifs_create_dir_entry(dir_name, inode_no, FT_DIRECTORY, &new_dir_entry);
+
+    memset(io_buf, 0, SECTOR_SIZE * 2);
+    if (!sifs_sync_dir_entry(parent_inode, &new_dir_entry, io_buf)) {
+        printk("sys_mkdir: sifs_sync_dir_entry failed!\n");
+        rollback_step = 3; // 需要回滚 block 位图和 inode 位图
+        goto rollback;
     }
 
-    // 分配全局文件表槽位
-    int32_t fd_idx = get_free_slot_in_global();
-    if (fd_idx == -1) {
-        if (searched_record.parent_dir) {
-            dir_close(searched_record.parent_dir);
-        }
-        printk("exceed max open files\n");
-        return -1;
+    //同步所有元数据到磁盘
+    memset(io_buf, 0, SECTOR_SIZE * 2);
+    inode_sync(part, parent_inode, io_buf); // 同步父目录（i_size 变了）
+
+    memset(io_buf, 0, SECTOR_SIZE * 2);
+    inode_sync(part, &new_dir_inode, io_buf); // 同步新目录 inode
+
+    bitmap_sync(part, inode_no, INODE_BITMAP);
+    bitmap_sync(part, (block_lba - part->sb->data_start_lba), BLOCK_BITMAP);
+
+    // 清理并退出
+    kfree(io_buf);
+    if (parent_inode != root_dir_inode) {
+        inode_close(parent_inode);
     }
+    return 0;
 
-    // 填写文件结构
-    file_table[fd_idx].fd_inode = inode_open(part, inode_no);
-    file_table[fd_idx].fd_pos = 0;
-
-    // 安装到进程 PCB
-    int32_t ret_fd = pcb_fd_install(fd_idx);
-
-    // 释放搜索过程中打开的父目录 inode (如果有的话)
-    if (searched_record.parent_dir) {
-        dir_close(searched_record.parent_dir);
+rollback:
+    switch (rollback_step) {
+        case 3:
+            // 此时 block 已分配但同步目录项失败，需回滚 block
+            bitmap_set(&part->block_bitmap, (block_lba - part->sb->data_start_lba), 0);
+        case 2:
+            bitmap_set(&part->inode_bitmap, inode_no, 0);
+        case 1:
+            if (searched_record.parent_inode != root_dir_inode) {
+                inode_close(searched_record.parent_inode);
+            }
+            break;
     }
-    
-    return ret_fd;
+    kfree(io_buf);
+    return -1;
 }
 
-int32_t sys_closedir(int32_t fd) {
-    // 基础检查
+int32_t sys_readdir(int32_t fd, struct dirent* de) {
+
     if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC) {
         return -1;
     }
 
-    // 找到对应的全局文件表项
-    int32_t global_fd = fd_local2global(fd);
-    struct file* f = &file_table[global_fd];
-
-    if (f->fd_inode == NULL) {
-        return -1;
-    }
-
-    // 嵌入 dir_close 函数的逻辑，判断是否为根目录
-    // 根目录的 inode 是常驻内存的，不应该被关闭/释放
-    if (f->fd_inode != root_dir.inode) { 
-        inode_close(f->fd_inode);
-    }
-
-    // 清理资源，释放全局文件表槽位和进程 fd 槽位
-    f->fd_inode = NULL;
-    f->fd_pos = 0;
-    f->fd_flag = 0;
-
-    struct task_struct* cur = get_running_task_struct();
-    cur->fd_table[fd] = -1;
-
-    return 0;
-}
-
-
-int32_t sys_readdir(int32_t fd, struct dir_entry* de) {
-    // 基础检查
-    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC) return -1;
-
     int32_t _fd = fd_local2global(fd);
     struct file* f = &file_table[_fd];
 
+    // 类型检查，必须是目录且已打开
     if (f->fd_inode == NULL || f->fd_inode->i_type != FT_DIRECTORY) {
+        printk("sys_readdir: fd %d is not a directory or not opened!\n", fd);
         return -1;
     }
 
-    // 用于拷贝目录项
-	// tmp_dir.dir_buf 不需要初始化，dir_read 会负责填充它
-    struct dir tmp_dir;
-    tmp_dir.inode = f->fd_inode;   
-    tmp_dir.dir_pos = f->fd_pos;   
-    
-    // 读取内核级的 dir_entry
-    struct dir_entry* de_kernel = dir_read(&tmp_dir);
 
-    if (de_kernel != NULL) {
-        // 将数据安全拷贝到用户空间
-        // 暂时先用 memcpy ，以后需要添加一个专门讲内核数据拷贝到用户数据的函数
-        memcpy(de, de_kernel, sizeof(struct dir_entry));
-        
-        // 更新全局文件表的偏移量
-        f->fd_pos = tmp_dir.dir_pos; 
+    // sifs_dir_read 内部会处理 fd_pos 增加和 dirent 填充
+    int status = sifs_dir_read(f, de);
+
+    if (status == 0) {
+        // 成功读取到一个有效条目
         return 1;
+    } else {
+        // status 为 -1，说明读到了目录末尾或发生错误
+        // 在 sys 调用层面，读完通常返回 0，这是为了配合 while(readdir(...) > 0)
+        return 0;
     }
-    
-    return 0;
 }
 
 void sys_rewinddir(int32_t fd) {
@@ -987,88 +936,154 @@ void sys_rewinddir(int32_t fd) {
     f->fd_pos = 0;
 }
 
-int32_t sys_rmdir(const char* _pathname){
-	struct path_search_record searched_record;
-	char pathname[MAX_PATH_LEN] = {0};
+int32_t sys_rmdir(const char* _pathname) {
+
+    // 拦截 . 和 ..
+    if (!strcmp(_pathname, ".") || !strcmp(_pathname, "..")) {
+        printk("sys_rmdir: cannot remove '.' or '..'!\n");
+        return -1;
+    }
+
+    char pathname[MAX_PATH_LEN] = {0};
     make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
-	
-	memset(&searched_record,0,sizeof(struct path_search_record));
-	int inode_no = search_file(pathname,&searched_record);
-	ASSERT(inode_no!=0);
-	struct partition* part = get_part_by_rdev(searched_record.i_dev);
-	int retval = -1;
-	if(inode_no==-1){
-		printk("In %s, sub path %s not exist\n",pathname,searched_record.searched_path);
-	}else{
-		if(searched_record.file_type==FT_REGULAR){
-			printk("%s is regular file!\n",pathname);
-		}else{
-			
-			struct dir* dir = dir_open(part,inode_no);
-			if(!dir_is_empty(dir)){
-				printk("dir %s is not empty, it is not allowed to delete a nonempty directory!\n",pathname);
-			}else{
-				if(!dir_remove(searched_record.parent_dir,dir)){
-					retval = 0;
-				}
-			}
-			dir_close(dir);
-		}
-	}
-	dir_close(searched_record.parent_dir);
-	return retval;
+    
+    struct path_search_record searched_record;
+    memset(&searched_record, 0, sizeof(struct path_search_record));
+    
+    // 查找目标目录
+    int inode_no = search_file(pathname, &searched_record);
+    
+    // 根目录不允许删除
+    ASSERT(inode_no != 0);
+    
+    int retval = -1;
+    struct partition* part = get_part_by_rdev(searched_record.i_dev);
+
+    if (inode_no == -1) {
+        printk("In %s, sub path %s not exist\n", pathname, searched_record.searched_path);
+        // 即便没找到，如果 parent 不是根目录，也要释放 search_file 产生的引用
+        goto exit;
+    }
+
+    // 检查类型
+    if (searched_record.file_type == FT_REGULAR) {
+        printk("%s is a regular file, use unlink() instead!\n", pathname);
+        goto exit;
+    }
+
+    // 打开目标目录的 inode 以便检查其内容
+    struct inode* target_inode = inode_open(part, inode_no);
+
+    // 检查目录是否为空（只含有 . 和 ..）
+    if (!sifs_dir_is_empty(target_inode)) {
+        printk("dir %s is not empty, delete is not allowed!\n", pathname);
+    } else {
+        // 执行删除操作
+        // 从父目录中删除该目录项
+        void* io_buf = kmalloc(SECTOR_SIZE * 2);
+        if (io_buf == NULL) {
+            printk("sys_rmdir: kmalloc failed\n");
+            inode_close(target_inode);
+            goto exit;
+        }
+
+        if (sifs_delete_dir_entry(part, searched_record.parent_inode, inode_no, io_buf)) {
+            // 释放目标目录占用的 inode 和数据块
+            inode_release(part, inode_no);
+            retval = 0;
+        }
+        kfree(io_buf);
+    }
+
+    // 关闭刚刚 open 的目标 inode
+    inode_close(target_inode);
+
+exit:
+    //  清理, 关闭 search_file 打开的父目录 inode
+    if (searched_record.parent_inode && searched_record.parent_inode != root_dir_inode) {
+        inode_close(searched_record.parent_inode);
+    }
+    return retval;
 }
 
-static uint32_t get_parent_dir_inode_nr(struct partition* part, uint32_t child_inode_nr,void* io_buf){
-	struct inode* child_dir_inode = inode_open(part,child_inode_nr);
-	uint32_t block_lba = child_dir_inode->sifs_i.i_sectors[0];
-	ASSERT(block_lba>=part->sb->data_start_lba);
-	inode_close(child_dir_inode);
-	bread_multi(part->my_disk,block_lba,io_buf,1);
-	struct dir_entry* dir_e = (struct dir_entry*)io_buf;
+static uint32_t get_parent_dir_inode_nr(struct partition* part, uint32_t child_inode_nr, void* io_buf) {
+    // 打开当前目录的 inode 以获取其数据块地址
+    struct inode* child_dir_inode = inode_open(part, child_inode_nr);
+    
+    // 目录的第 0 个块通常存放着 "." 和 ".."
+    uint32_t block_lba = child_dir_inode->sifs_i.i_sectors[0];
+    ASSERT(block_lba >= part->sb->data_start_lba);
+    
+    // 拿到 LBA 后就可以关闭 inode 了，节省内存引用计数
+    inode_close(child_dir_inode);
 
-	ASSERT(dir_e[1].i_no<MAX_FILES_PER_PART&&dir_e[1].f_type==FT_DIRECTORY);
-	return dir_e[1].i_no;
+    // 读取该块数据
+    bread_multi(part->my_disk, block_lba, io_buf, 1);
+    
+    // 使用磁盘镜像结构体 sifs_dir_entry 而不是内存镜像的结构体
+    struct sifs_dir_entry* dir_e = (struct sifs_dir_entry*)io_buf;
+
+    // 根据我们在 partition_format 中的约定：
+    // dir_e[0] 是 "."
+    // dir_e[1] 是 ".."
+    
+    // 确保它确实是一个目录类型
+    ASSERT(dir_e[1].f_type == FT_DIRECTORY);
+    ASSERT(dir_e[1].i_no < MAX_FILES_PER_PART);
+
+    return dir_e[1].i_no;
 }
 
-static int get_child_dir_name(struct partition* part, uint32_t p_inode_nr,uint32_t c_inode_nr,char* path,void* io_buf){
-	struct inode* parent_dir_inode = inode_open(part,p_inode_nr);
-	uint8_t block_idx = 0;
-	uint32_t all_blocks_addr[TOTAL_BLOCK_COUNT] = {0},block_cnt = DIRECT_INDEX_BLOCK;
-	while(block_idx<DIRECT_INDEX_BLOCK){
-		all_blocks_addr[block_idx] = parent_dir_inode->sifs_i.i_sectors[block_idx];
-		block_idx++;
-	}
-	// the first first-level index block
-	int tfflib = DIRECT_INDEX_BLOCK;
-	if(parent_dir_inode->sifs_i.i_sectors[tfflib]){
-		bread_multi(part->my_disk,parent_dir_inode->sifs_i.i_sectors[tfflib],all_blocks_addr+tfflib,1);
-		block_cnt = TOTAL_BLOCK_COUNT;
-	}
-	inode_close(parent_dir_inode);
+static int get_child_dir_name(struct partition* part, uint32_t p_inode_nr, uint32_t c_inode_nr, char* path, void* io_buf) {
+    // 打开父目录 Inode 以便遍历其目录项
+    struct inode* parent_dir_inode = inode_open(part, p_inode_nr);
+    
+    uint8_t block_idx = 0;
+    uint32_t all_blocks_addr[TOTAL_BLOCK_COUNT] = {0};
+    uint32_t block_cnt = DIRECT_INDEX_BLOCK;
 
-	struct dir_entry* dir_e = (struct dir_entry*) io_buf;
-	uint32_t dir_entry_size = part->sb->dir_entry_size;
-	uint32_t dir_entrys_per_sec =(SECTOR_SIZE/dir_entry_size);
+    // 填充直接块地址
+    while (block_idx < DIRECT_INDEX_BLOCK) {
+        all_blocks_addr[block_idx] = parent_dir_inode->sifs_i.i_sectors[block_idx];
+        block_idx++;
+    }
 
-	block_idx = 0;
+    // 处理一级间接索引块
+    int tfflib = DIRECT_INDEX_BLOCK;
+    if (parent_dir_inode->sifs_i.i_sectors[tfflib]) {
+        bread_multi(part->my_disk, parent_dir_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+        block_cnt = TOTAL_BLOCK_COUNT;
+    }
 
-	while(block_idx<block_cnt){
-		if(all_blocks_addr[block_idx]){
-			bread_multi(part->my_disk,all_blocks_addr[block_idx],io_buf,1);
-			uint8_t dir_e_idx = 0;
-			while(dir_e_idx<dir_entrys_per_sec){
-				if((dir_e+dir_e_idx)->i_no==c_inode_nr){
-					strcat(path,"/");
-					strcat(path,(dir_e+dir_e_idx)->filename);
-					return 0;
-				}
-				dir_e_idx++;
-			}
-		}
-		block_idx++;
-	}
-	return -1;
+    // 拿到所有块地址后，可以提前关闭父目录 Inode
+    inode_close(parent_dir_inode);
+
+    // 使用 SIFS 磁盘目录项结构体
+    struct sifs_dir_entry* dir_e = (struct sifs_dir_entry*)io_buf;
+    uint32_t dir_entry_size = part->sb->dir_entry_size;
+    uint32_t dir_entrys_per_sec = (SECTOR_SIZE / dir_entry_size);
+
+    block_idx = 0;
+    while (block_idx < block_cnt) {
+        if (all_blocks_addr[block_idx]) {
+            // 读取父目录的一个数据块
+            bread_multi(part->my_disk, all_blocks_addr[block_idx], io_buf, 1);
+            
+            uint8_t dir_e_idx = 0;
+            while (dir_e_idx < dir_entrys_per_sec) {
+                // 匹配子目录的 Inode 编号
+                if (dir_e[dir_e_idx].i_no == c_inode_nr) {
+                    // 找到了匹配的条目，将名字拼接进路径缓冲区
+                    strcat(path, "/");
+                    strcat(path, dir_e[dir_e_idx].filename);
+                    return 0;
+                }
+                dir_e_idx++;
+            }
+        }
+        block_idx++;
+    }
+    return -1;
 }
 
 char* sys_getcwd(char* buf,uint32_t size){
@@ -1142,7 +1157,7 @@ int32_t sys_chdir(const char* _pathname){
 	}else{
 		printk("sys_chdir: path %s maybe not exist\n",searched_record.searched_path);
 	}
-	dir_close(searched_record.parent_dir);
+	inode_close(searched_record.parent_inode);
 	return ret;
 }
 
@@ -1154,7 +1169,7 @@ int32_t sys_stat(const char* _pathname,struct stat* buf){
 	if(!strcmp(path,"/")||!strcmp(path,"/.")||!strcmp(path,"/..")){
 		buf->st_filetype = FT_DIRECTORY;
 		buf->st_ino = 0;
-		buf->st_size = root_dir.inode->i_size;
+		buf->st_size = root_dir_inode->i_size;
 		return 0;
 	}
 
@@ -1177,7 +1192,7 @@ int32_t sys_stat(const char* _pathname,struct stat* buf){
 		debug_printk("sys_stat: %s not found!\n",path);
 	}
 
-	dir_close(searched_record.parent_dir);
+	inode_close(searched_record.parent_inode);
 	return ret;
 }
 
@@ -1213,7 +1228,7 @@ void sys_disk_info() {
             struct disk* hd = &channels[channel_idx].devices[ide_idx];
             if (!hd->name[0]) continue;
             uint8_t d_idx = channel_idx * DISK_NUM_IN_CHANNEL + ide_idx;
-            // 注意：这里用原始 disk_size 计算出的缩放值
+            // 这里用原始 disk_size 计算出的缩放值
             uint32_t display_size = disk_size[d_idx];
             for(int j=0; j<div_cnts[d_idx]; j++) display_size /= 1024;
             printk("%s\t%d%s\n", hd->name, display_size, granularits[d_idx]);
@@ -1356,7 +1371,7 @@ void sys_mount(const char* part_name){
 
 
 	// 同步全局 cur_dir 指向新的 root_dir 内存
-    cur_dir = &root_dir; 
+    cur_dir_inode = &root_dir_inode; 
 
     // 强制让当前运行进程的路径回到根目录，防止它引用旧分区的 inode 编号
     struct task_struct* cur = get_running_task_struct();
@@ -1370,84 +1385,86 @@ int32_t sys_mknod(const char* _pathname, enum file_types type, uint32_t dev) {
         printk("sys_mknod: only support special files\n");
         return -1;
     }
-	
 
     void* io_buf = kmalloc(SECTOR_SIZE * 2);
     if (io_buf == NULL) return -1;
 
-	char pathname[MAX_PATH_LEN] = {0};
+    char pathname[MAX_PATH_LEN] = {0};
     make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
 
     struct path_search_record searched_record;
     memset(&searched_record, 0, sizeof(struct path_search_record));
-    int inode_no = search_file(pathname, &searched_record);
+    
+    // 查找路径（search_file 内部会 inode_open 父目录）
+    int32_t inode_no = search_file(pathname, &searched_record);
 
     // 检查目标是否已存在
     if (inode_no != -1) {
-        printk("sys_mknod: file %s exists! ino:%d, type:%d, dev:0x%x\n", 
-                pathname, inode_no, searched_record.file_type, searched_record.i_dev);
-        goto rollback_path;
+        printk("sys_mknod: file %s exists! ino:%d\n", pathname, inode_no);
+        goto rollback;
     }
 
-    // 检查父目录是否存在（防止创建到不存在的路径下）
+    // 检查父目录是否存在
     if (path_depth_cnt((char*)pathname) != path_depth_cnt(searched_record.searched_path)) {
         printk("sys_mknod: parent dir not exist\n");
-        goto rollback_path;
+        goto rollback;
     }
 
-    struct dir* parent_dir = searched_record.parent_dir;
+    // 准备元数据
+    struct inode* parent_inode = searched_record.parent_inode;
     struct partition* part = get_part_by_rdev(searched_record.i_dev);
-    char* filename = strrchr(searched_record.searched_path, '/') + 1;
+    char* filename = strrchr(pathname, '/') + 1;
 
     // 分配 Inode 编号
     inode_no = inode_bitmap_alloc(part);
     if (inode_no == -1) {
         printk("sys_mknod: allocate inode failed\n");
-        goto rollback_path;
+        goto rollback;
     }
 
     // 初始化特殊的设备 Inode
-    // 设备文件不占用磁盘数据块（i_sectors 全 0），其设备号存在 i_rdev 中
-	// 因此其不用申请空闲磁盘块
     struct inode new_inode;
     inode_init(part, inode_no, &new_inode, type);
+    // 将设备号存入 inode
     new_inode.i_rdev = dev; 
     new_inode.sifs_i.i_rdev = dev; 
-    new_inode.i_size = 0;   // 特殊文件大小通常为 0
+    new_inode.i_size = 0; 
 
-    // 同步新 Inode 到磁盘
+    // 同步新 Inode 和位图到磁盘
     memset(io_buf, 0, SECTOR_SIZE * 2);
     inode_sync(part, &new_inode, io_buf);
-    
-    // 同步 Inode 位图到磁盘
     bitmap_sync(part, inode_no, INODE_BITMAP);
 
-    // 创建并同步目录项到父目录的数据块中
-    struct dir_entry new_de;
-    memset(&new_de, 0, sizeof(struct dir_entry));
-    create_dir_entry(filename, inode_no, type, &new_de);
+    // 创建并同步目录项到父目录
+    // 使用简单文件系统的 sifs_dir_entry 结构体
+    struct sifs_dir_entry new_de;
+    memset(&new_de, 0, sizeof(struct sifs_dir_entry));
+    sifs_create_dir_entry(filename, inode_no, type, &new_de);
 
-    if (!sync_dir_entry(parent_dir, &new_de, io_buf)) {
-        printk("sys_mknod: sync dir_entry failed\n");
-        while(1);
-        goto rollback_path;
+    memset(io_buf, 0, SECTOR_SIZE * 2);
+    // 传入 parent_inode 而不是 parent_dir
+    if (!sifs_sync_dir_entry(parent_inode, &new_de, io_buf)) {
+        printk("sys_mknod: sifs_sync_dir_entry failed\n");
+        // 暂时先简单处理一下，回滚位图
+        bitmap_set(&part->inode_bitmap, inode_no, 0);
+        goto rollback;
     }
 
-    // 同步父目录的 Inode
-    // sync_dir_entry 会增加 parent_dir->inode->i_size
-    // 如果不执行下面这行，磁盘上的 i_size 不变，ls 就读不到新项
+    // 同步父目录的 Inode (i_size 已经改变)
     memset(io_buf, 0, SECTOR_SIZE * 2);
-    inode_sync(part, parent_dir->inode, io_buf); 
+    inode_sync(part, parent_inode, io_buf); 
 
+    // 清理并退出
     kfree(io_buf);
-    dir_close(searched_record.parent_dir);
-    printk("sys_mknod: %s created done!\n", pathname);
+    if (parent_inode != root_dir_inode) {
+        inode_close(parent_inode);
+    }
     return 0;
 
-rollback_path:
+rollback:
     kfree(io_buf);
-    if (searched_record.parent_dir) {
-        dir_close(searched_record.parent_dir);
+    if (searched_record.parent_inode && searched_record.parent_inode != root_dir_inode) {
+        inode_close(searched_record.parent_inode);
     }
     return -1;
 }
@@ -1517,38 +1534,37 @@ static bool make_partition_node(struct dlist_elem* pelem, void* arg UNUSED) {
 // /dev 目录下的所有非目录文件（设备节点）
 static void clear_dev_directory(void) {
     int32_t fd;
-    struct dir_entry de;
+    struct dirent de; // 使用新的通用目录项结构体，这个目录项结构体是同时给用户和 VFS 使用的
     char path[MAX_PATH_LEN];
     bool deleted;
+    fd = sys_open("/dev", O_RDONLY);
+    if (fd == -1) {
+        // 如果 /dev 不存在，创建它并直接返回
+        sys_mkdir("/dev");
+        return;
+    }
 
-    do {
-        deleted = false;
-        fd = sys_opendir("/dev");
-        if (fd == -1) {
-            sys_mkdir("/dev");
-            return;
+    // 根据重构后的 sys_readdir，它返回 1 表示成功，0 表示结束
+    while (sys_readdir(fd, &de) > 0) {
+
+        printk("name:%s\n",de.d_name);
+        // 使用 de.d_name 访问文件名
+        if (!strcmp(de.d_name, ".") || !strcmp(de.d_name, "..")) {
+            continue;
         }
 
-        while (sys_readdir(fd, &de) > 0) {
-            if (!strcmp(de.filename, ".") || !strcmp(de.filename, "..")) {
-                continue;
-            }
-
-            if (de.f_type != FT_DIRECTORY) {
-                memset(path, 0, MAX_PATH_LEN);
-                sprintf(path, "/dev/%s", de.filename);
-				printk("clear_dev: delete file: %s\n",path);
+        // 使用 de.d_type 判断文件类型
+        if (de.d_type != FT_DIRECTORY) {
+            memset(path, 0, MAX_PATH_LEN);
+            sprintf(path, "/dev/%s", de.d_name);
+            printk("clear_dev: delete file: %s\n", path);
+            
+            sys_unlink(path);
                 
-                if (sys_unlink(path) == 0) {
-                    deleted = true; 
-                    // 删除了一个，为了保险，跳出内循环重新打开目录/重置指针
-                    // 这样可以确保 i_size 的变化不会导致遍历跳过文件
-                    break; 
-                }
-            }
         }
-        sys_closedir(fd);
-    } while (deleted); // 只要这一轮有删除动作，就再检查一遍
+    }
+
+    sys_close(fd);
 
     printk("/dev directory cleared.\n");
 }

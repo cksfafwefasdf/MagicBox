@@ -19,8 +19,8 @@
 #define	SYS_LSEEK 11
 #define	SYS_UNLINK 12
 #define	SYS_MKDIR 13
-#define	SYS_OPENDIR 14
-#define	SYS_CLOSEDIR 15
+// #define	SYS_OPENDIR 14
+// #define	SYS_CLOSEDIR 15
 #define	SYS_CHDIR 16
 #define	SYS_RMDIR 17
 #define	SYS_READDIR 18
@@ -69,9 +69,7 @@ extern int32_t close(int32_t fd);
 extern int32_t lseek(int32_t fd,int32_t offset,uint8_t whence);
 extern int32_t unlink(const char* pathname);
 extern int32_t mkdir(const char* pathname);
-extern int32_t opendir(const char* name);
-extern int32_t closedir(int32_t fd_dir);
-extern int32_t readdir(int32_t fd, struct dir_entry* de);
+extern int32_t readdir(int32_t fd, struct dirent* de);
 extern void rewinddir(int32_t fd_dir);
 extern int32_t rmdir(const char* pathname);
 extern int32_t stat(const char* path,struct stat* buf);

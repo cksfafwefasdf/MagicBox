@@ -144,19 +144,11 @@ int32_t mkdir(const char* pathname){
 	return _syscall1(SYS_MKDIR,pathname);
 }
 
-int32_t opendir(const char* name){
-	return _syscall1(SYS_OPENDIR,name);
-}
-
-int32_t closedir(int32_t fd_dir){
-	return _syscall1(SYS_CLOSEDIR,fd_dir);
-}
-
 int32_t rmdir(const char* pathname){
 	return _syscall1(SYS_RMDIR,pathname);
 }
 
-int32_t readdir(int32_t fd, struct dir_entry* de){
+int32_t readdir(int32_t fd, struct dirent* de){
 	return _syscall2(SYS_READDIR,fd,de);
 }
 
