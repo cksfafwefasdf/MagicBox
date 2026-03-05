@@ -85,25 +85,32 @@ The project follows a modular design, separating kernel core logic, hardware dri
 
 ```
 .
-├── boot/               # MBR & Kernel Loader (Entry point to protected mode)
-├── device/             # Hardware Drivers (Keyboard, IDE, Timer, Console)
-├── mm/             	# Memory Management Subsystem (Buddy System, VMA, Arena)
-├── fs/                 # File System (Inode, Directory, and Pipe management)
-├── kernel/             # Kernel Core (Interrupts, Memory management, Init)
+├── boot/               # MBR & Kernel Loader (System bootup and entry to protected mode)
+├── device/             # Hardware Drivers (Keyboard, IDE, Disk Buffer, TTY, and IOCTL)
+├── fs/                 # File System Layer (VFS, File Table, Pipes, and SIFS implementation)
+│   └── sifs/           # SIFS Specific (Disk layout for Superblock, Inode, and Directory)
+├── include/            # Header Files (Organized by subsystem and access level)
+│   ├── arch/           # Architecture-related (Hardware I/O and low-level print)
+│   ├── magicbox/       # Kernel Private Headers (Memory, Threads, FS, and Sync)
+│   ├── sys/            # Standard C Headers (stdint, string, stdio, etc.)
+│   └── uapi/           # User-Kernel Interface (SIFS layout, IOCTL codes, and unistd)
+├── kernel/             # Kernel Core (Interrupts, Initialization, and Signal handling)
 ├── lib/                # Library routines
-│   ├── common/         # Shared code (e.g., Tar parsing logic)
-│   ├── kernel/         # Internal kernel-mode libraries
+│   ├── kernel/         # Kernel-mode libraries (Bitmap, DList, Hashtable)
 │   └── user/           # User-mode system call wrappers
+├── mm/                 # Memory Management (Buddy System, VMA, and Page tables)
 ├── prog/               # User-land applications
 │   ├── shell/          # Interactive Shell implementation
-│   └── prog/           # Core utilities (cat, echo, etc.)
-├── thread/             # Threading & Sync (Mutex, Semaphores, Scheduling)
-├── userprog/           # Process Management (Exec, Fork, Wait/Exit, TSS)
-├── disk_env/           # Hard disk images and disk-related configs
+│   └── prog/           # Core utilities (cat, echo, hexdump, and pipe tests)
+├── thread/             # Threading & Sync (Mutex, Semaphores, and Scheduler)
+├── userprog/           # Process Management (Exec, Fork, Wait/Exit, and TSS)
+├── tool/               # Development Tools (GDB scripts and Address-to-line scripts)
+├── disk_env/           # Hard disk images (hd60M and hd80M)
+├── doc/                # Documentation and preview images
 ├── build/              # Binary artifacts and object files
 ├── makefile            # Master build script
 ├── init_disk.sh        # Disk image & partition setup script
-└── install_apps.sh     # App packaging (Tar) and deployment script
+└── install_apps.sh     # User app deployment script (Tar-based)
 ```
 
 
