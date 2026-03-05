@@ -4,11 +4,11 @@
 #include "fs.h"
 #include "dlist.h"
 #include "wait_exit.h"
-#include "sifs_file.h"
 #include "debug.h"
 #include "memory.h"
 #include "process.h"
 #include "vma.h"
+#include "file_table.h"
 
 struct wait_opts {
     pid_t target_pid;

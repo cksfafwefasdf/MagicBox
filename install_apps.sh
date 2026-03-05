@@ -4,7 +4,7 @@
 ROOT_DIR=$(pwd)
 BUILD_DIR="./build/prog"
 KERNEL_BUILD="./build/kernel"   
-LIB_DIR="./lib"
+LIB_DIR="./include"
 DD_OUT="./disk_env/hd60M.img"
 TAR_NAME="$BUILD_DIR/initrd.tar"
 LBA_SEEK=1000
@@ -14,7 +14,7 @@ mkdir -p "$BUILD_DIR"
 rm -f "$TAR_NAME"
 
 # 编译选项
-CFLAGS="-Wall -c -fno-builtin -m32 -fno-stack-protector -I $LIB_DIR -I $LIB_DIR/common -I $LIB_DIR/user"
+CFLAGS="-Wall -c -fno-builtin -m32 -fno-stack-protector -I $LIB_DIR -I $LIB_DIR/uapi -I $LIB_DIR/sys"
 BASE_OBJS="$KERNEL_BUILD/string.o $KERNEL_BUILD/syscall.o $KERNEL_BUILD/stdio.o $KERNEL_BUILD/assert.o"
 
 # 编译 CRT 入口

@@ -12,6 +12,9 @@
 #include "device.h"
 #include "block_dev.h"
 #include "fs.h"
+#include "errno.h"
+#include "ioctl.h"
+#include "fs_types.h"
 
 #define reg_data(channel) (channel->port_base+0)
 #define reg_error(channel) (channel->port_base+1)
@@ -718,6 +721,36 @@ int32_t ide_dev_write(struct file* file, void* buf, uint32_t count) {
 
     if (io_buf) kfree(io_buf);
     return (int32_t)count;
+}
+
+int32_t ide_ioctl(struct file* filp, uint32_t cmd, uint32_t arg) {
+    // 获取该设备文件对应的 inode
+    struct inode* inode = filp->fd_inode;
+    
+    // 通过 inode 中存储的 i_rdev 找到对应的分区结构体
+    // 使用 get_part_by_rdev 在磁盘列表中匹配主次设备号
+    struct partition* part = get_part_by_rdev(inode->i_rdev);
+    
+    if (part == NULL) {
+        return -ENODEV; // 如果找不到该分区，返回设备不存在
+    }
+
+    switch (cmd) {
+        case BLKGETSIZE:
+            // 用户态 mkfs 会调用这个来获取总扇区数
+            // arg 是用户空间传来的变量地址
+            *(uint32_t*)arg = part->sec_cnt;
+            return 0;
+
+        case BLKGETSIZE64:
+            // 返回总字节数 (扇区数 * 512)
+            *(uint64_t*)arg = (uint64_t)part->sec_cnt * 512;
+            return 0;
+
+        default:
+            // 如果收到了不认识的命令（比如 TTY 的命令发到了硬盘上）
+            return -EINVAL;
+    }
 }
 
 // 通过 vfs 逻辑设备号拿到 partition

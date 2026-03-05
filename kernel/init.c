@@ -22,6 +22,8 @@
 #include "device.h"
 #include "debug.h"
 #include "vma.h"
+#include "ioctl.h"
+
 void init(void);
 void print_logo(void);
 static void after_init(void);

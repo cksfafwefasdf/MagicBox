@@ -7,16 +7,6 @@
 
 struct partition;
 
-
-// 我们现在取消了 dir 结构体，我们将 dir 结构体并入到 file 结构体中
-// 将 dir 也看做一种文件，然后通过文件类型来分发操作
-// 这是同步会磁盘时，针对不同的文件系统所设置的不同磁盘镜像结构体
-struct sifs_dir_entry {
-    char filename[MAX_FILE_NAME_LEN];
-    uint32_t i_no;
-    enum file_types f_type;
-};
-
 extern struct inode* root_dir_inode;
 
 extern bool sifs_search_dir_entry(struct partition* part,struct inode* dir_inode,const char* name,struct sifs_dir_entry* p_de);

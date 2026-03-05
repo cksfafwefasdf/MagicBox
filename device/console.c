@@ -4,7 +4,7 @@
 #include "thread.h"
 #include "device.h"
 #include "char_dev.h"
-#include "sifs_file.h"
+#include "fs_types.h"
 
 static struct lock console_lock;
 

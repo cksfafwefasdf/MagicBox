@@ -2,9 +2,15 @@
 #define __FS_FS_TYPES_H
 #include "stdint.h"
 #include "unistd.h"
-#include "dlist.h"
 #include "sifs_inode.h"
+#include "sifs_sb.h"
 #include "pipe.h"
+
+/*
+	虚拟文件系统层的头文件
+	主要用于存储和具体文件系统无关的
+	VFS 数据结构
+*/
 
 // the max number of the file in each partitions is 4096
 #define MAX_FILES_PER_PART 4096
@@ -51,14 +57,6 @@ struct inode{
 	};
 };
 
-// struct dir{
-// 	struct inode* inode;
-// 	// Used to record the offset of the 'cursor' 
-// 	// in the directory while traversing the directory.
-// 	uint32_t dir_pos;
-// 	uint8_t dir_buf[BLOCK_SIZE];
-// };
-
 struct file{
 	uint32_t fd_pos;
 	uint32_t fd_flag;
@@ -88,28 +86,28 @@ struct file_operations {
     int32_t (*ioctl)(struct file* file, uint32_t cmd, unsigned long arg);
 };
 
-struct super_block{
-	uint32_t magic; // the type of the file system
-	uint32_t sec_cnt; // the number of the sector in this partition
-	uint32_t inode_cnt; // the number of the inode in this partition 
-	uint32_t part_lba_base; // the start LBA of this partition
-	
-	uint32_t block_bitmap_lba;
-	uint32_t block_bitmap_sects;
-	
-	uint32_t inode_bitmap_lba;
-	uint32_t inode_bitmap_sects;
 
-	uint32_t inode_table_lba;
-	uint32_t inode_table_sects;
+struct super_block {
+    // VFS 通用字段
+    uint32_t s_dev; // 超级块所存储在的逻辑设备号
+    uint32_t s_block_size; 
+    uint32_t s_root_ino; // 该超级块的根目录的 inode 的编号
+	uint32_t s_magic;
+    struct inode* s_root_inode; // 指向该超级块的根目录的 inode
+    
+    // VFS 对不同文件系统打的补丁
+    union {
+        struct sifs_sb_info sifs_info; // 此时这里就包含了运行时的状态
+        // struct ext2_sb_info ext2_info;
+    };
+};
 
-	uint32_t data_start_lba; // the start of the data setion in this partition
-	uint32_t root_inode_no; // the inode number of the root dict
-	uint32_t dir_entry_size; // size of each dict entry
-
-	// make the size of the superblock be 512B (1 sector)
-	uint8_t pad[460];
-
-}__attribute__((packed));
+// 用来定义超级块的填充操作
+// 主要用于填充 info 结构体
+struct file_system_type {
+	struct super_block *(*read_super) (struct super_block *, void *, int);
+	char *name;
+	int requires_dev;
+};
 
 #endif

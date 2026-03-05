@@ -3,7 +3,6 @@
 #include "string.h"
 #include "process.h"
 #include "debug.h"
-#include "sifs_file.h"
 #include "interrupt.h"
 #include "dlist.h"
 #include "fork.h"
@@ -11,6 +10,7 @@
 #include "print.h"
 #include "pipe.h"
 #include "vma.h"
+#include "file_table.h"
 
 extern void intr_exit(void); // defined in  kernel.s
 static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,struct task_struct* parent_thread){
@@ -138,7 +138,9 @@ static int32_t copy_process(struct task_struct* child_thread,struct task_struct*
 	build_child_stack(child_thread);
 	update_f_cnts(child_thread);
 	mfree_page(PF_KERNEL,buf_page,1);
-	debug_printk("copy_process::: copy_process done!\n");
+#ifdef DEBUG_PG_FAULT
+	printk("copy_process::: copy_process done!\n");
+#endif
 	return 0;
 }
 

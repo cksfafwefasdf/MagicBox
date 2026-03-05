@@ -783,7 +783,9 @@ void do_free(void* ptr,enum pool_flags PF){
             // 如果一个页被逻辑上分配了虚拟内存后，但是从来没有去访问过
             // 那么这个页是不会有对应的物理内存的，如果对这样的页进行释放的话我们直接返回就行
             // printk("INFO: %x was touched before, but P-bit is gone. Page-table value: %x\n", vaddr, (pte ? *pte : 0));
-            debug_printk("DEBUG: Pointer %x has no physical page. (Page already recycled)\n", vaddr);
+#ifdef DEBUG_PG_FAULT
+            printk("DEBUG: Pointer %x has no physical page. (Page already recycled)\n", vaddr);
+#endif
             return; 
         }
     }
@@ -921,8 +923,9 @@ static bool is_vaddr_mapped(struct task_struct* task, uint32_t vaddr) {
 // 非法访问：访问了完全没有映射、或者不属于用户空间（如访问内核空间地址）的内存
 void swap_page(uint32_t err_code,void* err_vaddr){
 	enum intr_status _old =  intr_disable();
-	debug_printk("swap_page:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
-	
+#ifdef DEBUG_PG_FAULT
+	printk("swap_page:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
+#endif
 	struct task_struct* cur = get_running_task_struct();
 	uint32_t vaddr = (uint32_t)err_vaddr;
 
@@ -1075,8 +1078,9 @@ void write_protect(uint32_t err_code, void* err_vaddr) {
 	enum intr_status _old =  intr_disable();
 	
     struct task_struct* cur = get_running_task_struct();
-
-    debug_printk("write_protect:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
+#ifdef DEBUG_PG_FAULT
+    printk("write_protect:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
+#endif
 
     // 内核触发写保护：直接 PANIC，因为内核不参与 COW
     if (cur->pgdir == NULL || (uint32_t)err_vaddr >= 0xC0000000) {

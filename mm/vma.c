@@ -1,7 +1,6 @@
 #include "vma.h"
 #include "thread.h"
-#include "sifs_inode.h"
-#include "sifs_file.h"
+#include "fs_types.h"
 #include "ide.h"
 #include "debug.h"
 #include "stdio-kernel.h"

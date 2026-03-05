@@ -9,8 +9,8 @@
 #include "termios.h"
 #include "errno.h"
 #include "fs_types.h"
-#include "sifs_file.h"
 #include "fs.h"
+#include "ioctl.h"
 
 struct tty_struct console_tty;
 
@@ -124,7 +124,19 @@ int tty_read(char* buf, uint32_t count) {
     return i;
 }
 
-int32_t tty_ioctl(struct tty_struct* tty, uint32_t cmd, uint32_t arg) {
+int32_t tty_ioctl(struct file* file, uint32_t cmd, uint32_t arg) {
+
+    struct inode* inode = file->fd_inode;
+    uint32_t rdev = inode->i_rdev;
+
+    // 确保主设备号确实是 TTY_MAJOR
+    if (MAJOR(rdev) != TTY_MAJOR) {
+        return -ENOTTY;
+    }
+
+    // 由于我们现在只有一个 TTY_MAJOR 设备，所以上面那个校验通过后直接赋值就行
+    struct tty_struct* tty = &console_tty;
+
     switch (cmd) {
         case TCGETS:
             // 将内核的 termios 拷贝给用户空间
@@ -168,26 +180,6 @@ void tty_init() {
     lock_init(&console_tty.tty_lock);
 
     register_char_dev(TTY_MAJOR, &tty_dev_fops, "tty");
-}
-
-int32_t sys_ioctl(int fd, uint32_t cmd, uint32_t arg) {
-    if (fd >= MAX_FILES_OPEN_PER_PROC) return -EBADF; // 错误码 1：描述符越界
-
-    // 从进程的局部 FD 表中取出全局文件表的下标
-    int32_t global_fd = fd_local2global(fd);
-    if (global_fd == -1) return -EBADF; // 描述符未打开的情况
-    
-    struct file* file = &file_table[global_fd];
-
-    if (file->fd_inode == NULL) return -EBADF; // 错误码 2：该描述符是空的
-
-    if (file->fd_inode->i_type != FT_CHAR_SPECIAL) return -ENOTTY; // 只有字符设备（TTY）支持此操作
-
-    struct inode* inode = file->fd_inode;
-    if (MAJOR(inode->i_rdev) != TTY_MAJOR) return -ENOTTY;
-
-    // 走到这里，说明是正经的 TTY，开始工作
-    return tty_ioctl(&console_tty, cmd, arg);
 }
 
 // --------------- 以下的代码用于 tty 设备适配虚拟文件系统 ---------------

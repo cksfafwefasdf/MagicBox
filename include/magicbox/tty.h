@@ -8,7 +8,6 @@
 #include "fs_types.h"
 #include "termios.h"
 
-
 struct tty_struct {
 	struct termios termios;
 	struct ioqueue ibuf; // 原始输入队列 (相当于 Linux 的 read_q)
@@ -42,7 +41,6 @@ extern int tty_write(char* buf, uint32_t count);
 extern void tty_dev_init(void);
 extern int32_t tty_dev_read(struct file* file, void* buf, uint32_t count);
 extern int32_t tty_dev_write(struct file* file, void* buf, uint32_t count);
-extern int32_t sys_ioctl(int fd, uint32_t cmd, uint32_t arg);
-extern int32_t tty_ioctl(struct tty_struct* tty, uint32_t cmd, uint32_t arg); 
+extern int32_t tty_ioctl(struct file* file, uint32_t cmd, uint32_t arg); 
 
 #endif

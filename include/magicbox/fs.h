@@ -4,7 +4,7 @@
 #include "stdint.h"
 #include "unistd.h"
 
-#define FS_MAGIC_NUMBER 0x20030000 // magic number for this file system
+#define SIFS_FS_MAGIC_NUMBER 0x20030000 // magic number for this file system
 
 extern void filesys_init(void);
 extern int32_t sys_open(const char* pathname,uint8_t flags);
@@ -26,7 +26,6 @@ extern int32_t sys_chdir(const char* path);
 extern char* sys_getcwd(char* buf,uint32_t size);
 extern int32_t sys_stat(const char* path,struct stat* buf);
 extern char* _path_parse(char* pathname,char* name_store);
-extern uint32_t fd_local2global(uint32_t local_fd);
 extern void sys_disk_info(void);
 extern void sys_mount(const char* part_name);
 extern int32_t sys_dup2(uint32_t old_local_fd, uint32_t new_local_fd);

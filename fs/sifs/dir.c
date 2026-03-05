@@ -7,13 +7,13 @@
 #include "sifs_file.h"
 #include "fs.h"
 #include "ide_buffer.h"
+#include "sifs_sb.h"
 
 // 由于我们去除了 dir 结构，因此现在改用 file 来标记根目录
 struct inode* root_dir_inode; 
 
 void open_root_dir(struct partition* part) {
-    root_dir_inode = inode_open(part, part->sb->root_inode_no);
-    
+    root_dir_inode = inode_open(part, part->sb->s_root_ino);
 }
 
 void close_root_dir(struct partition* part) {
@@ -55,7 +55,7 @@ bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, cons
         return false;
     }
 
-    uint32_t dir_entry_size = part->sb->dir_entry_size;
+    uint32_t dir_entry_size = part->sb->sifs_info.sb_raw.dir_entry_size;
     uint32_t dir_entry_cnt = SECTOR_SIZE / dir_entry_size;
 
     block_idx = 0;
@@ -104,8 +104,20 @@ void sifs_create_dir_entry(char* filename, uint32_t inode_no, enum file_types fi
 }
 
 bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de, void* io_buf) {
+
+
     struct partition* part = get_part_by_rdev(parent_inode->i_dev);
-    uint32_t dir_entry_size = part->sb->dir_entry_size;
+
+#ifdef DEBUG_DIR
+    PUTS("i_size before: ",parent_inode->i_size);
+    PUTS("parent before: ",parent_inode);
+    for(struct dlist_elem* pinode = part->open_inodes.head.next;pinode!=NULL;pinode=pinode->next){
+        PUTS("list: ",pinode);
+    }
+#endif
+    
+
+    uint32_t dir_entry_size = part->sb->sifs_info.sb_raw.dir_entry_size;
     uint32_t dir_entrys_per_sec = (SECTOR_SIZE / dir_entry_size);
     uint32_t tfflib = DIRECT_INDEX_BLOCK; // 第一级间接块索引
 
@@ -130,7 +142,7 @@ bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de
             block_lba = block_bitmap_alloc(part);
             if (block_lba == -1) return false;
 
-            uint32_t bitmap_idx = block_lba - part->sb->data_start_lba;
+            uint32_t bitmap_idx = block_lba - part->sb->sifs_info.sb_raw.data_start_lba;
             bitmap_sync(part, bitmap_idx, BLOCK_BITMAP);
 
             // 更新索引逻辑
@@ -146,7 +158,7 @@ bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de
 					PANIC("sifs_sync_dir_entry: fail to block_bitmap_alloc");
 				}
                 
-                bitmap_idx = block_lba - part->sb->data_start_lba;
+                bitmap_idx = block_lba - part->sb->sifs_info.sb_raw.data_start_lba;
                 bitmap_sync(part, bitmap_idx, BLOCK_BITMAP);
                 all_blocks_addr[tfflib] = block_lba;
                 // 同步间接块内容到磁盘
@@ -163,6 +175,11 @@ bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de
             bwrite_multi(part->my_disk, all_blocks_addr[block_idx], io_buf, 1);
             
             parent_inode->i_size += dir_entry_size;
+
+#ifdef DEBUG_DIR
+            PUTS("i_size after: ",parent_inode->i_size);
+            PUTS("parent after: ",parent_inode);
+#endif
             return true;
         }
 
@@ -174,11 +191,19 @@ bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de
                 bwrite_multi(part->my_disk, all_blocks_addr[block_idx], io_buf, 1);
                 
                 parent_inode->i_size += dir_entry_size;
+
+#ifdef DEBUG_DIR
+                PUTS("i_size after: ",parent_inode->i_size);
+                PUTS("parent after: ",parent_inode);
+#endif
                 return true;
             }
         }
     }
 
+#ifdef DEBUG_DIR
+    PUTS("i_size after: ",parent_inode->i_size);
+#endif
     printk("sifs_sync_dir_entry: directory is full!\n");
     return false;
 }
@@ -197,7 +222,7 @@ bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, u
         bread_multi(part->my_disk, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
     }
 
-    uint32_t dir_entry_size = part->sb->dir_entry_size;
+    uint32_t dir_entry_size = part->sb->sifs_info.sb_raw.dir_entry_size;
     uint32_t dir_entrys_per_sec = (SECTOR_SIZE / dir_entry_size);
     struct sifs_dir_entry* dir_e = (struct sifs_dir_entry*)io_buf;
     struct sifs_dir_entry* dir_entry_found = NULL;
@@ -246,8 +271,8 @@ bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, u
         
         // 如果该块除了被删条目外没有其他条目，且不是首块，则回收整个块
         if (dir_entry_cnt == 1 && !is_dir_first_block) {
-            uint32_t block_bitmap_idx = all_blocks_addr[block_idx] - part->sb->data_start_lba;
-            bitmap_set(&part->block_bitmap, block_bitmap_idx, 0);
+            uint32_t block_bitmap_idx = all_blocks_addr[block_idx] - part->sb->sifs_info.sb_raw.data_start_lba;
+            bitmap_set(&part->sb->sifs_info.block_bitmap, block_bitmap_idx, 0);
             bitmap_sync(part, block_bitmap_idx, BLOCK_BITMAP);
 
             if (block_idx < DIRECT_INDEX_BLOCK) {
@@ -264,8 +289,8 @@ bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, u
                     bwrite_multi(part->my_disk, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
                 } else {
                     // 回收一级间接块表所在的块
-                    uint32_t idx = parent_inode->sifs_i.i_sectors[tfflib] - part->sb->data_start_lba;
-                    bitmap_set(&part->block_bitmap, idx, 0);
+                    uint32_t idx = parent_inode->sifs_i.i_sectors[tfflib] - part->sb->sifs_info.sb_raw.data_start_lba;
+                    bitmap_set(&part->sb->sifs_info.block_bitmap, idx, 0);
                     bitmap_sync(part, idx, BLOCK_BITMAP);
                     parent_inode->sifs_i.i_sectors[tfflib] = 0;
                 }
@@ -292,8 +317,7 @@ bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, u
 int sifs_dir_read(struct file* file, struct dirent* de) {
     struct inode* dir_inode = file->fd_inode;
     struct partition* part = get_part_by_rdev(dir_inode->i_dev);
-    uint32_t dir_entry_size = part->sb->dir_entry_size;
-    uint32_t dir_entrys_per_sec = SECTOR_SIZE / dir_entry_size;
+    uint32_t dir_entry_size = part->sb->sifs_info.sb_raw.dir_entry_size;
 
     // 获取该目录 inode 占据的所有数据块地址
     uint32_t* all_blocks_addr = (uint32_t*)kmalloc(sizeof(uint32_t)*TOTAL_BLOCK_COUNT);

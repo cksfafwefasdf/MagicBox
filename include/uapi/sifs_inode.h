@@ -28,15 +28,6 @@ struct sifs_inode_info{
     };
 };
 
-// 针对不同文件系统，存储在磁盘上的inode实体
-struct sifs_inode{
-	enum file_types i_type;
-	// when inode points to file, i_size is the size of the file
-	// when inode points to dict file, i_size is the size of the sum of the dict entry
-	uint32_t i_size;
-	struct sifs_inode_info sii;
-};
-
 extern void inode_init(struct partition* part, uint32_t inode_no,struct inode* new_inode,enum file_types ft);
 extern void inode_close(struct inode* inode);
 extern struct inode* inode_open(struct partition* part,uint32_t inode_no);

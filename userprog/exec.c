@@ -10,7 +10,7 @@
 #include "syscall.h"
 #include "stdio-kernel.h"
 #include "debug.h"
-#include "sifs_file.h"
+#include "file_table.h"
 #include "process.h"
 #include "wait_exit.h"
 #include "vma.h"
@@ -47,7 +47,7 @@ static int32_t load(const char* pathname){
 	Elf32_Off prog_header_offset = elf_header.e_phoff;
 	Elf32_Half prog_header_size = elf_header.e_phentsize;
 
-	int32_t global_fd = fd_local2global(fd);
+	int32_t global_fd = fd_local2global(get_running_task_struct(), fd);
 
 	struct inode* file_inode = file_table[global_fd].fd_inode; // 获取 inode，以便于填充vma
 

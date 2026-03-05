@@ -40,13 +40,12 @@ space := $(empty) $(empty)
 VPATH := $(subst $(space),:,$(KERNEL_SUBDIRS))
 
 # 编译选项 
-LIB := -I lib/ -I lib/kernel/ -I lib/user/ -I lib/common/ \
-       -I kernel/ -I device/ -I thread/ -I userprog/ -I fs/ -I shell/ -I mm/ -I fs/sifs/
+LIB := -I include/arch -I include/magicbox -I include/sys -I include/uapi
 
 ASFLAGS := -f elf
 
 # -MMD 会为每个 .c 文件自动生成 .d 依赖文件，记录头文件依赖
-CFLAGS  := -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes -D DEBUG \
+CFLAGS  := -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes -D DEBUG_PG_FAULT \
            -Wmissing-prototypes -m32 -fno-stack-protector -fcommon \
            -Wno-error=implicit-function-declaration -MMD
 

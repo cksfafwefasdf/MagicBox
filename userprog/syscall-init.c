@@ -15,6 +15,7 @@
 #include "tty.h"
 #include "timer.h"
 #include "signal.h"
+#include "ioctl.h"
 
 #define SYSCALL_NR 64
 typedef void* syscall_func;

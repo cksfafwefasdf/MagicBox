@@ -14,13 +14,6 @@
 #define VEOF 4 // c_cc[4] 对应 Ctrl+D (文件结束符)
 #define VCLR 5 // c_cc[5] 对应 Ctrl+L (清屏)
 
-/* 新增 ioctl 命令码 */
-#define TCGETS 0x5401  // 获取 termios
-#define TCSETS 0x5402  // 设置 termios
-
-#define TIOCSPGRP 0x5410
-#define TIOCGPGRP 0x540F
-
 #define NCC 8
 
 struct termios {

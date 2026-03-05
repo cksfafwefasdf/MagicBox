@@ -23,236 +23,108 @@
 #include "debug.h"
 #include "interrupt.h"
 #include "fifo.h"
+#include "file_table.h"
+#include "sifs_sb.h"
 
 struct partition* cur_part;
 struct inode* cur_dir_inode;
 
-// logic formatlize 
-static void partition_format(struct partition* part){
-	uint32_t boot_sector_sects = 1;
-	uint32_t super_block_sects = 1;
-	uint32_t inode_bitmap_sects = DIV_ROUND_UP(MAX_FILES_PER_PART,BITS_PER_SECTOR);
-	uint32_t inode_table_sects = DIV_ROUND_UP(((sizeof(struct sifs_inode)*MAX_FILES_PER_PART)),SECTOR_SIZE);
-	uint32_t used_sects = boot_sector_sects+super_block_sects+inode_bitmap_sects+inode_table_sects;
-	uint32_t free_sects = part->sec_cnt - used_sects;
+static bool mount_partition(struct dlist_elem* pelem, void* arg) {
+    char* part_name = (char*)arg;
+    struct partition* part = member_to_entry(struct partition, part_tag, pelem);
+    
+    if (strcmp(part->name, part_name) != 0) return false;
 
-	uint32_t block_bitmap_sects;
-	block_bitmap_sects = DIV_ROUND_UP(free_sects,BITS_PER_SECTOR);
-	uint32_t block_bitmap_bit_len = free_sects-block_bitmap_sects;
-	block_bitmap_sects = DIV_ROUND_UP(block_bitmap_bit_len,BITS_PER_SECTOR);
+    // 申请 VFS 级别的超级块内存
+    struct super_block* sb = kmalloc(sizeof(struct super_block));
+    if (!sb) PANIC("VFS: kmalloc super_block failed!");
+    memset(sb, 0, sizeof(struct super_block));
 
-	struct super_block sb;
-	sb.magic = FS_MAGIC_NUMBER;
-	sb.sec_cnt = part->sec_cnt;
-	sb.inode_cnt = MAX_FILES_PER_PART;
-	sb.part_lba_base = part->start_lba;
+    // 设置通用字段
+    sb->s_dev = part->i_rdev;
 
-	sb.block_bitmap_lba = sb.part_lba_base+2;
-	sb.block_bitmap_sects = block_bitmap_sects;
-
-	sb.inode_bitmap_lba = sb.block_bitmap_lba+sb.block_bitmap_sects;
-	sb.inode_bitmap_sects = inode_bitmap_sects;
-
-	sb.inode_table_lba = sb.inode_bitmap_lba+sb.inode_bitmap_sects;
-	sb.inode_table_sects = inode_table_sects;
-
-	sb.data_start_lba = sb.inode_table_lba+sb.inode_table_sects;
-	sb.root_inode_no = 0;
-	sb.dir_entry_size = sizeof(struct sifs_dir_entry);
-
-	printk("%s info:\n",part->name);
-	printk("\tmagic:0x%x\n\
-\tpart_lba_base:0x%x\n\
-\tall_sectors:0x%x\n\
-\tinode_cnt:0x%x\n\
-\tblock_bitmap_lba:0x%x\n\
-\tblock_bitmap_sectors:0x%x\n\
-\tinode_bitmap_lba:0x%x\n\
-\tinode_bitmap_sectors:0x%x\n\
-\tinode_table_lba:0x%x\n\
-\tinode_table_sectors:0x%x\n\
-\tdata_start_lba:0x%x\n", 
-	sb.magic,
-	sb.part_lba_base,
-	sb.sec_cnt,
-	sb.inode_cnt,
-	sb.block_bitmap_lba,sb.block_bitmap_sects,
-	sb.inode_bitmap_lba,sb.inode_bitmap_sects,
-	sb.inode_table_lba,sb.inode_table_sects,
-	sb.data_start_lba);
-
-	struct disk* hd = part->my_disk; 
-
-	// write superblock to the no.1 sector (no.0 is obr)
-	bwrite_multi(hd,part->start_lba+1,&sb,1);
-	printk("\tsuper_block_lba:0x%x\n",part->start_lba+1);
-	
-	// find the biggest meta info
-	// use it's size as buf_size
-	uint32_t buf_size = sb.block_bitmap_sects>=sb.inode_bitmap_sects?sb.block_bitmap_sects:sb.inode_bitmap_sects;
-	buf_size = (buf_size>=sb.inode_table_sects?buf_size:sb.inode_table_sects)*SECTOR_SIZE;
-	
-	uint8_t* buf = (uint8_t*)kmalloc(buf_size);
-
-	// init block_bitmap and write it to sb.block_bitmap_lba
-	buf[0] |= 0x01; // 0th block is used for root dict, reserve it
-	uint32_t block_bitmap_last_byte = block_bitmap_bit_len/8;
-	uint32_t block_bitmap_last_bit = block_bitmap_bit_len%8;
-	uint32_t last_size = SECTOR_SIZE-(block_bitmap_last_byte%SECTOR_SIZE);
-
-	memset(&buf[block_bitmap_last_byte],0xff,last_size);
-
-	uint8_t bit_idx = 0;
-	while(bit_idx<=block_bitmap_last_bit){
-		buf[block_bitmap_last_byte] &= ~(1<<bit_idx++);
-	}
-	bwrite_multi(hd,sb.block_bitmap_lba,buf,sb.block_bitmap_sects);
-
-
-	// init inode_bitmap and write it to sb.inode_bitmap_lba
-	// flush the buf
-	memset(buf,0,buf_size);
-	buf[0] |= 0x1; // reserve for root dict
-	bwrite_multi(hd,sb.inode_bitmap_lba,buf,sb.inode_bitmap_sects);
-
-	// init inode list and write it to sb.inode_table_lba
-	// flush the buf
-	memset(buf,0,buf_size);
-	struct sifs_inode* i = (struct sifs_inode*)buf;
-	i->i_size = sb.dir_entry_size*2; // dict '.' and '..'
-	// i->i_no = 0; // 0th is used for root dict 
-	i->sii.i_sectors[0] = sb.data_start_lba;
-	i->i_type = FT_DIRECTORY;
-
-	bwrite_multi(hd,sb.inode_table_lba,buf,sb.inode_table_sects);
-
-	// write root dict to sb.data_start_lba
-	// write dict '.' and '..'
-	memset(buf,0,buf_size);
-	struct sifs_dir_entry* p_de = (struct sifs_dir_entry*)buf;
-
-	// init current dict '.'
-	memcpy(p_de->filename,".",1);
-	p_de->i_no = 0;
-	p_de->f_type = FT_DIRECTORY;
-	p_de++;
-
-	// init parent dict ".."
-	memcpy(p_de->filename,"..",2);
-	p_de->i_no = 0;
-	p_de->f_type = FT_DIRECTORY;
-
-	// sb.data_start_lba has been allocated to the root dict which contains dict entries
-	bwrite_multi(hd,sb.data_start_lba,buf,1);
-	
-	kfree(buf);
-	printk("\troot_dir_lba:0x%x\n",sb.data_start_lba);
-	printk("%s format done\n",part->name);
+    // 根据文件系统类型进行分发 (Dispatch)
+    // 暂时我们可以根据魔数探测，或者手动指定
+    // 之后我们实现虚拟文件系统后可以直接用VFS的多态方式来读取
+    if (sifs_read_super(sb, NULL, 1) != NULL) {
+        // 挂载成功，完成最后的绑定
+        cur_part = part;
+        printk("VFS: mounted %s as SIFS\n", part_name);
+        return true;
+    } 
+    /* else if (ext2_read_super(sb, NULL, 1) != NULL) { ... } */
+    
+    // 如果所有文件系统都识别失败
+    kfree(sb);
+    printk("VFS: can't find valid filesystem on %s\n", part_name);
+    return false;
 }
 
-static bool mount_partition(struct dlist_elem* pelem,void* arg){
-	char* part_name = (char*) arg;
-	struct partition* part = member_to_entry(struct partition,part_tag,pelem);
-	if(!strcmp(part->name,part_name)){
+void filesys_init() {
+    uint8_t channel_no = 0, dev_no = 0;
+    bool first_flag = true;
+    char default_part[MAX_DISK_NAME_LEN] = {0};
 
-		cur_part = part;
-		struct disk* hd = cur_part->my_disk;
-		
-		cur_part->block_bitmap.bits = (uint8_t*)kmalloc(cur_part->sb->block_bitmap_sects*SECTOR_SIZE);
-		cur_part->inode_bitmap.bits = (uint8_t*)kmalloc(cur_part->sb->inode_bitmap_sects*SECTOR_SIZE);
-		
-		if(cur_part->block_bitmap.bits==NULL){
-			PANIC("alloc memory failed!");
-		}
-		cur_part->block_bitmap.btmp_bytes_len=cur_part->sb->block_bitmap_sects*SECTOR_SIZE;
-		
-		bread_multi(hd,cur_part->sb->block_bitmap_lba,cur_part->block_bitmap.bits,cur_part->sb->block_bitmap_sects);
-		
-	
-		if(cur_part->inode_bitmap.bits==NULL){
-			PANIC("alloc memory failed!");
-		}
-		cur_part->inode_bitmap.btmp_bytes_len = cur_part->sb->inode_bitmap_sects*SECTOR_SIZE;
-		bread_multi(hd,cur_part->sb->inode_bitmap_lba,cur_part->inode_bitmap.bits,cur_part->sb->inode_bitmap_sects);
-		dlist_init(&cur_part->open_inodes);
-		
-		// kfree(sb_buf);
+    printk("Searching filesystem......\n");
+    while (channel_no < channel_cnt) {
+        dev_no = 0;
+        while (dev_no < 2) {
+            struct disk* hd = &channels[channel_no].devices[dev_no];
+            if (!hd->name[0]) { dev_no++; continue; } 
 
-		printk("mount %s done!\n",part_name);
-		
-		// printk("%s data_start_lba: %x\n",part_name,part->sb->data_start_lba);
-		// printk("%s inode_bitmap_lba: %x\n",part_name,part->sb->inode_bitmap_lba);
-		// printk("%s inode_table_lba: %x\n",part_name,part->sb->inode_table_lba);
-		// printk("%s block_bitmap_lba: %x\n",part_name,part->sb->block_bitmap_lba);
-		return true;
-	}
-	return false;
-}
+            struct partition* part = hd->prim_parts;
+            uint8_t part_idx = 0;
+            while (part_idx < 12) {
+                if (part_idx == 4) part = hd->logic_parts;
 
-void filesys_init(){
+                if (part->sec_cnt != 0) {
+                    // 临时申请一个磁盘超级块缓冲区，仅用于探测
+                    struct sifs_super_block* sb_buf = (struct sifs_super_block*)kmalloc(SECTOR_SIZE);
+                    if (sb_buf == NULL) PANIC("filesys_init: kmalloc failed!");
+                    
+                    bread_multi(hd, part->start_lba + 1, sb_buf, 1);
 
-	uint8_t channel_no = 0,dev_no=0,part_idx = 0;
-	bool first_flag = true;
+                    // 检查魔数，如果没有则格式化
+                    if (sb_buf->magic != SIFS_FS_MAGIC_NUMBER) {
+                        printk("Formatting %s's partition %s ......\n", hd->name, part->name);
+                        sifs_format(part);
+                    }
+                    
+                    // 探测完毕，释放临时缓冲区
+                    kfree(sb_buf);
 
-	char default_part[MAX_DISK_NAME_LEN];
+                    // 记录第一个有效分区的名字，准备挂载
+                    if (first_flag) {
+                        strcpy(default_part, part->name);
+                        first_flag = false;
+                    }
+                }
+                part_idx++;
+                part++;
+            }
+            dev_no++;
+        }
+        channel_no++;
+    }
 
-	printk("searching filesystem......\n");
-	while(channel_no<channel_cnt){
-		dev_no = 0;
-		while (dev_no<2){
-			struct disk* hd = &channels[channel_no].devices[dev_no];
-			if (!hd->name[0]) { dev_no++; continue; } // 跳过不存在的磁盘
-			struct partition* part = hd->prim_parts;
-			uint8_t part_idx = 0;
-			while(part_idx<12){
-				if(part_idx==4){
-					part = hd->logic_parts;
-				}
+    // 调用 mount_partition 进行挂载
+    // mount_partition 内部会调用 sifs_read_super，加载超级块
+    // 而 sifs_read_super 会完成分配 VFS super_block、位图、根 inode 的所有工作
+    if (default_part[0] != 0) {
+        dlist_traversal(&partition_list, mount_partition, (void*)default_part);
+    } else {
+        PANIC("No available partition to mount!");
+    }
 
-				if(part->sec_cnt!=0){
-					struct super_block* sb_buf = (struct super_block*)kmalloc(SECTOR_SIZE);
-					if(sb_buf==NULL){
-						PANIC("filesys_init: alloc memory failed!!!");
-					}
-					memset(sb_buf,0,SECTOR_SIZE);
-					bread_multi(hd,part->start_lba+1,sb_buf,1);
-					if(sb_buf->magic==FS_MAGIC_NUMBER){
-						printk("%s has filesystem\n",part->name);
-						part->sb = sb_buf;
-					} else{
-						printk("formatting %s's partition %s ......\n",hd->name,part->name);
-						partition_format(part);
-						bread_multi(hd,part->start_lba+1,sb_buf,1);
-						part->sb = sb_buf;
-					}
-					
-					if(first_flag){
-						// we regard the first part as default part
-						// then, mount the default part;
-						strcpy(default_part,part->name);
-						first_flag = false;
-					}
-				}
-
-				part_idx++;
-				part++;
-			}
-
-			dev_no++;
-		}
-		channel_no++;
-	}
-	// kfree(sb_buf);
-	
-	// mount default_part, quick mount
-	dlist_traversal(&partition_list,mount_partition,(void*)default_part);
-	open_root_dir(cur_part);
-	cur_dir_inode = root_dir_inode;
-
-	uint32_t fd_idx = 0;
-	while(fd_idx<MAX_FILE_OPEN_IN_SYSTEM){
-		file_table[fd_idx++].fd_inode = NULL;
-	}
+    // 设置当前目录环境
+    // sifs_read_super 已经把 root_inode 存进了 cur_part->sb->s_root_inode
+    cur_dir_inode = cur_part->sb->s_root_inode; 
+    open_root_dir(cur_part);
+    // 初始化全局文件表
+    uint32_t fd_idx = 0;
+    while (fd_idx < MAX_FILE_OPEN_IN_SYSTEM) {
+        file_table[fd_idx++].fd_inode = NULL;
+    }
 }
 
 char* _path_parse(char* pathname,char* name_store){
@@ -474,15 +346,11 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
         }
     }
 
+    // printk("SYNC_CHECK: ino=%d, new_size=%d\n", searched_record.parent_inode->i_no, searched_record.parent_inode->i_size);
+
 	return fd;
 }
 
-uint32_t fd_local2global(uint32_t local_fd){
-	struct task_struct* cur = get_running_task_struct();
-	int32_t global_fd = cur->fd_table[local_fd];
-	ASSERT(global_fd>=0&&global_fd<MAX_FILE_OPEN_IN_SYSTEM);
-	return (uint32_t)global_fd;
-}
 // if success, then return 0
 // else return -1
 int32_t sys_close(int32_t fd) {
@@ -526,7 +394,7 @@ int32_t sys_write(int32_t fd,void* buf, uint32_t count) {
     }
 
     // 获取全局文件结构体
-    int32_t _fd = fd_local2global(fd);
+    int32_t _fd = fd_local2global(get_running_task_struct(), fd);
     struct file* wr_file = &file_table[_fd];
 
     // 权限检查
@@ -578,7 +446,7 @@ int32_t sys_read(int32_t fd, void* buf, uint32_t count) {
     ASSERT(buf != NULL);
 
     // 获取全局文件结构体
-    int32_t global_fd_idx = fd_local2global(fd);
+    int32_t global_fd_idx = fd_local2global(get_running_task_struct(), fd);
     struct file* rd_file = &file_table[global_fd_idx];
 
     // 权限检查
@@ -630,7 +498,7 @@ int32_t sys_lseek(int32_t fd,int32_t offset,enum whence whence){
 		return -1;
 	}
 	ASSERT(whence>0&&whence<4);
-	uint32_t _fd = fd_local2global(fd);
+	uint32_t _fd = fd_local2global(get_running_task_struct(), fd);
 	struct file* pf = &file_table[_fd];
 
 	int32_t new_pos = 0;
@@ -762,6 +630,7 @@ int32_t sys_unlink(const char* _pathname) {
 }
 
 // mkdir 和 rmdir 是放到 i_op 中的成员，他就是和文件系统强相关的，所以直接写sifs没问题
+// 直接操作 sifs 的超级块信息也没啥问题
 int32_t sys_mkdir(const char* _pathname) {
     uint8_t rollback_step = 0;
     void* io_buf = kmalloc(SECTOR_SIZE * 2);
@@ -839,7 +708,7 @@ int32_t sys_mkdir(const char* _pathname) {
     // 写入物理磁盘
     bwrite_multi(part->my_disk, block_lba, io_buf, 1);
 
-    new_dir_inode.i_size = 2 * part->sb->dir_entry_size;
+    new_dir_inode.i_size = 2 * part->sb->sifs_info.sb_raw.dir_entry_size;
 
     // 在父目录中同步新目录的目录项
     struct sifs_dir_entry new_dir_entry;
@@ -861,22 +730,23 @@ int32_t sys_mkdir(const char* _pathname) {
     inode_sync(part, &new_dir_inode, io_buf); // 同步新目录 inode
 
     bitmap_sync(part, inode_no, INODE_BITMAP);
-    bitmap_sync(part, (block_lba - part->sb->data_start_lba), BLOCK_BITMAP);
+    bitmap_sync(part, (block_lba - part->sb->sifs_info.sb_raw.data_start_lba), BLOCK_BITMAP);
 
     // 清理并退出
     kfree(io_buf);
     if (parent_inode != root_dir_inode) {
         inode_close(parent_inode);
     }
+
     return 0;
 
 rollback:
     switch (rollback_step) {
         case 3:
             // 此时 block 已分配但同步目录项失败，需回滚 block
-            bitmap_set(&part->block_bitmap, (block_lba - part->sb->data_start_lba), 0);
+            bitmap_set(&part->sb->sifs_info.block_bitmap, (block_lba - part->sb->sifs_info.sb_raw.data_start_lba), 0);
         case 2:
-            bitmap_set(&part->inode_bitmap, inode_no, 0);
+            bitmap_set(&part->sb->sifs_info.inode_bitmap, inode_no, 0);
         case 1:
             if (searched_record.parent_inode != root_dir_inode) {
                 inode_close(searched_record.parent_inode);
@@ -893,7 +763,7 @@ int32_t sys_readdir(int32_t fd, struct dirent* de) {
         return -1;
     }
 
-    int32_t _fd = fd_local2global(fd);
+    int32_t _fd = fd_local2global(get_running_task_struct(), fd);
     struct file* f = &file_table[_fd];
 
     // 类型检查，必须是目录且已打开
@@ -924,7 +794,7 @@ void sys_rewinddir(int32_t fd) {
     }
 
     // 找到全局文件项
-    int32_t global_fd = fd_local2global(fd);
+    int32_t global_fd = fd_local2global(get_running_task_struct() ,fd);
     struct file* f = &file_table[global_fd];
 
     if (f->fd_inode->i_type != FT_DIRECTORY) {
@@ -1012,7 +882,7 @@ static uint32_t get_parent_dir_inode_nr(struct partition* part, uint32_t child_i
     
     // 目录的第 0 个块通常存放着 "." 和 ".."
     uint32_t block_lba = child_dir_inode->sifs_i.i_sectors[0];
-    ASSERT(block_lba >= part->sb->data_start_lba);
+    ASSERT(block_lba >= part->sb->sifs_info.sb_raw.data_start_lba);
     
     // 拿到 LBA 后就可以关闭 inode 了，节省内存引用计数
     inode_close(child_dir_inode);
@@ -1023,7 +893,7 @@ static uint32_t get_parent_dir_inode_nr(struct partition* part, uint32_t child_i
     // 使用磁盘镜像结构体 sifs_dir_entry 而不是内存镜像的结构体
     struct sifs_dir_entry* dir_e = (struct sifs_dir_entry*)io_buf;
 
-    // 根据我们在 partition_format 中的约定：
+    // 根据我们在 sifs_format 中的约定：
     // dir_e[0] 是 "."
     // dir_e[1] 是 ".."
     
@@ -1060,7 +930,7 @@ static int get_child_dir_name(struct partition* part, uint32_t p_inode_nr, uint3
 
     // 使用 SIFS 磁盘目录项结构体
     struct sifs_dir_entry* dir_e = (struct sifs_dir_entry*)io_buf;
-    uint32_t dir_entry_size = part->sb->dir_entry_size;
+    uint32_t dir_entry_size = part->sb->sifs_info.sb_raw.dir_entry_size;
     uint32_t dir_entrys_per_sec = (SECTOR_SIZE / dir_entry_size);
 
     block_idx = 0;
@@ -1189,7 +1059,7 @@ int32_t sys_stat(const char* _pathname,struct stat* buf){
 		ret = 0;
 
 	}else{	
-		debug_printk("sys_stat: %s not found!\n",path);
+		printk("sys_stat: %s not found!\n",path);
 	}
 
 	inode_close(searched_record.parent_inode);
@@ -1256,28 +1126,34 @@ void sys_disk_info() {
                         struct partition* part = (type == 0) ? &hd->prim_parts[p_idx] : &hd->logic_parts[p_idx];
                         if (!part->name[0]) continue;
 
-                        struct super_block* sb = part->sb;
+                        struct sifs_super_block* sifs_sb = &part->sb->sifs_info.sb_raw;
                         bool is_temp_sb = false;
 
                         // 即便没挂载，也现场读
-                        if (sb == NULL) {
-                            sb = kmalloc(SECTOR_SIZE);
-                            bread_multi(hd, part->start_lba + 1, sb, 1);
+                        if (part->sb != NULL) {
+                            // 如果已经挂载，直接用内存里的
+                            sifs_sb = &part->sb->sifs_info.sb_raw;
+                        } else {
+                            // 没挂载，现场申请并读取
+                            sifs_sb = kmalloc(SECTOR_SIZE);
+                            if (sifs_sb == NULL) PANIC("sys_disk_info: kmalloc failed");
+                            
+                            bread_multi(hd, part->start_lba + 1, sifs_sb, 1);
                             is_temp_sb = true;
                         }
 
                         // 如果魔数对不上，说明没格式化，打印横杠
-                        if (sb->magic != FS_MAGIC_NUMBER) { 
+                        if (sifs_sb->magic != SIFS_FS_MAGIC_NUMBER) { 
                             printk("%s(%c)\t-\t-\t-\t-\n", part->name, (type == 0 ? 'P' : 'L'));
                         } else {
                             // 计算位图
-                            uint32_t btmp_sects = sb->block_bitmap_sects;
+                            uint32_t btmp_sects = sifs_sb->block_bitmap_sects;
                             uint8_t* btmp_buf = kmalloc(btmp_sects * SECTOR_SIZE);
-                            bread_multi(hd, sb->block_bitmap_lba, btmp_buf, btmp_sects);
+                            bread_multi(hd, sifs_sb->block_bitmap_lba, btmp_buf, btmp_sects);
 
                             struct bitmap btmp;
                             btmp.bits = btmp_buf;
-                            btmp.btmp_bytes_len = sb->sec_cnt / 8;
+                            btmp.btmp_bytes_len = sifs_sb->sec_cnt / 8;
                             uint32_t free_sects = bitmap_count(&btmp);
                             uint32_t used_sects = (btmp.btmp_bytes_len * 8) - free_sects;
 
@@ -1290,14 +1166,14 @@ void sys_disk_info() {
                                    part->name, 
                                    (type == 0 ? 'P' : 'L'), 
                                    cur_flag_str, 
-                                   sb->magic, 
-                                   sb->sec_cnt, 
+                                   sifs_sb->magic, 
+                                   sifs_sb->sec_cnt, 
                                    used_sects, 
                                    free_sects);
 
                             kfree(btmp_buf);
                         }
-                        if (is_temp_sb) kfree(sb);
+                        if (is_temp_sb) kfree(sifs_sb);
                     }
                 }
             } else {
@@ -1335,48 +1211,46 @@ void sys_mount(const char* part_name){
 	// 由于我们引入了全盘分区，因此需要区分现在挂载的到底是全盘分区还是正常的装有文件系统的分区
 	// 若是全盘分区则直接拒绝
 	// 临时申请一个缓冲区来读取潜在的超级块
-	struct super_block* sb_buf = (struct super_block*)kmalloc(SECTOR_SIZE);
+	struct sifs_super_block* sb_buf = (struct sifs_super_block*)kmalloc(SECTOR_SIZE);
 	
 	// 超级块在第一个扇区，因此使用 part->start_lba + 1
 	bread_multi(part->my_disk, part->start_lba + 1, sb_buf, 1);
 
 	// 检查魔数是否匹配,即是否有文件系统
-	if (sb_buf->magic != FS_MAGIC_NUMBER) {
+	if (sb_buf->magic != SIFS_FS_MAGIC_NUMBER) {
 		printk("sys_mount: Error! Partition %s is not a valid filesystem (Magic Mismatch).\n", part_name);
 		kfree(sb_buf);
 		return ; // 找到了这个盘，但它不合法，直接返回 true 停止遍历
 	}
 
-	if(cur_part!=NULL&&cur_part->block_bitmap.bits!=NULL){
-		// printk("remove block bitmap\n");
-		kfree(cur_part->block_bitmap.bits);
-		cur_part->block_bitmap.btmp_bytes_len = 0;
-	}
+    if(cur_part!=NULL){
 
-	if(cur_part!=NULL&&cur_part->inode_bitmap.bits!=NULL){
-		// printk("remove inode bitmap\n");
-		kfree(cur_part->inode_bitmap.bits);
-		cur_part->inode_bitmap.btmp_bytes_len = 0;
-	}
+        if(cur_part->sb->sifs_info.block_bitmap.bits!=NULL){
+            kfree(cur_part->sb->sifs_info.block_bitmap.bits);
+		    cur_part->sb->sifs_info.block_bitmap.btmp_bytes_len = 0;
+        }
 
-	if(cur_part!=NULL){
-		close_root_dir(cur_part);
+        if(cur_part->sb->sifs_info.inode_bitmap.bits!=NULL){
+            // printk("remove inode bitmap\n");
+            kfree(cur_part->sb->sifs_info.inode_bitmap.bits);
+            cur_part->sb->sifs_info.inode_bitmap.btmp_bytes_len = 0;
+        }
+
+        kfree(cur_part->sb);
+
+        close_root_dir(cur_part);
 		printk("close root directory\n");
-	} 
+    }
 
 	dlist_traversal(&partition_list,mount_partition,(void*)part_name);
 	open_root_dir(cur_part);
-	// printk("mount::after:::%x \n",cur_part->sb->data_start_lba);
-	// printk("partition %s mounted\n", cur_part->name);
-
 
 	// 同步全局 cur_dir 指向新的 root_dir 内存
-    cur_dir_inode = &root_dir_inode; 
+    cur_dir_inode = root_dir_inode; 
 
     // 强制让当前运行进程的路径回到根目录，防止它引用旧分区的 inode 编号
     struct task_struct* cur = get_running_task_struct();
-    cur->cwd_inode_nr = cur_part->sb->root_inode_no;
-
+    cur->cwd_inode_nr = cur_part->sb->s_root_ino;
 }
 
 // 创建特殊文件（字符/块设备/FIFO）
@@ -1446,7 +1320,7 @@ int32_t sys_mknod(const char* _pathname, enum file_types type, uint32_t dev) {
     if (!sifs_sync_dir_entry(parent_inode, &new_de, io_buf)) {
         printk("sys_mknod: sifs_sync_dir_entry failed\n");
         // 暂时先简单处理一下，回滚位图
-        bitmap_set(&part->inode_bitmap, inode_no, 0);
+        bitmap_set(&part->sb->sifs_info.inode_bitmap, inode_no, 0);
         goto rollback;
     }
 
@@ -1536,7 +1410,6 @@ static void clear_dev_directory(void) {
     int32_t fd;
     struct dirent de; // 使用新的通用目录项结构体，这个目录项结构体是同时给用户和 VFS 使用的
     char path[MAX_PATH_LEN];
-    bool deleted;
     fd = sys_open("/dev", O_RDONLY);
     if (fd == -1) {
         // 如果 /dev 不存在，创建它并直接返回

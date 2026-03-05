@@ -11,6 +11,7 @@
 #define EBADF 9 // Bad file number
 #define EAGAIN 11 // Try again 
 #define EFAULT 14 // Bad address.
+#define ENODEV 19 // No such device
 #define EINVAL 22 // Invalid argument 
 #define ENOTTY 25 // Not a typewriter (这不是打印机/终端)
 #define EPIPE 32 //Broken pipe 

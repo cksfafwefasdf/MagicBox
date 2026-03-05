@@ -4,11 +4,10 @@
 #include "interrupt.h"
 #include "ioqueue.h"
 #include "debug.h"
-#include "sifs_inode.h"
-#include "sifs_file.h"
 #include "signal.h"
 #include "errno.h"
 #include "fs_types.h"
+#include "file_table.h"
 
 int32_t sys_pipe(int32_t pipefd[2]) {
 

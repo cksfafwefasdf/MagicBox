@@ -12,7 +12,7 @@
 #include "main.h"
 #include "stdio.h"
 #include "fs.h"
-#include "sifs_file.h"
+#include "fs_types.h"
 #include "dlist.h"
 #include "signal.h"
 #include "errno.h"

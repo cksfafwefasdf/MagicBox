@@ -37,8 +37,11 @@ struct partition{
 	struct dlist_elem part_tag; // be used in the queue
 	char name[8]; // partition name
 	struct super_block* sb; // super block in this partition
-	struct bitmap block_bitmap; 
-	struct bitmap inode_bitmap;
+	// 位图只是我们用来管理 sifs 这个文件系统所使用的结构
+	// 他不应该与 part 这个与文件系统无关的数据结构绑定
+	// 我们将 bitmap 下放到了 sb->sifs_info 中
+	// struct bitmap block_bitmap; 
+	// struct bitmap inode_bitmap;
 	struct dlist open_inodes; // inode openned by this partition
 };
 
@@ -75,6 +78,7 @@ extern void sys_read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uin
 extern int32_t ide_dev_write(struct file* file, void* buf, uint32_t count);
 extern int32_t ide_dev_read(struct file* file, void* buf, uint32_t count);
 extern struct partition* get_part_by_rdev(uint32_t rdev);
+extern int32_t ide_ioctl(struct file *file,uint32_t cmd,uint32_t arg);
 
 extern struct ide_channel channels[2];
 extern uint8_t channel_cnt;

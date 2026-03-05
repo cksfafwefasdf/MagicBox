@@ -11,6 +11,9 @@
 #include "sifs_file.h"
 #include "ide_buffer.h"
 #include "fs_types.h"
+#include "sifs_sb.h"
+#include "sifs_dir.h"
+
 
 struct inode_position{
 	bool two_sec; // whether an inode spans multiple sectors
@@ -20,8 +23,9 @@ struct inode_position{
 
 // Calculate the logical sector offset and byte offset within the sector by inode number
 static void inode_locate(struct partition* part,uint32_t inode_no,struct inode_position* inode_pos){
+
 	ASSERT(inode_no<MAX_FILES_PER_PART);
-	uint32_t inode_table_lba = part->sb->inode_table_lba;
+	uint32_t inode_table_lba = part->sb->sifs_info.sb_raw.inode_table_lba;
 
 	uint32_t inode_size = sizeof(struct sifs_inode);
 	// total bytes offset
@@ -73,19 +77,46 @@ void inode_sync(struct partition* part,struct inode* inode,void* io_buf){
 struct inode* inode_open(struct partition* part,uint32_t inode_no){
 	enum intr_status old_status = intr_disable();
 
+	/*
+		用于解决inode缓存一致性的问题强行打上的补丁，用于保证所有进程使用的根目录都是同一个
+		这只是个临时的补丁，真正治本的方法是修改inode缓存的位置，不再将其放到每一个part上
+		而是以part和i_no作为索引，全局维护一张哈希表，这样一致性会更强一些
+		如果不加上这段代码，我们执行这样的指令序列
+		mount sdb1
+		mount sda1
+		mkdir d
+		echo dada -f f1
+		然后执行 ls，会发现f1无法显示！这是由于 目录结构的 i_size 在内存中的不一致导致的
+		我们的系统（mkdir）和用户程序（echo）访问到的根目录inode不是同一个，虽然磁盘上的是同一个
+		但是内存镜像不是同一个，因此在系统运行的过程中，i_size 的一致性出现了问题
+		用这段代码可以将根目录强制绑定到同一个目录上，但是这么干其他目录下可能仍有问题，但是目前没有试出来
+		后期准备使用哈希表来做全局缓存从而解决这个问题
+		这本质上是 VFS（虚拟文件系统）层的缓存穿透。
+		内核态（mkdir）：在内核栈中操作，修改了 Inode_A。
+		用户态子进程（echo）：由于 fork 后的环境或路径解析逻辑，它没能在 part->open_inodes 里命中 Inode_A，于是重新 kmalloc 了一个 Inode_B。
+		结果，两个进程都在改写同一个磁盘块，但它们各自维护的 i_size、i_sectors 等内存元数据是孤立的。
+		echo 写完后，ls 读的是 mkdir 手里那个过时的 i_size，自然看不到新文件。
+	*/
+	if (root_dir_inode != NULL && 
+        root_dir_inode->i_no == inode_no && 
+        root_dir_inode->i_dev == part->i_rdev) {
+        
+        root_dir_inode->i_open_cnts++;
+        return root_dir_inode;
+    }
+
 	struct dlist_elem* elem = part->open_inodes.head.next;
 	struct inode* inode_found;
 	while(elem!=&part->open_inodes.tail){
 		inode_found = member_to_entry(struct inode,inode_tag,elem);
-		if(inode_found->i_no==inode_no){
+		// 多分区情况下 i_no 并不能唯一确定一个 inode ！还要加上 i_dev !
+		if(inode_found->i_no==inode_no && inode_found->i_dev == part->i_rdev){
 			inode_found->i_open_cnts++;
 			intr_set_status(old_status);
 			return inode_found;
 		}
 		elem = elem->next;
 	}
-
-	
 
 	struct inode_position inode_pos;
 
@@ -219,9 +250,9 @@ void inode_release(struct partition* part,uint32_t inode_no){
 		bread_multi(part->my_disk,inode_to_del->sifs_i.i_sectors[tfflib],all_blocks_addr+tfflib,1);
 		block_cnt = TOTAL_BLOCK_COUNT;
 
-		block_bitmap_idx = inode_to_del->sifs_i.i_sectors[tfflib] - part->sb->data_start_lba;
+		block_bitmap_idx = inode_to_del->sifs_i.i_sectors[tfflib] - part->sb->sifs_info.sb_raw.data_start_lba;
 		ASSERT(block_bitmap_idx>0);
-		bitmap_set(&part->block_bitmap,block_bitmap_idx,0);
+		bitmap_set(&part->sb->sifs_info.block_bitmap,block_bitmap_idx,0);
 		bitmap_sync(part,block_bitmap_idx,BLOCK_BITMAP);
 	}
 
@@ -229,15 +260,15 @@ void inode_release(struct partition* part,uint32_t inode_no){
 	while(block_idx<block_cnt){
 		if(all_blocks_addr[block_idx]!=0){
 			block_bitmap_idx = 0;
-			block_bitmap_idx = all_blocks_addr[block_idx]-part->sb->data_start_lba;
+			block_bitmap_idx = all_blocks_addr[block_idx]-part->sb->sifs_info.sb_raw.data_start_lba;
 			ASSERT(block_bitmap_idx>0);
-			bitmap_set(&part->block_bitmap,block_bitmap_idx,0);
+			bitmap_set(&part->sb->sifs_info.block_bitmap,block_bitmap_idx,0);
 			bitmap_sync(part,block_bitmap_idx,BLOCK_BITMAP);
 		}
 		block_idx++;
 	}
 
-	bitmap_set(&part->inode_bitmap,inode_no,0);
+	bitmap_set(&part->sb->sifs_info.inode_bitmap,inode_no,0);
 	bitmap_sync(part,inode_no,INODE_BITMAP);
 
 	void* io_buf = kmalloc(SECTOR_SIZE*2);
@@ -292,7 +323,6 @@ int32_t inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_
     memset(all_blocks_addr, 0, TOTAL_BLOCK_COUNT * sizeof(uint32_t));
 
     // 填充 block 地址表
-    uint32_t block_start_idx = offset / BLOCK_SIZE;
     uint32_t block_end_idx = (offset + size_left - 1) / BLOCK_SIZE;
 
     // 填充直接块 (0-11)
