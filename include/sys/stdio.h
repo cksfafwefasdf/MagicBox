@@ -1,5 +1,5 @@
-#ifndef __LIB_STDIO_H
-#define __LIB_STDIO_H
+#ifndef __INCLUDE_SYS_STDIO_H
+#define __INCLUDE_SYS_STDIO_H
 #include "stdint.h"
 #include "stdbool.h"
 typedef char* va_list;

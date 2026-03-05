@@ -1,5 +1,5 @@
-#ifndef __THREAD_SYNC_H
-#define __THREAD_SYNC_H
+#ifndef __INCLUDE_MAGICBOX_SYNC_H
+#define __INCLUDE_MAGICBOX_SYNC_H
 #include "dlist.h"
 #include "stdint.h"
 #include "thread.h"

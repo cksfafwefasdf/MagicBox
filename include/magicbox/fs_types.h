@@ -1,5 +1,5 @@
-#ifndef __FS_FS_TYPES_H
-#define __FS_FS_TYPES_H
+#ifndef __INCLUDE_MAGICBOX_FS_TYPES_H
+#define __INCLUDE_MAGICBOX_FS_TYPES_H
 #include "stdint.h"
 #include "unistd.h"
 #include "sifs_inode.h"

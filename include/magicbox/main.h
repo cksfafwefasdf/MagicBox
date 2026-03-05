@@ -1,4 +1,4 @@
-#ifndef __KERNEL_MAIN_H
-#define __KERNEL_MAIN_H
+#ifndef __INCLUDE_MAGICBOX_MAIN_H
+#define __INCLUDE_MAGICBOX_MAIN_H
 
 #endif

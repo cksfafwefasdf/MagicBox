@@ -1,4 +1,4 @@
-#ifndef __KERNEL_STDIO_KERNEL_H
-#define __KERNEL_STDIO_KERNEL_H
+#ifndef __INCLUDE_MAGICBOX_STDIO_KERNEL_H
+#define __INCLUDE_MAGICBOX_STDIO_KERNEL_H
 extern void printk(const char* format,...);
 #endif

@@ -1,5 +1,5 @@
-#ifndef __LIB_COMMON_TAR_H
-#define __LIB_COMMON_TAR_H
+#ifndef __INCLUDE_UAPI_TAR_H
+#define __INCLUDE_UAPI_TAR_H
 #include "stdint.h"
 
 // POSIX ustar 标准头部 (512字节)

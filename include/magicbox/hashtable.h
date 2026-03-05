@@ -1,5 +1,5 @@
-#ifndef __DEVICE_HASHTABLE_H
-#define __DEVICE_HASHTABLE_H
+#ifndef __INCLUDE_MAGICBOX_HASHTABLE_H
+#define __INCLUDE_MAGICBOX_HASHTABLE_H
 #include "dlist.h"
 
 // 黄金分割数 0.618033...

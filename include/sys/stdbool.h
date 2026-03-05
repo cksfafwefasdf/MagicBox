@@ -1,5 +1,5 @@
-#ifndef __LIB_STDBOOL_H
-#define __LIB_STDBOOL_H
+#ifndef __INCLUDE_SYS_STDBOOL_H
+#define __INCLUDE_SYS_STDBOOL_H
 #include "stdint.h"
 #define bool int8_t
 #define true 1

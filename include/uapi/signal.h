@@ -1,5 +1,5 @@
-#ifndef __KERNEL_SIGNAL_H
-#define __KERNEL_SIGNAL_H
+#ifndef __INCLUDE_UAPI_SIGNAL_H
+#define __INCLUDE_UAPI_SIGNAL_H
 #include "stdint.h"
 #include "stdbool.h"
 #include "unistd.h"

@@ -1,5 +1,5 @@
-#ifndef __DEVICE_IOCTL_H
-#define __DEVICE_IOCTL_H
+#ifndef __INCLUDE_UAPI_IOCTL_H
+#define __INCLUDE_UAPI_IOCTL_H
 
 #include "stdint.h"
 

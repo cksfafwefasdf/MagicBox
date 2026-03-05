@@ -1,5 +1,5 @@
-#ifndef __DEVICE_TERMIOS_H
-#define __DEVICE_TERMIOS_H
+#ifndef __INCLUDE_MAGICBOX_TERMIOS_H
+#define __INCLUDE_MAGICBOX_TERMIOS_H
 
 // c_lflag (本地模式) 的位掩码
 #define ISIG 0x0001 // 启用信号处理（若收到 INTR, QUIT, SUSP 字符，则发送信号）

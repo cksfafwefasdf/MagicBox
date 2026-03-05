@@ -1,5 +1,5 @@
-#ifndef __KERNEL_DEBUG_H
-#define __KERNEL_DEBUG_H
+#ifndef __INCLUDE_MAGICBOX_DEBUG_H
+#define __INCLUDE_MAGICBOX_DEBUG_H
 #include "stdint.h"
 #include "print.h"
 extern void panic_spin(char* filename,int line,const char* func,const char* condition);

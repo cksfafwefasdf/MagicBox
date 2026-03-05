@@ -1,5 +1,5 @@
-#ifndef __DEVICE_TTY_H
-#define __DEVICE_TTY_H
+#ifndef __INCLUDE_MAGICBOX_TTY_H
+#define __INCLUDE_MAGICBOX_TTY_H
 
 #include "stdint.h"
 #include "stdbool.h"

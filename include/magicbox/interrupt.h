@@ -1,5 +1,5 @@
-#ifndef __KERNEL__INTERRUPT_H
-#define __KERNEL__INTERRUPT_H
+#ifndef __INCLUDE_MAGICBOX_INTERRUPT_H
+#define __INCLUDE_MAGICBOX_INTERRUPT_H
 #include "stdint.h"
 
 

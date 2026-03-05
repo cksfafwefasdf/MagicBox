@@ -1,5 +1,5 @@
-#ifndef __FS_PIPE_H
-#define __FS_PIPE_H
+#ifndef __INCLUDE_MAGICBOX_PIPE_H
+#define __INCLUDE_MAGICBOX_PIPE_H
 #include "ioqueue.h"
 #include "stdint.h"
 

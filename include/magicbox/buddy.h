@@ -1,5 +1,5 @@
-#ifndef __KERNEL_BUDDY_H
-#define __KERNEL_BUDDY_H
+#ifndef __INCLUDE_MAGICBOX_BUDDY_H
+#define __INCLUDE_MAGICBOX_BUDDY_H
 
 #include "stdint.h"
 #include "dlist.h"

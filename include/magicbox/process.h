@@ -1,5 +1,5 @@
-#ifndef __USERPROG_PROCESS_H
-#define __USERPROG_PROCESS_H
+#ifndef __INCLUDE_MAGICBOX_PROCESS_H
+#define __INCLUDE_MAGICBOX_PROCESS_H
 
 #include "stdint.h"
 

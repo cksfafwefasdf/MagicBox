@@ -20,7 +20,6 @@
 #include "sifs_file.h"
 #include "sifs_inode.h"
 #include "ide_buffer.h"
-#include "debug.h"
 #include "interrupt.h"
 #include "fifo.h"
 #include "file_table.h"

@@ -6,8 +6,8 @@
     k => e[a~d]x
 */
 
-#ifndef __LIB_KERNEL_IO_H
-#define __LIB_KERNEL_IO_H
+#ifndef __INCLUDE_ARCH_IO_H
+#define __INCLUDE_ARCH_IO_H
 #include "stdint.h"
 
 // write 1byte to port

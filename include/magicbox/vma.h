@@ -1,5 +1,5 @@
-#ifndef __USERPROG_VMA_H
-#define __USERPROG_VMA_H
+#ifndef __INCLUDE_MAGICBOX_VMA_H
+#define __INCLUDE_MAGICBOX_VMA_H
 
 #include "stdbool.h"
 #include "stdint.h"

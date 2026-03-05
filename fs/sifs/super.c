@@ -153,7 +153,7 @@ struct super_block * sifs_read_super(struct super_block *sb, void *data, int sil
         return NULL;
     }
 
-    printk("Debug: root_ino = %d, magic = %x\n", raw->root_inode_no, raw->magic);
+    // printk("Debug: root_ino = %d, magic = %x\n", raw->root_inode_no, raw->magic);
 
     // 同步 VFS 通用字段
     sb->s_block_size = SECTOR_SIZE;

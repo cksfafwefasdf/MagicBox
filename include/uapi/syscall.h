@@ -1,5 +1,5 @@
-#ifndef __LIB_USER_SYSCALL_H
-#define __LIB_USER_SYSCALL_H
+#ifndef __INCLUDE_UAPI_SYSCALL_H
+#define __INCLUDE_UAPI_SYSCALL_H
 #include "stdint.h"
 #include "unistd.h"
 

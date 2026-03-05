@@ -1,5 +1,5 @@
-#ifndef __FS_SIFS_INODE_H
-#define __FS_SIFS_INODE_H
+#ifndef __INCLUDE_UAPI_SIFS_INODE_H
+#define __INCLUDE_UAPI_SIFS_INODE_H
 #include "stdint.h"
 #include "stdbool.h"
 #include "unistd.h"

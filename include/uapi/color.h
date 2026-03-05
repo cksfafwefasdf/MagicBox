@@ -1,5 +1,5 @@
-#ifndef __LIB_COMMON_COLOR_H
-#define __LIB_COMMON_COLOR_H
+#ifndef __INCLUDE_UAPI_COLOR_H
+#define __INCLUDE_UAPI_COLOR_H
 
 // ANSI Color Escape Codes
 #define BLACK "\033[30m"

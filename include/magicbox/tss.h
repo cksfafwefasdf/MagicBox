@@ -1,5 +1,5 @@
-#ifndef __USERPROG_TSS_H
-#define __USERPROG_TSS_H
+#ifndef __INCLUDE_MAGICBOX_TSS_H
+#define __INCLUDE_MAGICBOX_TSS_H
 
 struct task_struct;
 

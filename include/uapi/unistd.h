@@ -1,8 +1,7 @@
-#ifndef __LIB_COMMON_UNISTD_H
-#define __LIB_COMMON_UNISTD_H
+#ifndef __INCLUDE_UAPI_UNISTD_H
+#define __INCLUDE_UAPI_UNISTD_H
 
 #include "stdint.h"
-
 
 #define MAX_PATH_LEN 512
 

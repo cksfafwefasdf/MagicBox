@@ -1,5 +1,5 @@
-#ifndef __DEVICE_BUFFER_H
-#define __DEVICE_BUFFER_H
+#ifndef __INCLUDE_MAGICBOX_IDE_BUFFER_H
+#define __INCLUDE_MAGICBOX_IDE_BUFFER_H
 
 #include "stdint.h"
 #include "stdbool.h"

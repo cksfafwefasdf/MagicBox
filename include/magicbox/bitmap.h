@@ -1,5 +1,5 @@
-#ifndef __LIB_KERNEL_BITMAP_H
-#define __LIB_KERNEL_BITMAP_H
+#ifndef __INCLUDE_MAGICBOX_BITMAP_H
+#define __INCLUDE_MAGICBOX_BITMAP_H
 #include "global.h"
 #include "stdint.h"
 #include "stdbool.h"

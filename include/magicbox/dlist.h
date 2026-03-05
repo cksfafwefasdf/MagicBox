@@ -1,5 +1,5 @@
-#ifndef __LIB_KERNEL_DLIST_H
-#define __LIB_KERNEL_DLIST_H
+#ifndef __INCLUDE_MAGICBOX_DLIST_H
+#define __INCLUDE_MAGICBOX_DLIST_H
 #include "global.h"
 #include "stdbool.h"
 #include "stdint.h"

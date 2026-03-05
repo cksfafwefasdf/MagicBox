@@ -1,5 +1,5 @@
-#ifndef __KERNEL_MEMORY_H
-#define __KERNEL_MEMORY_H
+#ifndef __INCLUDE_MAGICBOX_MEMORY_H
+#define __INCLUDE_MAGICBOX_MEMORY_H
 #include "stdint.h"
 #include "bitmap.h"
 #include "dlist.h"

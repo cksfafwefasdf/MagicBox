@@ -1,5 +1,5 @@
-#ifndef __DEVICE_TIMER_H
-#define __DEVICE_TIMER_H
+#ifndef __INCLUDE_MAGICBOX_TIMER_H
+#define __INCLUDE_MAGICBOX_TIMER_H
 #include "stdint.h"
 
 extern void timer_init(void);

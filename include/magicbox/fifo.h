@@ -1,5 +1,5 @@
-#ifndef __FS_FIFO_H
-#define __FS_FIFO_H
+#ifndef __INCLUDE_MAGICBOX_FIFO_H
+#define __INCLUDE_MAGICBOX_FIFO_H
 
 #include "stdint.h"
 

@@ -1,5 +1,5 @@
-#ifndef __KERNEL_INIT_H
-#define __KERNEL_INIT_H
+#ifndef __INCLUDE_MAGICBOX_INIT_H
+#define __INCLUDE_MAGICBOX_INIT_H
 
 #define APPS_LBA 1000
 

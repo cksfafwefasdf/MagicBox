@@ -1,5 +1,5 @@
-#ifndef __FS_FILE_TABLE_H
-#define __FS_FILE_TABLE_H
+#ifndef __INCLUDE_MAGICBOX_FILE_TABLE_H
+#define __INCLUDE_MAGICBOX_FILE_TABLE_H
 
 #include "stdint.h"
 #include "fs_types.h"

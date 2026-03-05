@@ -1,5 +1,5 @@
-#ifndef __SIFS_FS_H
-#define __SIFS_FS_H
+#ifndef __INCLUDE_UAPI_SIFS_FS_H
+#define __INCLUDE_UAPI_SIFS_FS_H
 
 #include "stdint.h"
 #include "sifs_inode.h"

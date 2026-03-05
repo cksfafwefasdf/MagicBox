@@ -1,5 +1,5 @@
-#ifndef __DEVICE__BLOCK_DEV_H
-#define __DEVICE__BLOCK_DEV_H
+#ifndef __INCLUDE_MAGICBOX_BLOCK_DEV_H
+#define __INCLUDE_MAGICBOX_BLOCK_DEV_H
 
 #include "stdint.h"
 struct file_operations;

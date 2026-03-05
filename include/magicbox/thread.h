@@ -1,5 +1,5 @@
-#ifndef __THREAD_THREAD_H
-#define __THREAD_THREAD_H
+#ifndef __INCLUDE_MAGICBOX_THREAD_H
+#define __INCLUDE_MAGICBOX_THREAD_H
 #include "stdint.h"
 #include "string.h"
 #include "memory.h"

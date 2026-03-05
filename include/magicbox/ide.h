@@ -1,5 +1,5 @@
-#ifndef __DEVICE_IDE_H
-#define __DEVICE_IDE_H
+#ifndef __INCLUDE_MAGICBOX_IDE_H
+#define __INCLUDE_MAGICBOX_IDE_H
 #include "stdint.h"
 #include "dlist.h"
 #include "bitmap.h"

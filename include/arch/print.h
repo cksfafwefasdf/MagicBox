@@ -1,5 +1,5 @@
-#ifndef __LIB_KERNEL_PRINT_H
-#define __LIB_KERNEL_PRINT_H
+#ifndef __INCLUDE_ARCH_PRINT_H
+#define __INCLUDE_ARCH_PRINT_H
 #include "stdint.h"
 // if dont has extern
 // gcc will assume it is extern by default

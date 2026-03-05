@@ -1,5 +1,5 @@
-#ifndef __DEVICE_DEVICE_H
-#define __DEVICE_DEVICE_H
+#ifndef __INCLUDE_UAPI_DEVICE_H
+#define __INCLUDE_UAPI_DEVICE_H
 
 #define MAX_DEV_NR 32 // 包括所有的分区在内
 #define MAX_DEV_NAME_LEN 64

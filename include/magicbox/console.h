@@ -1,5 +1,5 @@
-#ifndef __DEVICE_CONSOLE_H
-#define __DEVICE_CONSOLE_H
+#ifndef __INCLUDE_MAGICBOX_CONSOLE_H
+#define __INCLUDE_MAGICBOX_CONSOLE_H
 #include "stdint.h"
 
 struct file;
