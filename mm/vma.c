@@ -5,6 +5,8 @@
 #include "debug.h"
 #include "stdio-kernel.h"
 #include "memory.h"
+#include "inode.h"
+
 
 // 判定函数，检查当前的 vma 是否包含目标地址
 // arg 传入的是目标虚拟地址的指针

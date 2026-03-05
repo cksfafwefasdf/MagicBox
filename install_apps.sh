@@ -7,6 +7,7 @@ KERNEL_BUILD="./build/kernel"
 LIB_DIR="./include"
 DD_OUT="./disk_env/hd60M.img"
 TAR_NAME="$BUILD_DIR/initrd.tar"
+USER_LIBC="$KERNEL_BUILD/libmagicbox.a"
 LBA_SEEK=1000
 
 # 确保目录存在且清空旧包
@@ -42,7 +43,12 @@ for item in $TARGETS; do
         EXTRA_OBJS=""
     fi
 
-    ld -m elf_i386 "$BUILD_DIR/$BIN.o" $EXTRA_OBJS $BASE_OBJS "$BUILD_DIR/start.o" -o "$BUILD_DIR/$BIN"
+    # 要注意链接顺序！！！start.o 最前，库文件 $USER_LIBC 最后
+    # 当 ld 读到 cat.o 时，它会发现有一些符号（如 printf 或 write）是未定义的。
+    # 随后当它读到后面的 $USER_LIBC (libmagicbox.a) 时，它会从库中提取这些符号的定义。
+    # 如果反过来写（库在前，.o 在后），ld 在读到库时还没看到未定义的符号，
+    # 它就会认为库里啥也不需要，直接跳过，最后报 undefined reference。
+    ld -m elf_i386 "$BUILD_DIR/start.o" "$BUILD_DIR/$BIN.o" $EXTRA_OBJS "$USER_LIBC" -o "$BUILD_DIR/$BIN"
     
     if [ -f "$BUILD_DIR/$BIN" ]; then
         BIN_LIST="$BIN_LIST $BIN"

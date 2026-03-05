@@ -25,6 +25,8 @@
 #include "fifo.h"
 #include "file_table.h"
 #include "sifs_sb.h"
+#include "inode.h"
+
 
 struct partition* cur_part;
 struct inode* cur_dir_inode;
@@ -61,6 +63,9 @@ static bool mount_partition(struct dlist_elem* pelem, void* arg) {
 }
 
 void filesys_init() {
+
+    inode_cache_init();
+
     uint8_t channel_no = 0, dev_no = 0;
     bool first_flag = true;
     char default_part[MAX_DISK_NAME_LEN] = {0};

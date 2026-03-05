@@ -5,6 +5,7 @@
 #include "debug.h"
 #include "global.h"
 #include "stdio-kernel.h"
+#include "inode.h"
 
 // logic formatlize 
 void sifs_format(struct partition* part){
@@ -137,8 +138,6 @@ struct super_block * sifs_read_super(struct super_block *sb, void *data, int sil
         if (!silent) printk("VFS: can't find partition for dev %d\n", sb->s_dev);
         return NULL;
     }
-    // 优先初始化链表，后面 inode_open 要用
-    dlist_init(&part->open_inodes);
 
     part->sb = sb; // 确保part持有sb
 

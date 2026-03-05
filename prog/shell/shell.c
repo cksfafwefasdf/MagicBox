@@ -6,14 +6,8 @@
 #include "assert.h"
 #include "buildin_cmd.h"
 #include "unistd.h"
-
-#define SIG_IGN  ((void (*)(int))1)
-#define SIG_DFL  ((void (*)(int))0)
-#define SIGINT 2
-#define SIGCHLD  17
-
-#define TIOCSPGRP 0x5410
-#define TIOCGPGRP 0x540F
+#include "signal.h"
+#include "ioctl.h"
 
 static int32_t cmd_parse(char* cmd_str, char** argv, char token);
 void readline(char* buf, int32_t count);

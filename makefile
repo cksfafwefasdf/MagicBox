@@ -29,15 +29,18 @@ SRCS_C := $(filter-out lib/user/syscall_convey_by_stack.c, $(SRCS_C))
 # 强制 main.o 排在 OBJS 的第一位
 # 这样在执行 ld 链接时，main 函数的代码块会被物理地放置在二进制文件的最前面
 # 确保内核的main函数位于 0xc0001500 处，以便于 loader 可以正确跳转
-MAIN_OBJ := $(BUILD_DIR)/main.o
-OTHER_OBJS := $(patsubst %.c, $(BUILD_DIR)/%.o, $(notdir $(filter-out kernel/main.c, $(SRCS_C))))
-OTHER_OBJS += $(patsubst %.s, $(BUILD_DIR)/%.o, $(notdir $(SRCS_S)))
+# 生成原始的完整对象列表
+RAW_OBJS := $(patsubst %.c, $(BUILD_DIR)/%.o, $(SRCS_C))
+RAW_OBJS += $(patsubst %.s, $(BUILD_DIR)/%.o, $(SRCS_S))
 
-OBJS := $(MAIN_OBJ) $(OTHER_OBJS)
+# 准确定位 main.o 的路径
+MAIN_OBJ := $(BUILD_DIR)/kernel/main.o
+
+# 构造最终的链接顺序：main.o 放在第一个，$^ 展开时会遵循这个顺序
+OBJS := $(MAIN_OBJ) $(filter-out $(MAIN_OBJ), $(RAW_OBJS))
 
 empty :=
 space := $(empty) $(empty)
-VPATH := $(subst $(space),:,$(KERNEL_SUBDIRS))
 
 # 编译选项 
 LIB := -I include/arch -I include/magicbox -I include/sys -I include/uapi
@@ -45,11 +48,29 @@ LIB := -I include/arch -I include/magicbox -I include/sys -I include/uapi
 ASFLAGS := -f elf
 
 # -MMD 会为每个 .c 文件自动生成 .d 依赖文件，记录头文件依赖
-CFLAGS  := -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes -D DEBUG_PG_FAULT \
+CFLAGS  := -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes \
            -Wmissing-prototypes -m32 -fno-stack-protector -fcommon \
            -Wno-error=implicit-function-declaration -MMD
 
 LDFLAGS := -Ttext $(ENTRY_POINT) -e main -Map $(BUILD_DIR)/kernel.map -m elf_i386
+
+# 定义用户态库所需的源文件
+USER_LIB_SRCS := lib/string.c \
+                 lib/stdio.c \
+                 lib/assert.c \
+                 lib/tar.c \
+                 lib/user/syscall.c
+
+# 转换为对应的 .o 路径
+USER_LIB_OBJS := $(patsubst %.c, $(BUILD_DIR)/%.o, $(USER_LIB_SRCS))
+
+# 定义静态库路径
+USER_LIBC_A := $(BUILD_DIR)/libmagicbox.a
+
+# 增加打包规则
+$(USER_LIBC_A): $(USER_LIB_OBJS)
+	@echo "Creating Static Library $@..."
+	@ar rcs $@ $^
 
 .PHONY: all clean mk_dir hd boot build gdb_symbol disasm
 
@@ -62,11 +83,14 @@ $(BUILD_DIR)/kernel.bin: $(OBJS)
 
 # 自动 C 编译模板
 $(BUILD_DIR)/%.o: %.c
-	@echo "Compiling $<..."
+# 在编译前根据目标路径创建子目录
+	@mkdir -p $(dir $@)
+	@echo "Compiling $< -> $@"
 	$(CC) $(CFLAGS) $< -o $@
 
 # 自动 ASM 编译模板
 $(BUILD_DIR)/%.o: %.s
+	@mkdir -p $(dir $@)
 	@echo "Assembling $<..."
 	$(AS) $(ASFLAGS) $< -o $@
 
@@ -96,7 +120,8 @@ hd:
 clean:
 	rm -rf $(BUILD_ROOT)/*
 
-build: $(BUILD_DIR)/kernel.bin
+# USER_LIBC_A 是用户需要的静态库，我们把那些用户需要的包打成一个静态库
+build: $(BUILD_DIR)/kernel.bin $(USER_LIBC_A)
 
 gdb_symbol:
 	$(OBJCOPY) --only-keep-debug $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/kernel.sym

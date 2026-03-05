@@ -13,6 +13,7 @@
 #include "process.h"
 #include "file_table.h"
 #include "sifs_sb.h"
+#include "inode.h"
 
 int32_t inode_bitmap_alloc(struct partition* part){
 	int32_t bit_idx = bitmap_scan(&part->sb->sifs_info.inode_bitmap,1);
@@ -125,9 +126,9 @@ int32_t sifs_file_create(struct inode* parent_inode, char* filename, uint8_t fla
 
     // 将新 Inode 加入分区的 open_inodes 链表
     // 这样以后其他进程 open 这个文件时，就能从内存链表中找到，保证唯一性
-    dlist_push_front(&part->open_inodes, &new_file_inode->inode_tag);
-    new_file_inode->i_open_cnts = 1;
-
+	new_file_inode->i_open_cnts = 1;
+	inode_register_to_cache(new_file_inode);
+	
     kfree(io_buf);
     return pcb_fd_install(fd_idx); // 安装到进程的 FD 表中
 
@@ -163,6 +164,17 @@ int32_t file_close(struct file* file){
 	// 因此，改该全局表项对应的 inode 的打开数量也要减1
 	// 这个打开计数是在 inode_close 中减少的
 	if (file->f_count == 0) {
+
+		// 如果是以写权限打开的文件，需要将write_deny置为false
+		// 否则缓存上的inode他的write_deny会一直为true，下次缓存命中时，即使没有进程在写
+		// 其他进程也不能写！必须要判断当前的这个file是否是在写才行
+		// 否则会出现一个进程在写，另一个进程在读，这个读进程退出后直接将这个写进程的write_deny置为false的清空
+		// 其实更好的办法应该是要将其换成写计数而不是一个bool的写保护
+		// 不然难以处理多进程写的问题
+		if((file->fd_flag&O_RDWR)||(file->fd_flag&O_WRONLY)){
+			file->fd_inode->write_deny = false;
+		}
+
         // 这时才真正去減少 Inode 的计数
         // 因为这个“打开文件句柄”已经彻底沒人用了
         inode_close(file->fd_inode); 
@@ -189,6 +201,7 @@ int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
 	file_table[fd_idx].f_count = 1;
 
 	file_table[fd_idx].fd_flag = flag;
+
 	bool *write_deny = &(file_table[fd_idx].fd_inode->write_deny);
 
 	if(flag&O_WRONLY||flag&O_RDWR){

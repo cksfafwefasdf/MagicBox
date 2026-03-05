@@ -8,11 +8,11 @@
 int main() {
     printf("FIFO Test Start...\n");
 
-	signal(2, (void*)0);
+	// signal(2, (void*)0);
     // 确保创建一个 FIFO
     mkfifo("/data/fifo_test");
 	
-    pid_t pid_writer = fork();
+    uint32_t pid_writer = fork();
 	
     if (pid_writer == 0) {
         // 子进程 A，写者 

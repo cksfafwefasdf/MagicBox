@@ -50,7 +50,9 @@ struct inode{
 	bool write_deny;
 	// this tag is used for the 'already opened inode queue'
 	// to prevent redundant reads of inodes from the disk.
-	struct dlist_elem inode_tag;
+
+	struct dlist_elem lru_tag; // 哈希表节点：用于根据 (i_dev, i_no) 快速找到 inode
+    struct dlist_elem hash_tag;  // LRU节点：用于当缓冲区满时，决定踢掉哪个 inode
 	union{
 		struct sifs_inode_info sifs_i;
 		struct pipe_inode_info pipe_i;
@@ -109,5 +111,4 @@ struct file_system_type {
 	char *name;
 	int requires_dev;
 };
-
 #endif

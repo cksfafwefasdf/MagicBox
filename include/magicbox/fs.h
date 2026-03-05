@@ -4,7 +4,7 @@
 #include "stdint.h"
 #include "unistd.h"
 
-#define SIFS_FS_MAGIC_NUMBER 0x20030000 // magic number for this file system
+#define SIFS_FS_MAGIC_NUMBER 0x20030001 // magic number for this file system
 
 extern void filesys_init(void);
 extern int32_t sys_open(const char* pathname,uint8_t flags);

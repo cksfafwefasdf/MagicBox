@@ -13,7 +13,7 @@
 #include "fs_types.h"
 #include "sifs_sb.h"
 #include "sifs_dir.h"
-
+#include "inode.h"
 
 struct inode_position{
 	bool two_sec; // whether an inode spans multiple sectors
@@ -46,6 +46,31 @@ static void inode_locate(struct partition* part,uint32_t inode_no,struct inode_p
 	inode_pos->off_size = off_size_in_sec;
 }
 
+void sifs_read_inode(struct partition* part, struct inode* inode) {
+    struct inode_position inode_pos;
+    inode_locate(part, inode->i_no, &inode_pos);
+
+    uint8_t sec_to_read = inode_pos.two_sec ? 2 : 1;
+    char* inode_buf = (char*)kmalloc(SECTOR_SIZE * sec_to_read);
+    
+    bread_multi(part->my_disk, inode_pos.sec_lba, inode_buf, sec_to_read);
+    
+    struct sifs_inode* si = (struct sifs_inode*)(inode_buf + inode_pos.off_size);
+
+    // 填充通用字段
+    inode->i_size = si->i_size;
+    inode->i_type = si->i_type;
+    
+    // 填充 SIFS 特有字段
+    inode->sifs_i = si->sii;
+
+    if (inode->i_type == FT_CHAR_SPECIAL || inode->i_type == FT_BLOCK_SPECIAL) {
+        inode->i_rdev = si->sii.i_rdev; 
+    }
+
+    kfree(inode_buf);
+}
+
 // Write the inode back to disk
 // Sync the inode to disk
 // 这个函数是sifs写回inode的唯一入口
@@ -71,113 +96,6 @@ void inode_sync(struct partition* part,struct inode* inode,void* io_buf){
 	// memcpy((inode_buf+inode_pos.off_size),&inode->sifs_i,sizeof(struct sifs_inode));
 	bwrite_multi(part->my_disk,inode_pos.sec_lba,inode_buf,sec_to_write);
 
-}
-
-// load the inode from disk into memory
-struct inode* inode_open(struct partition* part,uint32_t inode_no){
-	enum intr_status old_status = intr_disable();
-
-	/*
-		用于解决inode缓存一致性的问题强行打上的补丁，用于保证所有进程使用的根目录都是同一个
-		这只是个临时的补丁，真正治本的方法是修改inode缓存的位置，不再将其放到每一个part上
-		而是以part和i_no作为索引，全局维护一张哈希表，这样一致性会更强一些
-		如果不加上这段代码，我们执行这样的指令序列
-		mount sdb1
-		mount sda1
-		mkdir d
-		echo dada -f f1
-		然后执行 ls，会发现f1无法显示！这是由于 目录结构的 i_size 在内存中的不一致导致的
-		我们的系统（mkdir）和用户程序（echo）访问到的根目录inode不是同一个，虽然磁盘上的是同一个
-		但是内存镜像不是同一个，因此在系统运行的过程中，i_size 的一致性出现了问题
-		用这段代码可以将根目录强制绑定到同一个目录上，但是这么干其他目录下可能仍有问题，但是目前没有试出来
-		后期准备使用哈希表来做全局缓存从而解决这个问题
-		这本质上是 VFS（虚拟文件系统）层的缓存穿透。
-		内核态（mkdir）：在内核栈中操作，修改了 Inode_A。
-		用户态子进程（echo）：由于 fork 后的环境或路径解析逻辑，它没能在 part->open_inodes 里命中 Inode_A，于是重新 kmalloc 了一个 Inode_B。
-		结果，两个进程都在改写同一个磁盘块，但它们各自维护的 i_size、i_sectors 等内存元数据是孤立的。
-		echo 写完后，ls 读的是 mkdir 手里那个过时的 i_size，自然看不到新文件。
-	*/
-	if (root_dir_inode != NULL && 
-        root_dir_inode->i_no == inode_no && 
-        root_dir_inode->i_dev == part->i_rdev) {
-        
-        root_dir_inode->i_open_cnts++;
-        return root_dir_inode;
-    }
-
-	struct dlist_elem* elem = part->open_inodes.head.next;
-	struct inode* inode_found;
-	while(elem!=&part->open_inodes.tail){
-		inode_found = member_to_entry(struct inode,inode_tag,elem);
-		// 多分区情况下 i_no 并不能唯一确定一个 inode ！还要加上 i_dev !
-		if(inode_found->i_no==inode_no && inode_found->i_dev == part->i_rdev){
-			inode_found->i_open_cnts++;
-			intr_set_status(old_status);
-			return inode_found;
-		}
-		elem = elem->next;
-	}
-
-	struct inode_position inode_pos;
-
-	inode_locate(part,inode_no,&inode_pos);
-
-	inode_found = (struct inode*)kmalloc(sizeof(struct inode));
-	
-	if (inode_found==NULL){
-		PANIC("alloc memory failed!");
-	}
-	
-	uint8_t sec_to_read = inode_pos.two_sec?2:1;
-	
-	char* inode_buf = (char*)kmalloc(SECTOR_SIZE*sec_to_read);
-	bread_multi(part->my_disk,inode_pos.sec_lba,inode_buf,sec_to_read);
-	struct sifs_inode* si = (struct sifs_inode*)(inode_buf + inode_pos.off_size);
-
-	// 这里的赋值会自动完成 i_sectors 数组或 i_rdev 的深拷贝，不会产生浅拷贝问题
-	inode_found->sifs_i = si->sii;
-	inode_found->i_type = si->i_type;
-	inode_found->i_size = si->i_size;
-	// memcpy(&inode_found->di,inode_buf+inode_pos.off_size,sizeof(struct d_inode));
-
-	inode_found->i_no = inode_no;
-	inode_found->i_dev = part->i_rdev;
-	inode_found->i_open_cnts = 1;
-	inode_found->write_deny = false;
-
-	if (inode_found->i_type == FT_CHAR_SPECIAL || inode_found->i_type == FT_BLOCK_SPECIAL) {
-        inode_found->i_rdev = si->sii.i_rdev; 
-    }
-	
-	dlist_push_front(&part->open_inodes,&inode_found->inode_tag);
-	
-	ASSERT((uint32_t)inode_found>=kernel_heap_start);
-	
-	kfree(inode_buf);
-	// printk("inode flag::: %x\n",inode_found->write_deny);
-	intr_set_status(old_status);
-	return inode_found;
-}
-
-void inode_close(struct inode* inode){
-	enum intr_status old_status = intr_disable();
-	if(--inode->i_open_cnts==0){
-
-		// 对 FIFO 和 PIPE 的缓冲区进行回收
-		// 让缓冲区随inode的消亡同时消亡，保证强一致性
-        if (inode->i_type == FT_FIFO || inode->i_type == FT_PIPE) {
-            if (inode->pipe_i.base != 0) {
-                mfree_page(PF_KERNEL, (void*)inode->pipe_i.base, 1);
-                inode->pipe_i.base = 0;
-            }
-        }
-		// 非匿名管道再进行释放，匿名inode是不会出现在打开队列上的
-		if(inode->i_no!=ANONY_I_NO)
-			dlist_remove(&inode->inode_tag);
-
-		kfree(inode);
-	}
-	intr_set_status(old_status);
 }
 
 void inode_init(struct partition* part, uint32_t inode_no,struct inode* new_inode,enum file_types ft){

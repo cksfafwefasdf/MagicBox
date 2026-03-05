@@ -12,6 +12,7 @@
 #include "fs.h"
 #include "ioctl.h"
 
+
 struct tty_struct console_tty;
 
 struct file_operations tty_dev_fops = {

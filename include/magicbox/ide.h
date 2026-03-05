@@ -42,7 +42,8 @@ struct partition{
 	// 我们将 bitmap 下放到了 sb->sifs_info 中
 	// struct bitmap block_bitmap; 
 	// struct bitmap inode_bitmap;
-	struct dlist open_inodes; // inode openned by this partition
+	// 我们使用全局的打开 inode 表，因此此处每个分区的打开 inode 需要给他取消掉
+	// struct dlist open_inodes; // inode openned by this partition
 };
 
 struct disk{
