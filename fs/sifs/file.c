@@ -56,7 +56,7 @@ void bitmap_sync(struct partition* part,uint32_t bit_idx,enum bitmap_type btmp_t
 			PANIC("unknown bitmap type!!!\n");
 			return;
 	}
-	bwrite_multi(part->my_disk,sec_lba,bitmap_off,1);
+	partition_write(part,sec_lba,bitmap_off,1);
 }
 
 // create a regular file
@@ -282,7 +282,7 @@ int32_t file_write(struct file* file,const void* buf,uint32_t count){
 			uint32_t tfflib = DIRECT_INDEX_BLOCK;
 			ASSERT(file->fd_inode->sifs_i.i_sectors[tfflib]!=0);
 			indirect_block_table = file->fd_inode->sifs_i.i_sectors[tfflib];
-			bread_multi(part->my_disk,indirect_block_table,all_blocks_addr+tfflib,1);
+			partition_read(part,indirect_block_table,all_blocks_addr+tfflib,1);
 		}
 	}else{
 		if(file_will_use_blocks<=DIRECT_INDEX_BLOCK){
@@ -340,14 +340,14 @@ int32_t file_write(struct file* file,const void* buf,uint32_t count){
 
 				block_idx++;
 			}
-			bwrite_multi(part->my_disk,indirect_block_table,all_blocks_addr+12,1);
+			partition_write(part,indirect_block_table,all_blocks_addr+12,1);
 		}else if(file_has_used_blocks>DIRECT_INDEX_BLOCK){
 			// the first first-level index block
 			int tfflib = DIRECT_INDEX_BLOCK;
 			ASSERT(file->fd_inode->sifs_i.i_sectors[tfflib]!=0);
 			indirect_block_table = file->fd_inode->sifs_i.i_sectors[tfflib];
 
-			bread_multi(part->my_disk,indirect_block_table,all_blocks_addr+12,1);
+			partition_read(part,indirect_block_table,all_blocks_addr+12,1);
 
 			block_idx = file_has_used_blocks;
 
@@ -362,7 +362,7 @@ int32_t file_write(struct file* file,const void* buf,uint32_t count){
 				block_bitmap_idx = block_lba - part->sb->sifs_info.sb_raw.data_start_lba;
 				bitmap_sync(part,block_bitmap_idx,BLOCK_BITMAP);
 			}
-			bwrite_multi(part->my_disk,indirect_block_table,all_blocks_addr+12,1);
+			partition_write(part,indirect_block_table,all_blocks_addr+12,1);
 		}
 	}
 	// To mark the last block containing valid data with free space
@@ -379,11 +379,11 @@ int32_t file_write(struct file* file,const void* buf,uint32_t count){
 
 		chunk_size = size_left<sec_left_bytes?size_left:sec_left_bytes;
 		if(last_valid_block_with_space){
-			bread_multi(part->my_disk,sec_lba,io_buf,1);
+			partition_read(part,sec_lba,io_buf,1);
 			last_valid_block_with_space = false;
 		}
 		memcpy(io_buf+sec_off_bytes,src,chunk_size);
-		bwrite_multi(part->my_disk,sec_lba,io_buf,1);
+		partition_write(part,sec_lba,io_buf,1);
 		printk("file write at lba 0x%x\n",sec_lba);
 		
 		src += chunk_size;
@@ -446,7 +446,7 @@ int32_t file_read(struct file* file,void* buf,uint32_t count){
 			all_blocks_addr[block_idx] = file->fd_inode->sifs_i.i_sectors[block_idx];
 		}else{
 			indirect_block_table = file->fd_inode->sifs_i.i_sectors[12];
-			bread_multi(part->my_disk,indirect_block_table,all_blocks_addr+12,1);
+			partition_read(part,indirect_block_table,all_blocks_addr+12,1);
 		}
 	}else{
 		if(block_read_end_idx<DIRECT_INDEX_BLOCK){
@@ -466,7 +466,7 @@ int32_t file_read(struct file* file,void* buf,uint32_t count){
 			ASSERT(file->fd_inode->sifs_i.i_sectors[tfflib]!=0);
 
 			indirect_block_table = file->fd_inode->sifs_i.i_sectors[tfflib];
-			bread_multi(part->my_disk,indirect_block_table,all_blocks_addr+tfflib,1);
+			partition_read(part,indirect_block_table,all_blocks_addr+tfflib,1);
 
 		}else{
 			// the first first-level index block
@@ -475,7 +475,7 @@ int32_t file_read(struct file* file,void* buf,uint32_t count){
 			ASSERT(file->fd_inode->sifs_i.i_sectors[tfflib]!=0);
 			indirect_block_table = file->fd_inode->sifs_i.i_sectors[tfflib];
 			indirect_block_table = file->fd_inode->sifs_i.i_sectors[tfflib];
-			bread_multi(part->my_disk,indirect_block_table,all_blocks_addr+tfflib,1);
+			partition_read(part,indirect_block_table,all_blocks_addr+tfflib,1);
 		}
 	}
 
@@ -490,7 +490,7 @@ int32_t file_read(struct file* file,void* buf,uint32_t count){
 		ASSERT(sec_idx < TOTAL_BLOCK_COUNT);
 		memset(io_buf,0,BLOCK_SIZE);
 		
-		bread_multi(part->my_disk,sec_lba,io_buf,1);
+		partition_read(part,sec_lba,io_buf,1);
 
 		memcpy(buf_dst,io_buf+sec_off_bytes,chunk_size);
 		buf_dst+=chunk_size;

@@ -590,7 +590,8 @@ void sys_read_sectors(const char* hd_name, uint32_t lba, uint8_t* buf, uint32_t 
         printk("unknown disk name: %s!\n", hd_name);
         return;
     }
-
+    // 如果是对整个磁盘（裸盘）来进行操作的话，直接用bread_multi，不用partition_read没有问题
+    // 因为不同的磁盘它的绝对lba起始都是从0开始的，没问题
     bread_multi(disk, lba, buf, sec_cnt);
 }
 

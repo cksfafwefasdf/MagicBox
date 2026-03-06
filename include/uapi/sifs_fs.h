@@ -13,8 +13,14 @@ struct sifs_super_block{
 	uint32_t magic; // the type of the file system
 	uint32_t sec_cnt; // the number of the sector in this partition
 	uint32_t inode_cnt; // the number of the inode in this partition 
-	uint32_t part_lba_base; // the start LBA of this partition
 	
+	// 文件系统的lba都是相对lba
+	// 文件系统不管理绝对lba，绝对lba是由ide驱动来负责转换的
+	// 具体来讲，这个相对lba转绝对lba的操作是在 和 partition_read partition_write 这两个宏里面进行的
+	// 因此文件系统只能用这两个宏
+	// uint32_t part_lba_base; // the start LBA of this partition
+	
+	// 此处的lba都是相对lba，从0开始
 	uint32_t block_bitmap_lba;
 	uint32_t block_bitmap_sects;
 	

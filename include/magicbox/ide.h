@@ -20,6 +20,17 @@
 // 设置 8 或 16。必须是 2 的幂，但不能超过硬盘支持的最大值（IDENTIFY Word 47，通常是16）
 #define SECTORS_PER_OP_BLOCK 16
 
+// 统一的逻辑地址转物理地址宏
+#define PART_LBA(part, logic_lba) ((part)->start_lba + (logic_lba))
+
+// 封装后的读取宏
+#define partition_read(part, logic_lba, buf, count) \
+    bread_multi((part)->my_disk, PART_LBA(part, logic_lba), (buf), (count))
+
+// 封装后的写入宏
+#define partition_write(part, logic_lba, buf, count) \
+    bwrite_multi((part)->my_disk, PART_LBA(part, logic_lba), (buf), (count))
+
 
 // 对于第一块盘 sda：i_rdev 是 0x0300。
 // sda1 就是 0x0300 + 1 = 0x0301。

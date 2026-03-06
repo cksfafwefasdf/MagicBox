@@ -25,9 +25,9 @@ void sifs_format(struct partition* part){
 	sb.magic = SIFS_FS_MAGIC_NUMBER;
 	sb.sec_cnt = part->sec_cnt;
 	sb.inode_cnt = MAX_FILES_PER_PART;
-	sb.part_lba_base = part->start_lba;
+	// sb.part_lba_base = part->start_lba;
 
-	sb.block_bitmap_lba = sb.part_lba_base+2;
+	sb.block_bitmap_lba = 2;
 	sb.block_bitmap_sects = block_bitmap_sects;
 
 	sb.inode_bitmap_lba = sb.block_bitmap_lba+sb.block_bitmap_sects;
@@ -53,7 +53,7 @@ void sifs_format(struct partition* part){
 \tinode_table_sectors:0x%x\n\
 \tdata_start_lba:0x%x\n", 
 	sb.magic,
-	sb.part_lba_base,
+	part->start_lba,
 	sb.sec_cnt,
 	sb.inode_cnt,
 	sb.block_bitmap_lba,sb.block_bitmap_sects,
@@ -61,10 +61,10 @@ void sifs_format(struct partition* part){
 	sb.inode_table_lba,sb.inode_table_sects,
 	sb.data_start_lba);
 
-	struct disk* hd = part->my_disk; 
+	// struct disk* hd = part->my_disk; 
 
 	// write superblock to the no.1 sector (no.0 is obr)
-	bwrite_multi(hd,part->start_lba+1,&sb,1);
+	partition_write(part,1,&sb,1);
 	printk("\tsuper_block_lba:0x%x\n",part->start_lba+1);
 	
 	// find the biggest meta info
@@ -86,14 +86,14 @@ void sifs_format(struct partition* part){
 	while(bit_idx<=block_bitmap_last_bit){
 		buf[block_bitmap_last_byte] &= ~(1<<bit_idx++);
 	}
-	bwrite_multi(hd,sb.block_bitmap_lba,buf,sb.block_bitmap_sects);
+	partition_write(part,sb.block_bitmap_lba,buf,sb.block_bitmap_sects);
 
 
 	// init inode_bitmap and write it to sb.inode_bitmap_lba
 	// flush the buf
 	memset(buf,0,buf_size);
 	buf[0] |= 0x1; // reserve for root dict
-	bwrite_multi(hd,sb.inode_bitmap_lba,buf,sb.inode_bitmap_sects);
+	partition_write(part,sb.inode_bitmap_lba,buf,sb.inode_bitmap_sects);
 
 	// init inode list and write it to sb.inode_table_lba
 	// flush the buf
@@ -104,7 +104,7 @@ void sifs_format(struct partition* part){
 	i->sii.i_sectors[0] = sb.data_start_lba;
 	i->i_type = FT_DIRECTORY;
 
-	bwrite_multi(hd,sb.inode_table_lba,buf,sb.inode_table_sects);
+	partition_write(part,sb.inode_table_lba,buf,sb.inode_table_sects);
 
 	// write root dict to sb.data_start_lba
 	// write dict '.' and '..'
@@ -123,7 +123,7 @@ void sifs_format(struct partition* part){
 	p_de->f_type = FT_DIRECTORY;
 
 	// sb.data_start_lba has been allocated to the root dict which contains dict entries
-	bwrite_multi(hd,sb.data_start_lba,buf,1);
+	partition_write(part,sb.data_start_lba,buf,1);
 	
 	kfree(buf);
 	printk("\troot_dir_lba:0x%x\n",sb.data_start_lba);
@@ -141,10 +141,8 @@ struct super_block * sifs_read_super(struct super_block *sb, void *data, int sil
 
     part->sb = sb; // 确保part持有sb
 
-    struct disk* hd = part->my_disk;
-
     // 读取超级块 (在分区起始 LBA + 1)
-    bread_multi(hd, part->start_lba + 1, &sb->sifs_info.sb_raw, 1);
+    partition_read(part,1, &sb->sifs_info.sb_raw, 1);
 
     struct sifs_super_block* raw = &sb->sifs_info.sb_raw;
 
@@ -164,12 +162,12 @@ struct super_block * sifs_read_super(struct super_block *sb, void *data, int sil
     uint32_t b_bm_sects = raw->block_bitmap_sects;
     sb->sifs_info.block_bitmap.btmp_bytes_len = b_bm_sects * SECTOR_SIZE;
     sb->sifs_info.block_bitmap.bits = kmalloc(sb->sifs_info.block_bitmap.btmp_bytes_len);
-    bread_multi(hd, raw->block_bitmap_lba, sb->sifs_info.block_bitmap.bits, b_bm_sects);
+    partition_read(part, raw->block_bitmap_lba, sb->sifs_info.block_bitmap.bits, b_bm_sects);
 
     uint32_t i_bm_sects = raw->inode_bitmap_sects;
     sb->sifs_info.inode_bitmap.btmp_bytes_len = i_bm_sects * SECTOR_SIZE;
     sb->sifs_info.inode_bitmap.bits = kmalloc(sb->sifs_info.inode_bitmap.btmp_bytes_len);
-    bread_multi(hd, raw->inode_bitmap_lba, sb->sifs_info.inode_bitmap.bits, i_bm_sects);
+    partition_read(part, raw->inode_bitmap_lba, sb->sifs_info.inode_bitmap.bits, i_bm_sects);
 
     // 建立根目录的 inode
     // 这一步会让 VFS 拥有入口点

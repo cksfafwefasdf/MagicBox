@@ -86,7 +86,7 @@ void filesys_init() {
                     struct sifs_super_block* sb_buf = (struct sifs_super_block*)kmalloc(SECTOR_SIZE);
                     if (sb_buf == NULL) PANIC("filesys_init: kmalloc failed!");
                     
-                    bread_multi(hd, part->start_lba + 1, sb_buf, 1);
+                    partition_read(part,1, sb_buf, 1);
 
                     // 检查魔数，如果没有则格式化
                     if (sb_buf->magic != SIFS_FS_MAGIC_NUMBER) {
@@ -129,6 +129,7 @@ void filesys_init() {
     while (fd_idx < MAX_FILE_OPEN_IN_SYSTEM) {
         file_table[fd_idx++].fd_inode = NULL;
     }
+    printk("filesys_init done!\n");
 }
 
 char* _path_parse(char* pathname,char* name_store){
@@ -710,7 +711,7 @@ int32_t sys_mkdir(const char* _pathname) {
     p_de->f_type = FT_DIRECTORY;
 
     // 写入物理磁盘
-    bwrite_multi(part->my_disk, block_lba, io_buf, 1);
+    partition_write(part, block_lba, io_buf, 1);
 
     new_dir_inode.i_size = 2 * part->sb->sifs_info.sb_raw.dir_entry_size;
 
@@ -892,7 +893,7 @@ static uint32_t get_parent_dir_inode_nr(struct partition* part, uint32_t child_i
     inode_close(child_dir_inode);
 
     // 读取该块数据
-    bread_multi(part->my_disk, block_lba, io_buf, 1);
+    partition_read(part, block_lba, io_buf, 1);
     
     // 使用磁盘镜像结构体 sifs_dir_entry 而不是内存镜像的结构体
     struct sifs_dir_entry* dir_e = (struct sifs_dir_entry*)io_buf;
@@ -925,7 +926,7 @@ static int get_child_dir_name(struct partition* part, uint32_t p_inode_nr, uint3
     // 处理一级间接索引块
     int tfflib = DIRECT_INDEX_BLOCK;
     if (parent_dir_inode->sifs_i.i_sectors[tfflib]) {
-        bread_multi(part->my_disk, parent_dir_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+        partition_read(part, parent_dir_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
         block_cnt = TOTAL_BLOCK_COUNT;
     }
 
@@ -941,7 +942,7 @@ static int get_child_dir_name(struct partition* part, uint32_t p_inode_nr, uint3
     while (block_idx < block_cnt) {
         if (all_blocks_addr[block_idx]) {
             // 读取父目录的一个数据块
-            bread_multi(part->my_disk, all_blocks_addr[block_idx], io_buf, 1);
+            partition_read(part, all_blocks_addr[block_idx], io_buf, 1);
             
             uint8_t dir_e_idx = 0;
             while (dir_e_idx < dir_entrys_per_sec) {
@@ -1142,7 +1143,7 @@ void sys_disk_info() {
                             sifs_sb = kmalloc(SECTOR_SIZE);
                             if (sifs_sb == NULL) PANIC("sys_disk_info: kmalloc failed");
                             
-                            bread_multi(hd, part->start_lba + 1, sifs_sb, 1);
+                            partition_read(part, 1, sifs_sb, 1);
                             is_temp_sb = true;
                         }
 
@@ -1153,7 +1154,7 @@ void sys_disk_info() {
                             // 计算位图
                             uint32_t btmp_sects = sifs_sb->block_bitmap_sects;
                             uint8_t* btmp_buf = kmalloc(btmp_sects * SECTOR_SIZE);
-                            bread_multi(hd, sifs_sb->block_bitmap_lba, btmp_buf, btmp_sects);
+                            partition_read(part, sifs_sb->block_bitmap_lba, btmp_buf, btmp_sects);
 
                             struct bitmap btmp;
                             btmp.bits = btmp_buf;
@@ -1217,8 +1218,8 @@ void sys_mount(const char* part_name){
 	// 临时申请一个缓冲区来读取潜在的超级块
 	struct sifs_super_block* sb_buf = (struct sifs_super_block*)kmalloc(SECTOR_SIZE);
 	
-	// 超级块在第一个扇区，因此使用 part->start_lba + 1
-	bread_multi(part->my_disk, part->start_lba + 1, sb_buf, 1);
+	// 超级块在第一个扇区，因此使用 1
+	partition_read(part,1, sb_buf, 1);
 
 	// 检查魔数是否匹配,即是否有文件系统
 	if (sb_buf->magic != SIFS_FS_MAGIC_NUMBER) {

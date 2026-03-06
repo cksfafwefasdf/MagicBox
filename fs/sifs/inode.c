@@ -53,7 +53,7 @@ void sifs_read_inode(struct partition* part, struct inode* inode) {
     uint8_t sec_to_read = inode_pos.two_sec ? 2 : 1;
     char* inode_buf = (char*)kmalloc(SECTOR_SIZE * sec_to_read);
     
-    bread_multi(part->my_disk, inode_pos.sec_lba, inode_buf, sec_to_read);
+    partition_read(part, inode_pos.sec_lba, inode_buf, sec_to_read);
     
     struct sifs_inode* si = (struct sifs_inode*)(inode_buf + inode_pos.off_size);
 
@@ -83,18 +83,18 @@ void inode_sync(struct partition* part,struct inode* inode,void* io_buf){
 	struct inode_position inode_pos;
 	inode_locate(part,inode_no,&inode_pos);
 
-	ASSERT(inode_pos.sec_lba<=(part->start_lba+part->sec_cnt));
+	ASSERT(inode_pos.sec_lba<=(part->sec_cnt));
 
 	char* inode_buf = (char*)io_buf;
 	uint8_t sec_to_write = inode_pos.two_sec?2:1;
 
-	bread_multi(part->my_disk,inode_pos.sec_lba,inode_buf,sec_to_write);
+	partition_read(part,inode_pos.sec_lba,inode_buf,sec_to_write);
 	struct sifs_inode* si = (struct sifs_inode*)(inode_buf + inode_pos.off_size);
 	si->i_type = inode->i_type;
 	si->i_size = inode->i_size;
 	si->sii = inode->sifs_i;
 	// memcpy((inode_buf+inode_pos.off_size),&inode->sifs_i,sizeof(struct sifs_inode));
-	bwrite_multi(part->my_disk,inode_pos.sec_lba,inode_buf,sec_to_write);
+	partition_write(part,inode_pos.sec_lba,inode_buf,sec_to_write);
 
 }
 
@@ -117,14 +117,14 @@ void inode_delete(struct partition* part,uint32_t inode_no,void* io_buf){
 	ASSERT(inode_no<MAX_FILES_PER_PART);
 	struct inode_position inode_pos;
 	inode_locate(part,inode_no,&inode_pos);
-	ASSERT(inode_pos.sec_lba<=(part->start_lba+part->sec_cnt));
+	ASSERT(inode_pos.sec_lba<=(part->sec_cnt));
 
 	char* inode_buf = (char*)io_buf;
 	uint8_t sec_to_op = inode_pos.two_sec?2:1;
 
-	bread_multi(part->my_disk,inode_pos.sec_lba,inode_buf,sec_to_op);
+	partition_read(part,inode_pos.sec_lba,inode_buf,sec_to_op);
 	memset((inode_buf+inode_pos.off_size),0,sizeof(struct sifs_inode));
-	bwrite_multi(part->my_disk,inode_pos.sec_lba,inode_buf,sec_to_op);
+	partition_write(part,inode_pos.sec_lba,inode_buf,sec_to_op);
 	
 }
 
@@ -165,7 +165,7 @@ void inode_release(struct partition* part,uint32_t inode_no){
 	// the first first-level index block
 	int tfflib = DIRECT_INDEX_BLOCK;
 	if(inode_to_del->sifs_i.i_sectors[tfflib]!=0){
-		bread_multi(part->my_disk,inode_to_del->sifs_i.i_sectors[tfflib],all_blocks_addr+tfflib,1);
+		partition_read(part,inode_to_del->sifs_i.i_sectors[tfflib],all_blocks_addr+tfflib,1);
 		block_cnt = TOTAL_BLOCK_COUNT;
 
 		block_bitmap_idx = inode_to_del->sifs_i.i_sectors[tfflib] - part->sb->sifs_info.sb_raw.data_start_lba;
@@ -257,7 +257,7 @@ int32_t inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_
     if (block_end_idx >= tfflib) {
         ASSERT(inode->sifs_i.i_sectors[tfflib] != 0);
         // 从磁盘读取间接索引表到 all_blocks_addr 的后半部分
-        bread_multi(part->my_disk, inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+        partition_read(part, inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
     }
 
     // 开始搬运数据
@@ -276,7 +276,7 @@ int32_t inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_
         ASSERT(sec_lba != 0); // 正常文件（非空洞文件）不应为 0
 
         // 读取一个物理块
-        bread_multi(part->my_disk, sec_lba, io_buf, 1);
+        partition_read(part, sec_lba, io_buf, 1);
         
         // 拷贝所需部分到目标缓冲区
         memcpy(buf_dst, io_buf + sec_off_bytes, chunk_size);

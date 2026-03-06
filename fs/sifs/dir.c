@@ -45,7 +45,7 @@ bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, cons
     // 处理一级间接块
     uint32_t tfflib = DIRECT_INDEX_BLOCK;
     if (dir_inode->sifs_i.i_sectors[tfflib] != 0) {
-        bread_multi(part->my_disk, dir_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+        partition_read(part, dir_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
     }
 
     // 准备缓冲区开始遍历
@@ -66,7 +66,7 @@ bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, cons
             continue;
         }
 
-        bread_multi(part->my_disk, all_blocks_addr[block_idx], buf, 1);
+        partition_read(part, all_blocks_addr[block_idx], buf, 1);
         struct sifs_dir_entry* p_de = (struct sifs_dir_entry*)buf;
 
         uint32_t dir_entry_idx = 0;
@@ -130,7 +130,7 @@ bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de
         all_blocks_addr[i] = parent_inode->sifs_i.i_sectors[i];
     }
     if (parent_inode->sifs_i.i_sectors[tfflib] != 0) {
-        bread_multi(part->my_disk, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+        partition_read(part, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
     }
 
     struct sifs_dir_entry* dir_e = (struct sifs_dir_entry*)io_buf;
@@ -163,17 +163,17 @@ bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de
                 bitmap_sync(part, bitmap_idx, BLOCK_BITMAP);
                 all_blocks_addr[tfflib] = block_lba;
                 // 同步间接块内容到磁盘
-                bwrite_multi(part->my_disk, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+                partition_write(part, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
             } else {
                 // 间接块内的数据块
                 all_blocks_addr[block_idx] = block_lba;
-                bwrite_multi(part->my_disk, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+                partition_write(part, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
             }
 
             // 在新块的开头写入条目
             memset(io_buf, 0, SECTOR_SIZE);
             memcpy(io_buf, p_de, dir_entry_size);
-            bwrite_multi(part->my_disk, all_blocks_addr[block_idx], io_buf, 1);
+            partition_write(part, all_blocks_addr[block_idx], io_buf, 1);
             
             parent_inode->i_size += dir_entry_size;
 
@@ -185,11 +185,11 @@ bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de
         }
 
         // 若当前块已存在，读取它寻找 FT_UNKNOWN 的空隙
-        bread_multi(part->my_disk, all_blocks_addr[block_idx], io_buf, 1);
+        partition_read(part, all_blocks_addr[block_idx], io_buf, 1);
         for (uint8_t entry_idx = 0; entry_idx < dir_entrys_per_sec; entry_idx++) {
             if ((dir_e + entry_idx)->f_type == FT_UNKNOWN) {
                 memcpy(dir_e + entry_idx, p_de, dir_entry_size);
-                bwrite_multi(part->my_disk, all_blocks_addr[block_idx], io_buf, 1);
+                partition_write(part, all_blocks_addr[block_idx], io_buf, 1);
                 
                 parent_inode->i_size += dir_entry_size;
 
@@ -220,7 +220,7 @@ bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, u
     }
     uint32_t tfflib = DIRECT_INDEX_BLOCK;
     if (parent_inode->sifs_i.i_sectors[tfflib]) {
-        bread_multi(part->my_disk, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+        partition_read(part, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
     }
 
     uint32_t dir_entry_size = part->sb->sifs_info.sb_raw.dir_entry_size;
@@ -242,7 +242,7 @@ bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, u
 
         dir_entry_idx = dir_entry_cnt = 0;
         memset(io_buf, 0, SECTOR_SIZE);
-        bread_multi(part->my_disk, all_blocks_addr[block_idx], io_buf, 1);
+        partition_read(part, all_blocks_addr[block_idx], io_buf, 1);
 
         // 检查当前块内的每一个条目
         while (dir_entry_idx < dir_entrys_per_sec) {
@@ -287,7 +287,7 @@ bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, u
 
                 if (indirect_blocks > 1) {
                     all_blocks_addr[block_idx] = 0;
-                    bwrite_multi(part->my_disk, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+                    partition_write(part, parent_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
                 } else {
                     // 回收一级间接块表所在的块
                     uint32_t idx = parent_inode->sifs_i.i_sectors[tfflib] - part->sb->sifs_info.sb_raw.data_start_lba;
@@ -299,7 +299,7 @@ bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, u
         } else {
             // 只是普通的条目擦除
             memset(dir_entry_found, 0, dir_entry_size);
-            bwrite_multi(part->my_disk, all_blocks_addr[block_idx], io_buf, 1);
+            partition_write(part, all_blocks_addr[block_idx], io_buf, 1);
         }
 
         // 更新父目录 inode 信息并同步
@@ -330,7 +330,7 @@ int sifs_dir_read(struct file* file, struct dirent* de) {
 
     uint32_t tfflib = DIRECT_INDEX_BLOCK;
     if (dir_inode->sifs_i.i_sectors[tfflib] != 0) {
-        bread_multi(part->my_disk, dir_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
+        partition_read(part, dir_inode->sifs_i.i_sectors[tfflib], all_blocks_addr + tfflib, 1);
     }
 
     // 分配临时扇区缓冲区 
@@ -359,7 +359,7 @@ int sifs_dir_read(struct file* file, struct dirent* de) {
 
         // 读取当前扇区
         memset(sector_buf, 0, SECTOR_SIZE);
-        bread_multi(part->my_disk, all_blocks_addr[cur_block_idx], sector_buf, 1);
+        partition_read(part, all_blocks_addr[cur_block_idx], sector_buf, 1);
 
         struct sifs_dir_entry* p_de = (struct sifs_dir_entry*)sector_buf;
 
