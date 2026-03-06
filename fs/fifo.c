@@ -1,7 +1,7 @@
-#include "fifo.h"
-#include "pipe.h"
-#include "fs_types.h"
-#include "interrupt.h"
+#include <fifo.h>
+#include <pipe.h>
+#include <fs_types.h>
+#include <interrupt.h>
 
 int32_t fifo_open(struct inode* inode, struct file* file){
 	// 如果 FIFO 还没分配内存缓冲区，则分配 (第一次打开)，该逻辑在 init_pipe 中处理

@@ -1,6 +1,6 @@
 #ifndef __INCLUDE_MAGICBOX_TIMER_H
 #define __INCLUDE_MAGICBOX_TIMER_H
-#include "stdint.h"
+#include <stdint.h>
 
 extern void timer_init(void);
 // sleep is measured in mil-second

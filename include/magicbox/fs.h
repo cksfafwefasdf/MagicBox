@@ -1,8 +1,8 @@
 #ifndef __INCLUDE_MAGICBOX_FS_H
 #define __INCLUDE_MAGICBOX_FS_H
 
-#include "stdint.h"
-#include "unistd.h"
+#include <stdint.h>
+#include <unistd.h>
 
 #define SIFS_FS_MAGIC_NUMBER 0x20030000 // magic number for this file system
 

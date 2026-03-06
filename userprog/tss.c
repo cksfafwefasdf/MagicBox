@@ -1,9 +1,9 @@
-#include "stdint.h"
-#include "global.h"
-#include "print.h"
-#include "string.h"
-#include "thread.h"
-#include "tss.h"
+#include <stdint.h>
+#include <global.h>
+#include <print.h>
+#include <string.h>
+#include <thread.h>
+#include <tss.h>
 
 
 struct tss{

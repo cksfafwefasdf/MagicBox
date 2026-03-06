@@ -1,7 +1,7 @@
 #ifndef __INCLUDE_UAPI_UNISTD_H
 #define __INCLUDE_UAPI_UNISTD_H
 
-#include "stdint.h"
+#include <stdint.h>
 
 #define MAX_PATH_LEN 512
 

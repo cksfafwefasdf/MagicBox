@@ -1,7 +1,7 @@
 #ifndef __INCLUDE_UAPI_IOCTL_H
 #define __INCLUDE_UAPI_IOCTL_H
 
-#include "stdint.h"
+#include <stdint.h>
 
 // 模仿 Linux 的 ioctl 编码格式，定义一个命令的各个字段长度
 #define _IOC_NRBITS    8

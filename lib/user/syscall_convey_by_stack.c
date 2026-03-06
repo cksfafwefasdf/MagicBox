@@ -1,4 +1,4 @@
-#include "syscall.h"
+#include <syscall.h>
 
 #define _syscall0(SYSCALL_NUM) ({ \
 	int retval; \

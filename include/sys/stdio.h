@@ -1,7 +1,7 @@
 #ifndef __INCLUDE_SYS_STDIO_H
 #define __INCLUDE_SYS_STDIO_H
-#include "stdint.h"
-#include "stdbool.h"
+#include <stdint.h>
+#include <stdbool.h>
 typedef char* va_list;
 // v is the first arg in variable arguments
 #define va_start(ap,v) ap = (va_list)&v;

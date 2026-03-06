@@ -1,7 +1,7 @@
 #ifndef __INCLUDE_MAGICBOX_FIFO_H
 #define __INCLUDE_MAGICBOX_FIFO_H
 
-#include "stdint.h"
+#include <stdint.h>
 
 struct inode;
 struct file;

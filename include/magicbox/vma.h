@@ -1,10 +1,10 @@
 #ifndef __INCLUDE_MAGICBOX_VMA_H
 #define __INCLUDE_MAGICBOX_VMA_H
 
-#include "stdbool.h"
-#include "stdint.h"
-#include "dlist.h"
-#include "memory.h"
+#include <stdbool.h>
+#include <stdint.h>
+#include <dlist.h>
+#include <memory.h>
 
 #define KERNEL_RESERVED_SPACE 0x100000UL
 #define USER_VADDR_START 0x8048000UL

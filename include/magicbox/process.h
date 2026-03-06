@@ -1,7 +1,7 @@
 #ifndef __INCLUDE_MAGICBOX_PROCESS_H
 #define __INCLUDE_MAGICBOX_PROCESS_H
 
-#include "stdint.h"
+#include <stdint.h>
 
 struct task_struct;
 

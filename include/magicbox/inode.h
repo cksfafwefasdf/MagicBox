@@ -1,7 +1,7 @@
 #ifndef __INCLUDE_MAGICBOX_INODE_H
 #define __INCLUDE_MAGICBOX_INODE_H
 
-#include "stdint.h"
+#include <stdint.h>
 
 /*
     这个文件中的代码都是虚拟文件系统VSF中，通用的inode操作的代码

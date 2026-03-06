@@ -1,5 +1,5 @@
-#include "char_dev.h"
-#include "tty.h"
+#include <char_dev.h>
+#include <tty.h>
 
 // 字符设备跳转表
 // 类似于 Linux 的 crw_table (Character Read/Write Table)

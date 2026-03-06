@@ -1,14 +1,14 @@
-#include "inode.h"
-#include "fs_types.h"
-#include "hashtable.h"
-#include "sync.h"
-#include "ide.h"
-#include "ide_buffer.h"
-#include "interrupt.h"
-#include "dlist.h"
-#include "fs.h"
-#include "debug.h"
-#include "sifs_inode.h"
+#include <inode.h>
+#include <fs_types.h>
+#include <hashtable.h>
+#include <sync.h>
+#include <ide.h>
+#include <ide_buffer.h>
+#include <interrupt.h>
+#include <dlist.h>
+#include <fs.h>
+#include <debug.h>
+#include <sifs_inode.h>
 
 
 #define MAX_INODE_CACHE_SIZE 64

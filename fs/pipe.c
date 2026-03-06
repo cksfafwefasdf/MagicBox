@@ -1,13 +1,13 @@
-#include "stdint.h"
-#include "pipe.h"
-#include "memory.h"
-#include "interrupt.h"
-#include "ioqueue.h"
-#include "debug.h"
-#include "signal.h"
-#include "errno.h"
-#include "fs_types.h"
-#include "file_table.h"
+#include <stdint.h>
+#include <pipe.h>
+#include <memory.h>
+#include <interrupt.h>
+#include <ioqueue.h>
+#include <debug.h>
+#include <signal.h>
+#include <errno.h>
+#include <fs_types.h>
+#include <file_table.h>
 
 int32_t sys_pipe(int32_t pipefd[2]) {
 

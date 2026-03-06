@@ -1,18 +1,18 @@
-#include "memory.h"
-#include "print.h"
-#include "debug.h"
-#include "stdint.h"
-#include "string.h"
-#include "global.h"
-#include "sync.h"
-#include "interrupt.h"
-#include "stdio-kernel.h"
-#include "bitmap.h"
-#include "thread.h"
-#include "process.h"
-#include "stdint.h"
-#include "vma.h"
-#include "buddy.h"
+#include <memory.h>
+#include <print.h>
+#include <debug.h>
+#include <stdint.h>
+#include <string.h>
+#include <global.h>
+#include <sync.h>
+#include <interrupt.h>
+#include <stdio-kernel.h>
+#include <bitmap.h>
+#include <thread.h>
+#include <process.h>
+#include <stdint.h>
+#include <vma.h>
+#include <buddy.h>
 
 
 #define PDE_IDX(addr) ((addr&0xffc00000)>>22)

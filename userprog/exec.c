@@ -1,19 +1,19 @@
-#include "stdint.h"
-#include "stdbool.h"
-#include "global.h"
-#include "fs.h"
-#include "memory.h"
-#include "string.h"
-#include "thread.h"
-#include "exec.h"
-#include "stdio.h"
-#include "syscall.h"
-#include "stdio-kernel.h"
-#include "debug.h"
-#include "file_table.h"
-#include "process.h"
-#include "wait_exit.h"
-#include "vma.h"
+#include <stdint.h>
+#include <stdbool.h>
+#include <global.h>
+#include <fs.h>
+#include <memory.h>
+#include <string.h>
+#include <thread.h>
+#include <exec.h>
+#include <stdio.h>
+#include <syscall.h>
+#include <stdio-kernel.h>
+#include <debug.h>
+#include <file_table.h>
+#include <process.h>
+#include <wait_exit.h>
+#include <vma.h>
 
 extern void intr_exit;
 

@@ -1,5 +1,5 @@
-#include "print.h"
-#include "init.h"
+#include <print.h>
+#include <init.h>
 
 int main(void) {
    put_str("enter kernel\n");

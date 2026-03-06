@@ -1,8 +1,8 @@
-#include "file_table.h"
-#include "string.h"
-#include "fs_types.h"
-#include "debug.h"
-#include "stdio-kernel.h"
+#include <file_table.h>
+#include <string.h>
+#include <fs_types.h>
+#include <debug.h>
+#include <stdio-kernel.h>
 
 // System-wide Open File Table
 struct file file_table[MAX_FILE_OPEN_IN_SYSTEM];

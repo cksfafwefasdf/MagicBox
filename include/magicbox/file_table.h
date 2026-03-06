@@ -1,8 +1,8 @@
 #ifndef __INCLUDE_MAGICBOX_FILE_TABLE_H
 #define __INCLUDE_MAGICBOX_FILE_TABLE_H
 
-#include "stdint.h"
-#include "fs_types.h"
+#include <stdint.h>
+#include <fs_types.h>
 
 /*
     该文件是针对全局打开文件表的一些操作

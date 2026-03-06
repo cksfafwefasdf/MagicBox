@@ -1,7 +1,7 @@
-#include "stdio.h"
-#include "syscall.h"
-#include "string.h"
-#include "stdint.h"
+#include <stdio.h>
+#include <syscall.h>
+#include <string.h>
+#include <stdint.h>
 
 // 检验管道破裂，以及信号 SIGPIPE 以及 自定义信号 handler  同时可以测试init进程是否可以正确回收孤儿进程
 
@@ -18,7 +18,7 @@ int main() {
     int* fd = malloc(sizeof(2));
     pipe(fd);
 
-    // 关键：注册处理函数，这样进程就不会被默认动作杀掉了
+    // 注册处理函数，这样进程就不会被默认动作杀掉了
     signal(SIGPIPE, my_sig_handler);
 
     if (fork() == 0) {

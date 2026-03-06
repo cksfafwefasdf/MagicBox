@@ -1,10 +1,10 @@
-#include "console.h"
-#include "print.h"
-#include "sync.h"
-#include "thread.h"
-#include "device.h"
-#include "char_dev.h"
-#include "fs_types.h"
+#include <console.h>
+#include <print.h>
+#include <sync.h>
+#include <thread.h>
+#include <device.h>
+#include <char_dev.h>
+#include <fs_types.h>
 
 static struct lock console_lock;
 

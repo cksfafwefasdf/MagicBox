@@ -1,12 +1,12 @@
 #ifndef __INCLUDE_MAGICBOX_TTY_H
 #define __INCLUDE_MAGICBOX_TTY_H
 
-#include "stdint.h"
-#include "stdbool.h"
-#include "sync.h"
-#include "ioqueue.h"
-#include "fs_types.h"
-#include "termios.h"
+#include <stdint.h>
+#include <stdbool.h>
+#include <sync.h>
+#include <ioqueue.h>
+#include <fs_types.h>
+#include <termios.h>
 
 struct tty_struct {
 	struct termios termios;

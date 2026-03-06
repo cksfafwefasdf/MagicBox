@@ -1,9 +1,9 @@
-#include "bitmap.h"
-#include "stdint.h"
-#include "string.h"
-#include "debug.h"
-#include "interrupt.h"
-#include "print.h"
+#include <bitmap.h>
+#include <stdint.h>
+#include <string.h>
+#include <debug.h>
+#include <interrupt.h>
+#include <print.h>
 
 void bitmap_init(struct bitmap* btmp){
 	memset(btmp->bits,0,btmp->btmp_bytes_len);

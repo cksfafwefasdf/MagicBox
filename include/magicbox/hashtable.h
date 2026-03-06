@@ -1,6 +1,6 @@
 #ifndef __INCLUDE_MAGICBOX_HASHTABLE_H
 #define __INCLUDE_MAGICBOX_HASHTABLE_H
-#include "dlist.h"
+#include <dlist.h>
 
 // 黄金分割数 0.618033...
 // 具有一个奇妙的数学特性：它是最“无理”的无理数。

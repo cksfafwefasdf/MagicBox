@@ -1,8 +1,8 @@
 #ifndef __INCLUDE_UAPI_SIGNAL_H
 #define __INCLUDE_UAPI_SIGNAL_H
-#include "stdint.h"
-#include "stdbool.h"
-#include "unistd.h"
+#include <stdint.h>
+#include <stdbool.h>
+#include <unistd.h>
 
 struct task_struct;
 struct intr_stack;

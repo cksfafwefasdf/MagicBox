@@ -1,13 +1,13 @@
-#include "timer.h"
-#include "io.h"
-#include "print.h"
-#include "thread.h"
-#include "debug.h"
-#include "interrupt.h"
-#include "dlist.h"
-#include "stdbool.h"
-#include "signal.h"
-#include "errno.h"
+#include <timer.h>
+#include <io.h>
+#include <print.h>
+#include <thread.h>
+#include <debug.h>
+#include <interrupt.h>
+#include <dlist.h>
+#include <stdbool.h>
+#include <signal.h>
+#include <errno.h>
 
 #define IRQ0_FREQUENCY 100 //intr freq is 100 times/s
 #define INPUT_FREQUENCY 1193180

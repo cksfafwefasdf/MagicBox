@@ -1,12 +1,12 @@
 #ifndef __INCLUDE_MAGICBOX_IDE_BUFFER_H
 #define __INCLUDE_MAGICBOX_IDE_BUFFER_H
 
-#include "stdint.h"
-#include "stdbool.h"
-#include "unistd.h"
-#include "dlist.h"
-#include "sync.h"
-#include "hashtable.h"
+#include <stdint.h>
+#include <stdbool.h>
+#include <unistd.h>
+#include <dlist.h>
+#include <sync.h>
+#include <hashtable.h>
 
 struct disk;
 

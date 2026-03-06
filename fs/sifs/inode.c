@@ -1,19 +1,19 @@
-#include "sifs_inode.h"
-#include "ide.h"
-#include "stdint.h"
-#include "debug.h"
-#include "dlist.h"
-#include "string.h"
-#include "fs.h"
-#include "thread.h"
-#include "interrupt.h"
-#include "stdio-kernel.h"
-#include "sifs_file.h"
-#include "ide_buffer.h"
-#include "fs_types.h"
-#include "sifs_sb.h"
-#include "sifs_dir.h"
-#include "inode.h"
+#include <sifs_inode.h>
+#include <ide.h>
+#include <stdint.h>
+#include <debug.h>
+#include <dlist.h>
+#include <string.h>
+#include <fs.h>
+#include <thread.h>
+#include <interrupt.h>
+#include <stdio-kernel.h>
+#include <sifs_file.h>
+#include <ide_buffer.h>
+#include <fs_types.h>
+#include <sifs_sb.h>
+#include <sifs_dir.h>
+#include <inode.h>
 
 struct inode_position{
 	bool two_sec; // whether an inode spans multiple sectors

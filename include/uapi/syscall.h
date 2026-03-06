@@ -1,7 +1,7 @@
 #ifndef __INCLUDE_UAPI_SYSCALL_H
 #define __INCLUDE_UAPI_SYSCALL_H
-#include "stdint.h"
-#include "unistd.h"
+#include <stdint.h>
+#include <unistd.h>
 
 // syscall.h includes interface for user
 

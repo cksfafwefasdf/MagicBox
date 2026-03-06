@@ -1,8 +1,8 @@
 #ifndef __INCLUDE_UAPI_SIFS_SB_H
 #define __INCLUDE_UAPI_SIFS_SB_H
 
-#include "sifs_fs.h"
-#include "bitmap.h"
+#include <sifs_fs.h>
+#include <bitmap.h>
 
 struct super_block;
 

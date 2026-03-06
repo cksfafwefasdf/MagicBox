@@ -1,6 +1,6 @@
 #ifndef __INCLUDE_SYS_STRING_H
 #define __INCLUDE_SYS_STRING_H
-#include "stdint.h"
+#include <stdint.h>
 //set $(size) bytes from $(dst_) as $(value) 
 extern void memset(void* dst_,uint8_t value,uint32_t size); 
 //copy $(size) bytes from dst_ to src_

@@ -1,16 +1,16 @@
-#include "tty.h"
-#include "print.h"
-#include "ioqueue.h"
-#include "console.h"
-#include "timer.h"
-#include "char_dev.h"
-#include "device.h"
-#include "signal.h"
-#include "termios.h"
-#include "errno.h"
-#include "fs_types.h"
-#include "fs.h"
-#include "ioctl.h"
+#include <tty.h>
+#include <print.h>
+#include <ioqueue.h>
+#include <console.h>
+#include <timer.h>
+#include <char_dev.h>
+#include <device.h>
+#include <signal.h>
+#include <termios.h>
+#include <errno.h>
+#include <fs_types.h>
+#include <fs.h>
+#include <ioctl.h>
 
 
 struct tty_struct console_tty;

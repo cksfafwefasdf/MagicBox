@@ -1,8 +1,8 @@
 #ifndef __INCLUDE_MAGICBOX_IOQUEUE_H
 #define __INCLUDE_MAGICBOX_IOQUEUE_H
 
-#include "sync.h"
-#include "stdint.h"
+#include <sync.h>
+#include <stdint.h>
 
 struct thread;
 

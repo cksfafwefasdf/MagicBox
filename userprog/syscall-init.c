@@ -1,21 +1,21 @@
-#include "syscall-init.h"
-#include "stdint.h"
-#include "thread.h"
-#include "print.h"
-#include "syscall.h"
-#include "console.h"
-#include "string.h"
-#include "fs.h"
-#include "fork.h"
-#include "thread.h"
-#include "exec.h"
-#include "wait_exit.h"
-#include "ide.h"
-#include "pipe.h"
-#include "tty.h"
-#include "timer.h"
-#include "signal.h"
-#include "ioctl.h"
+#include <syscall-init.h>
+#include <stdint.h>
+#include <thread.h>
+#include <print.h>
+#include <syscall.h>
+#include <console.h>
+#include <string.h>
+#include <fs.h>
+#include <fork.h>
+#include <thread.h>
+#include <exec.h>
+#include <wait_exit.h>
+#include <ide.h>
+#include <pipe.h>
+#include <tty.h>
+#include <timer.h>
+#include <signal.h>
+#include <ioctl.h>
 
 #define SYSCALL_NR 64
 typedef void* syscall_func;

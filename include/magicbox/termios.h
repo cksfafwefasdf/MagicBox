@@ -1,6 +1,8 @@
 #ifndef __INCLUDE_MAGICBOX_TERMIOS_H
 #define __INCLUDE_MAGICBOX_TERMIOS_H
 
+#include <stdint.h>
+
 // c_lflag (本地模式) 的位掩码
 #define ISIG 0x0001 // 启用信号处理（若收到 INTR, QUIT, SUSP 字符，则发送信号）
 #define ICANON 0x0002 // 启用规范模式（按行缓冲，允许退格编辑）

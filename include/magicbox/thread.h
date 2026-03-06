@@ -1,11 +1,11 @@
 #ifndef __INCLUDE_MAGICBOX_THREAD_H
 #define __INCLUDE_MAGICBOX_THREAD_H
-#include "stdint.h"
-#include "string.h"
-#include "memory.h"
-#include "bitmap.h"
-#include "signal.h"
-#include "unistd.h"
+#include <stdint.h>
+#include <string.h>
+#include <memory.h>
+#include <bitmap.h>
+#include <signal.h>
+#include <unistd.h>
 
 // each process can open 8 files at most
 #define MAX_FILES_OPEN_PER_PROC 8

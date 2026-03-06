@@ -1,19 +1,19 @@
-#include "process.h"
-#include "thread.h"
-#include "memory.h"
-#include "stdint.h"
-#include "debug.h"
-#include "tss.h"
-#include "console.h"
-#include "string.h"
-#include "global.h"
-#include "interrupt.h"
-#include "dlist.h"
-#include "print.h"
-#include "thread.h"
-#include "ide.h"
-#include "exec.h"
-#include "vma.h"
+#include <process.h>
+#include <thread.h>
+#include <memory.h>
+#include <stdint.h>
+#include <debug.h>
+#include <tss.h>
+#include <console.h>
+#include <string.h>
+#include <global.h>
+#include <interrupt.h>
+#include <dlist.h>
+#include <print.h>
+#include <thread.h>
+#include <ide.h>
+#include <exec.h>
+#include <vma.h>
 
 extern void intr_exit(void);
 

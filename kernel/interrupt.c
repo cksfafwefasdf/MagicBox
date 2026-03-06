@@ -1,13 +1,13 @@
-#include "interrupt.h"
-#include "stdint.h"
-#include "global.h"
-#include "print.h"
-#include "io.h"
-#include "page.h"
-#include "signal.h"
-#include "thread.h"
-#include "debug.h"
-#include "stdio-kernel.h"
+#include <interrupt.h>
+#include <stdint.h>
+#include <global.h>
+#include <print.h>
+#include <io.h>
+#include <page.h>
+#include <signal.h>
+#include <thread.h>
+#include <debug.h>
+#include <stdio-kernel.h>
 
 #define IDT_DESC_CNT 0x81
 

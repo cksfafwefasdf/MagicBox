@@ -1,7 +1,7 @@
-#include "syscall.h"
-#include "stdio.h"
-#include "string.h"
-#include "unistd.h"
+#include <syscall.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 // echo hello_world_this_is_my_os -f /test.txt
 
 int main(int argc, char** argv) {

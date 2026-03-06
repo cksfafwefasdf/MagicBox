@@ -1,22 +1,21 @@
-#include "thread.h"
-#include "stdint.h"
-#include "string.h"
-#include "global.h"
-#include "memory.h"
-#include "dlist.h"
-#include "interrupt.h"
-#include "debug.h"
-#include "print.h"
-#include "process.h"
-#include "sync.h"
-#include "main.h"
-#include "stdio.h"
-#include "fs.h"
-#include "fs_types.h"
-#include "dlist.h"
-#include "signal.h"
-#include "errno.h"
-#include "stdio-kernel.h"
+#include <thread.h>
+#include <stdint.h>
+#include <string.h>
+#include <global.h>
+#include <memory.h>
+#include <dlist.h>
+#include <interrupt.h>
+#include <debug.h>
+#include <print.h>
+#include <process.h>
+#include <sync.h>
+#include <stdio.h>
+#include <fs.h>
+#include <fs_types.h>
+#include <dlist.h>
+#include <signal.h>
+#include <errno.h>
+#include <stdio-kernel.h>
 
 // max number of pid is 128*8=1024
 // use bitmap to check if the pid is in used

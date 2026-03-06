@@ -1,13 +1,13 @@
-#include "signal.h"
-#include "thread.h"
-#include "wait_exit.h"
-#include "interrupt.h"
-#include "thread.h"
-#include "unistd.h"
-#include "errno.h"
-#include "debug.h"
-#include "stdio-kernel.h"
-#include "stdint.h"
+#include <signal.h>
+#include <thread.h>
+#include <wait_exit.h>
+#include <interrupt.h>
+#include <thread.h>
+#include <unistd.h>
+#include <errno.h>
+#include <debug.h>
+#include <stdio-kernel.h>
+#include <stdint.h>
 
 // 发送信号
 void sig_addset(uint32_t* set, int sig) {

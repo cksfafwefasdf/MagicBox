@@ -48,9 +48,15 @@ LIB := -I include/arch -I include/magicbox -I include/sys -I include/uapi
 ASFLAGS := -f elf
 
 # -MMD 会为每个 .c 文件自动生成 .d 依赖文件，记录头文件依赖
+# -I 手动包含库文件，-nostdinc不包含系统提供的头文件
+# 这两个参数配合后我们可以完全掌控我们的头文件
+# 使用 <> 来包裹头文件，编译时会直接到 -I 目录下和系统提供的目录下进行头文件的搜素
+# 由于我们加了 nostdinc，因此现在不会到系统目录下搜索了，只会在 -I 目录下搜索
+# 如果用 "" 包裹头文件，会先在当前目录下搜索，搜不到了再去 -I 目录和系统目录下搜
+# 我们不想搜当前目录，而是只想搜-I目录，因此使用<>配合 -nostdinc 和 -I 效果更好
 CFLAGS  := -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes \
            -Wmissing-prototypes -m32 -fno-stack-protector -fcommon \
-           -Wno-error=implicit-function-declaration -MMD
+           -Wno-error=implicit-function-declaration -MMD -nostdinc
 
 LDFLAGS := -Ttext $(ENTRY_POINT) -e main -Map $(BUILD_DIR)/kernel.map -m elf_i386
 

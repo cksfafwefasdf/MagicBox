@@ -1,6 +1,6 @@
 #ifndef __INCLUDE_MAGICBOX_CHAR_DEV_H
 #define __INCLUDE_MAGICBOX_CHAR_DEV_H
-#include "stdint.h"
+#include <stdint.h>
 
 struct file_operations;
 

@@ -1,8 +1,8 @@
-#include "debug.h"
-#include "print.h"
-#include "interrupt.h"
-#include "stdio.h"
-#include "syscall.h"
+#include <debug.h>
+#include <print.h>
+#include <interrupt.h>
+#include <stdio.h>
+#include <syscall.h>
 
 void panic_spin(char* filename,int line,const char* func,const char* condition){
    	intr_disable();

@@ -1,19 +1,19 @@
-#include "sifs_file.h"
-#include "stdint.h"
-#include "string.h"
-#include "stdio-kernel.h"
-#include "thread.h"
-#include "ide.h"
-#include "ide_buffer.h"
-#include "fs.h"
-#include "debug.h"
-#include "sifs_inode.h"
-#include "sifs_dir.h"
-#include "interrupt.h"
-#include "process.h"
-#include "file_table.h"
-#include "sifs_sb.h"
-#include "inode.h"
+#include <sifs_file.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdio-kernel.h>
+#include <thread.h>
+#include <ide.h>
+#include <ide_buffer.h>
+#include <fs.h>
+#include <debug.h>
+#include <sifs_inode.h>
+#include <sifs_dir.h>
+#include <interrupt.h>
+#include <process.h>
+#include <file_table.h>
+#include <sifs_sb.h>
+#include <inode.h>
 
 int32_t inode_bitmap_alloc(struct partition* part){
 	int32_t bit_idx = bitmap_scan(&part->sb->sifs_info.inode_bitmap,1);

@@ -1,11 +1,11 @@
-#include "fs_types.h"
-#include "ide_buffer.h"
-#include "fs.h"
-#include "ide.h"
-#include "debug.h"
-#include "global.h"
-#include "stdio-kernel.h"
-#include "inode.h"
+#include <fs_types.h>
+#include <ide_buffer.h>
+#include <fs.h>
+#include <ide.h>
+#include <debug.h>
+#include <global.h>
+#include <stdio-kernel.h>
+#include <inode.h>
 
 // logic formatlize 
 void sifs_format(struct partition* part){

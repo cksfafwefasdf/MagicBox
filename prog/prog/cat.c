@@ -1,7 +1,7 @@
-#include "syscall.h"
-#include "stdio.h"
-#include "string.h"
-#include "unistd.h"
+#include <syscall.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
 #define BUF_SIZE 512
 

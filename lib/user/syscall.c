@@ -1,7 +1,7 @@
-#include "syscall.h"
-#include "stdio.h"
-#include "unistd.h"
-#include "string.h"
+#include <syscall.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
 
 // 该 syscall 文件主要是由用户程序包含的
 // 而我们的所有用户程序都要链接运行时库 start.s

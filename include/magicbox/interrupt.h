@@ -1,6 +1,6 @@
 #ifndef __INCLUDE_MAGICBOX_INTERRUPT_H
 #define __INCLUDE_MAGICBOX_INTERRUPT_H
-#include "stdint.h"
+#include <stdint.h>
 
 
 #define SCREEN_POS(row,col) (row*NUM_FULL_LINE_CH+col) 

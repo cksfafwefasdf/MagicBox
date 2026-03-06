@@ -1,6 +1,6 @@
 #ifndef __INCLUDE_ARCH_GLOBAL_H
 #define __INCLUDE_ARCH_GLOBAL_H
-#include "stdint.h"
+#include <stdint.h>
 
 #define RPL0 0
 #define RPL1 1

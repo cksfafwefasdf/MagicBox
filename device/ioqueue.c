@@ -1,9 +1,9 @@
-#include "ioqueue.h"
-#include "interrupt.h"
-#include "global.h"
-#include "debug.h"
-#include "stdint.h"
-#include "stdbool.h"
+#include <ioqueue.h>
+#include <interrupt.h>
+#include <global.h>
+#include <debug.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 void ioqueue_init(struct ioqueue* ioq){
 	lock_init(&ioq->lock);

@@ -1,12 +1,12 @@
-#include "ide_buffer.h"
-#include "ide.h"
-#include "stdint.h"
-#include "stdbool.h"
-#include "stdio-kernel.h"
-#include "debug.h"
-#include "sync.h"
-#include "hashtable.h"
-#include "interrupt.h"
+#include <ide_buffer.h>
+#include <ide.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdio-kernel.h>
+#include <debug.h>
+#include <sync.h>
+#include <hashtable.h>
+#include <interrupt.h>
 
 static struct ide_buffer global_ide_buffer; 
 

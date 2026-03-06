@@ -1,7 +1,7 @@
-#include "stdio.h"
-#include "console.h"
-#include "stdio-kernel.h"
-#include "unistd.h"
+#include <stdio.h>
+#include <console.h>
+#include <stdio-kernel.h>
+#include <unistd.h>
 
 void printk(const char* format,...){
 	va_list args;

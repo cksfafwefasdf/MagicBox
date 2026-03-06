@@ -1,8 +1,8 @@
 #ifndef __INCLUDE_MAGICBOX_SYNC_H
 #define __INCLUDE_MAGICBOX_SYNC_H
-#include "dlist.h"
-#include "stdint.h"
-#include "thread.h"
+#include <dlist.h>
+#include <stdint.h>
+#include <thread.h>
 
 struct semaphore{
 	uint8_t value;

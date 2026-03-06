@@ -1,7 +1,7 @@
 #ifndef __INCLUDE_MAGICBOX_EXEC_H
 #define __INCLUDE_MAGICBOX_EXEC_H
 
-#include "stdint.h"
+#include <stdint.h>
 
 #define MAX_PT_LOADER_SEGMENT 10 // the max number of the PT_LOAD segment is 10 (Linux standard)
 

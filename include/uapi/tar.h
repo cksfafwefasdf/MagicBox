@@ -1,6 +1,6 @@
 #ifndef __INCLUDE_UAPI_TAR_H
 #define __INCLUDE_UAPI_TAR_H
-#include "stdint.h"
+#include <stdint.h>
 
 // POSIX ustar 标准头部 (512字节)
 struct tar_header {

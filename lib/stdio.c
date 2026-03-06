@@ -1,9 +1,9 @@
-#include "stdio.h"
-#include "global.h"
-#include "stdint.h"
-#include "string.h"
-#include "syscall.h"
-#include "unistd.h"
+#include <stdio.h>
+#include <global.h>
+#include <stdint.h>
+#include <string.h>
+#include <syscall.h>
+#include <unistd.h>
 
 int itoa(uint32_t value,char* buf_ptr,uint8_t base){
 	if(value==0){

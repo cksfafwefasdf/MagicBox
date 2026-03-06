@@ -1,7 +1,7 @@
-#include "stdio.h"
-#include "syscall.h"
-#include "string.h"
-#include "stdint.h"
+#include <stdio.h>
+#include <syscall.h>
+#include <string.h>
+#include <stdint.h>
 
 // 测试非法指令
 

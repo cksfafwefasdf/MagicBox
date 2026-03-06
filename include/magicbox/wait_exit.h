@@ -1,6 +1,6 @@
 #ifndef __INCLUDE_MAGICBOX_WAIT_EXIT_H
 #define __INCLUDE_MAGICBOX_WAIT_EXIT_H
-#include "stdint.h"
+#include <stdint.h>
 
 extern pid_t sys_wait(int32_t* status);
 extern void sys_exit(int32_t status);

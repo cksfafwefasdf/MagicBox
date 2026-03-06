@@ -1,10 +1,10 @@
 #ifndef __INCLUDE_MAGICBOX_BUDDY_H
 #define __INCLUDE_MAGICBOX_BUDDY_H
 
-#include "stdint.h"
-#include "dlist.h"
-#include "sync.h"
-#include "stdbool.h"
+#include <stdint.h>
+#include <dlist.h>
+#include <sync.h>
+#include <stdbool.h>
 
 // 给定物理地址，获取对应的 struct page
 #define ADDR_TO_PAGE(page_base,addr) (&page_base[(uint32_t)(addr) >> 12])

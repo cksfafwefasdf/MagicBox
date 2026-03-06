@@ -1,7 +1,7 @@
-#include "stdio.h"
-#include "unistd.h"
-#include "stdint.h"
-#include "syscall.h"
+#include <stdio.h>
+#include <unistd.h>
+#include <stdint.h>
+#include <syscall.h>
 
 // 测试 ioctl 是否能正常读到磁盘扇区数和大小
 

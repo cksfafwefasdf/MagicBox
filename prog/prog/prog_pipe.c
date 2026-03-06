@@ -1,7 +1,7 @@
-#include "stdio.h"
-#include "syscall.h"
-#include "string.h"
-#include "stdint.h"
+#include <stdio.h>
+#include <syscall.h>
+#include <string.h>
+#include <stdint.h>
 
 // 测试具名管道的读写以及观察后台进程
 

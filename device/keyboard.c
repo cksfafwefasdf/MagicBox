@@ -1,10 +1,10 @@
-#include "keyboard.h"
-#include "print.h"
-#include "interrupt.h"
-#include "io.h"
-#include "global.h"
-#include "stdbool.h"
-#include "tty.h"
+#include <keyboard.h>
+#include <print.h>
+#include <interrupt.h>
+#include <io.h>
+#include <global.h>
+#include <stdbool.h>
+#include <tty.h>
 
 #define KBD_BUF_PORT 0x60 // keyboard buff port
 

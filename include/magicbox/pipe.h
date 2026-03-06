@@ -1,7 +1,7 @@
 #ifndef __INCLUDE_MAGICBOX_PIPE_H
 #define __INCLUDE_MAGICBOX_PIPE_H
-#include "ioqueue.h"
-#include "stdint.h"
+#include <ioqueue.h>
+#include <stdint.h>
 
 struct file;
 struct inode;

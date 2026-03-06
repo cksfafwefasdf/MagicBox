@@ -1,9 +1,9 @@
-#include "hashtable.h"
-#include "memory.h"
-#include "stdint.h"
-#include "dlist.h"
-#include "stdbool.h"
-#include "debug.h"
+#include <hashtable.h>
+#include <memory.h>
+#include <stdint.h>
+#include <dlist.h>
+#include <stdbool.h>
+#include <debug.h>
 
 void hash_init(struct hashtable *hash,uint32_t bucket_nr, hash_callback hash_func, func_condition condition){
 	uint32_t bucket_idx;

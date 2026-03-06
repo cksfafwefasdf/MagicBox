@@ -1,9 +1,9 @@
-#include "dlist.h"
-#include "interrupt.h"
-#include "stdint.h"
-#include "stdbool.h"
-#include "debug.h"
-#include "print.h"
+#include <dlist.h>
+#include <interrupt.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <debug.h>
+#include <print.h>
 
 void dlist_init(struct dlist* plist){
 	plist->head.prev = NULL;

@@ -1,8 +1,8 @@
 #ifndef __INCLUDE_MAGICBOX_MEMORY_H
 #define __INCLUDE_MAGICBOX_MEMORY_H
-#include "stdint.h"
-#include "bitmap.h"
-#include "dlist.h"
+#include <stdint.h>
+#include <bitmap.h>
+#include <dlist.h>
 
 #define PG_P_1 1 
 #define PG_P_0 0 
