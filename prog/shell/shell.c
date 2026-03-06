@@ -1,13 +1,13 @@
-#include <shell.h>
 #include <stdio.h>
 #include <syscall.h>
 #include <string.h>
 #include <stdbool.h>
 #include <assert.h>
-#include <buildin_cmd.h>
-#include <unistd.h
+#include <unistd.h>
 #include <signal.h>
 #include <ioctl.h>
+#include "shell.h"
+#include "buildin_cmd.h"
 
 static int32_t cmd_parse(char* cmd_str, char** argv, char token);
 void readline(char* buf, int32_t count);

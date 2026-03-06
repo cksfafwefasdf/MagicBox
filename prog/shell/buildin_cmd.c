@@ -1,10 +1,10 @@
 #include <string.h>
 #include <syscall.h>
-#include <buildin_cmd.h>
 #include <stdio.h>
-#include <shell.h>
 #include <assert.h>
 #include <unistd.h>
+#include "buildin_cmd.h"
+#include "shell.h"
 
 char* path_parse(char* pathname,char* name_store){
 	if(pathname[0]=='/'){
