@@ -61,6 +61,25 @@ static bool mount_partition(struct dlist_elem* pelem, void* arg) {
     return false;
 }
 
+// 检查是否具有文件系统，如果是的话返回对应魔数，否则返回-1
+static int32_t has_fs(struct partition* part){
+    // 临时申请一个磁盘超级块缓冲区，仅用于探测
+    void* sb_buf = kmalloc(SECTOR_SIZE);
+    if (sb_buf == NULL) PANIC("has_fs: kmalloc failed!");
+    partition_read(part,1, sb_buf, 1);
+    int32_t ret = -1;
+    // 检查魔数，如果没有则格式化
+    
+    if (((struct sifs_super_block*)sb_buf)->magic == SIFS_FS_MAGIC_NUMBER) {
+        ret = SIFS_FS_MAGIC_NUMBER;
+    }
+    // else if(((struct ext2_super_block*)sb_buf)->magic != EXT2_FS_MAGIC_NUMBER)
+    
+    // 探测完毕，释放临时缓冲区
+    kfree(sb_buf);
+    return ret;
+}
+
 void filesys_init() {
 
     inode_cache_init();
@@ -70,6 +89,7 @@ void filesys_init() {
     char default_part[MAX_DISK_NAME_LEN] = {0};
 
     printk("Searching filesystem......\n");
+
     while (channel_no < channel_cnt) {
         dev_no = 0;
         while (dev_no < 2) {
@@ -82,26 +102,18 @@ void filesys_init() {
                 if (part_idx == 4) part = hd->logic_parts;
 
                 if (part->sec_cnt != 0) {
-                    // 临时申请一个磁盘超级块缓冲区，仅用于探测
-                    struct sifs_super_block* sb_buf = (struct sifs_super_block*)kmalloc(SECTOR_SIZE);
-                    if (sb_buf == NULL) PANIC("filesys_init: kmalloc failed!");
-                    
-                    partition_read(part,1, sb_buf, 1);
 
-                    // 检查魔数，如果没有则格式化
-                    if (sb_buf->magic != SIFS_FS_MAGIC_NUMBER) {
+                    if(has_fs(part)==-1){
                         printk("Formatting %s's partition %s ......\n", hd->name, part->name);
                         sifs_format(part);
                     }
-                    
-                    // 探测完毕，释放临时缓冲区
-                    kfree(sb_buf);
-
                     // 记录第一个有效分区的名字，准备挂载
                     if (first_flag) {
                         strcpy(default_part, part->name);
                         first_flag = false;
                     }
+                    // 我们只默认格式化识别到的第一个分区
+                    goto mnt;
                 }
                 part_idx++;
                 part++;
@@ -110,6 +122,8 @@ void filesys_init() {
         }
         channel_no++;
     }
+
+mnt:
 
     // 调用 mount_partition 进行挂载
     // mount_partition 内部会调用 sifs_read_super，加载超级块

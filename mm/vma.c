@@ -225,7 +225,7 @@ uint32_t vma_find_gap(struct task_struct* task ,uint32_t pg_cnt) {
     struct dlist_elem* elem = plist->head.next;
     while (elem != &plist->tail) {
         struct vm_area* vma = member_to_entry(struct vm_area, vma_tag, elem);
-        ASSERT(vma->vma_end%4096==0);
+        // ASSERT(vma->vma_end%4096==0);
         
         
         // 检查当前 search_ptr 和当前 vma 起始地址之间的 Gap

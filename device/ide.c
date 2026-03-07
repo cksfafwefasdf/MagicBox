@@ -669,7 +669,18 @@ int32_t ide_dev_read(struct file* file, void* buf, uint32_t count) {
 // 参数含义同 ide_dev_read
 int32_t ide_dev_write(struct file* file, void* buf, uint32_t count) {
     struct inode* inode = file->fd_inode;
+    
+    uint32_t minor = MINOR(inode->i_rdev);
+    // 拦截整盘写操作 (sda, sdb 等)
+    // 根据生产逻辑设备号的逻辑，0, 16, 32... 是整盘
+    if (minor % 16 == 0) {
+        // 打印警告，方便调试时发现为什么写失败
+        printk("ide_dev_write: Write denied on whole disk device (minor %d)!\n", minor);
+        return -EPERM; // 返回错误，表示禁止写入
+    }
+
     struct partition* part = get_part_by_rdev(inode->i_rdev);
+
     uint32_t part_size_bytes = part->sec_cnt * SECTOR_SIZE;
 
     // 边界检查

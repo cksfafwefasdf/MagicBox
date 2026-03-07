@@ -1,6 +1,5 @@
 #ifndef __INCLUDE_MAGICBOX_BITMAP_H
 #define __INCLUDE_MAGICBOX_BITMAP_H
-#include <global.h>
 #include <stdint.h>
 #include <stdbool.h>
 #define BITMAP_MASK 1
