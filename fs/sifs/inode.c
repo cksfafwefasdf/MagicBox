@@ -105,6 +105,9 @@ void inode_init(struct partition* part, uint32_t inode_no,struct inode* new_inod
 	new_inode->write_deny = false;
 	new_inode->i_type = ft;
 	new_inode->i_dev = part->i_rdev;
+    new_inode->i_sb = part->sb; // 建立归属超级块，以后读写数据块要用到他
+    new_inode->i_mount = NULL; // 默认不是挂载点
+    new_inode->i_mount_at = NULL; // 默认不是另一个分区的根
 
 	uint8_t sec_idx = 0;
 	while(sec_idx<BLOCK_PTR_NUMBER){

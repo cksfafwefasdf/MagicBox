@@ -45,6 +45,7 @@ static void cmd_execute(uint32_t argc, char** argv, int32_t pgid_to_set, bool is
     if (!strcmp("free_mem", argv[0])) { buildin_free_mem(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
     if (!strcmp("df", argv[0])) { buildin_df(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
     if (!strcmp("mount", argv[0])) { buildin_mount(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
+    if (!strcmp("umount", argv[0])) { buildin_umount(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
 
     // 外部程序逻辑
     if (pgid_to_set >= 0) {

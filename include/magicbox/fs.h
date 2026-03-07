@@ -25,12 +25,14 @@ extern char* sys_getcwd(char* buf,uint32_t size);
 extern int32_t sys_stat(const char* path,struct stat* buf);
 extern char* _path_parse(char* pathname,char* name_store);
 extern void sys_disk_info(void);
-extern void sys_mount(const char* part_name);
+extern int32_t sys_mount(char* dev_name, char* mount_path, char* type, unsigned long new_flags UNUSED, void * data UNUSED);
 extern int32_t sys_dup2(uint32_t old_local_fd, uint32_t new_local_fd);
 extern int32_t sys_mknod(const char* pathname, enum file_types type, uint32_t dev);
 extern void make_dev_nodes(void);
 extern int32_t sys_mkfifo(const char* pathname);
+extern int32_t sys_umount(const char* _mount_path);
 
 extern struct partition* cur_part;
+extern struct inode* root_dir_inode; 
 
 #endif

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdint.h>
 
 // 该 syscall 文件主要是由用户程序包含的
 // 而我们的所有用户程序都要链接运行时库 start.s
@@ -195,8 +196,9 @@ void free_mem(void){
 void disk_info(void){
 	_syscall0(SYS_DISK_INFO);
 }
-void mount(const char* part_name){
-	_syscall1(SYS_MOUNT,part_name);
+
+int32_t mount(char* dev_name, char* mount_path, char* type, unsigned long new_flags UNUSED, void * data UNUSED){
+	return _syscall5(SYS_MOUNT,dev_name,mount_path,type,new_flags,data);
 }
 
 void test_func(){
@@ -278,4 +280,8 @@ int sigprocmask(int how, const uint32_t* set, uint32_t* oldset){
 
 int32_t mkfifo(const char* pathname){
 	return _syscall1(SYS_MKFIFO, pathname);
+}
+
+int32_t umount(const char* _mount_path){
+	return _syscall1(SYS_UMOUNT,_mount_path);
 }

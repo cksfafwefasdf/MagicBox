@@ -11,6 +11,8 @@
 #include <pipe.h>
 #include <vma.h>
 #include <file_table.h>
+#include <inode.h>
+#include <ide.h>
 
 extern void intr_exit(void); // defined in  kernel.s
 static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,struct task_struct* parent_thread){
@@ -27,7 +29,10 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 	child_thread->general_tag.prev = child_thread->general_tag.next = NULL;
 	child_thread->all_list_tag.prev = child_thread->all_list_tag.next = NULL;
 	// 子进程继承父进程的工作目录
-	child_thread->cwd_inode_nr = parent_thread->cwd_inode_nr;
+	child_thread->pwd = parent_thread->pwd;
+
+	// 增加一下引用计数，以便和exit的close对称
+	inode_open(get_part_by_rdev(child_thread->pwd->i_dev),child_thread->pwd->i_no);
 
 	dlist_init(&child_thread->vma_list);
 

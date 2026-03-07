@@ -9,6 +9,7 @@
 #include <process.h>
 #include <vma.h>
 #include <file_table.h>
+#include <inode.h>
 
 struct wait_opts {
     pid_t target_pid;
@@ -32,6 +33,7 @@ static void release_prog_resource(struct task_struct* release_thread){
 		}
 		local_fd++;
 	}
+	inode_close(release_thread->pwd);
 }
 
 static bool find_child(struct dlist_elem* pelem,void* arg){

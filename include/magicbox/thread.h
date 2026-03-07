@@ -16,6 +16,8 @@
 
 #define INIT_PID 1
 
+struct inode;
+
 
 typedef void thread_func(void*);
 
@@ -132,7 +134,7 @@ struct task_struct{
 
 	// struct virtual_addr userprog_vaddr;
 	struct mem_block_desc u_block_desc[DESC_TYPE_CNT];
-	uint32_t cwd_inode_nr;
+	struct inode* pwd; // 进程的当前工作目录
 	int16_t parent_pid;
 	int8_t exit_status;
 	uint32_t stack_magic;

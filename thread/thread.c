@@ -87,7 +87,7 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 	pthread->pgdir = NULL;
 	pthread->signal = 0;
 	pthread->blocked = 0;
-	pthread->cwd_inode_nr = 0; // 默认在根目录
+	pthread->pwd = root_dir_inode; // 默认在根目录
 
 	memset(pthread->sigactions, 0, sizeof(pthread->sigactions));
 
@@ -110,7 +110,7 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 		fd_idx++;
 	}
 
-	pthread->cwd_inode_nr = 0;
+	pthread->pwd = root_dir_inode;
 	pthread->parent_pid = -1;
 
 	pthread->stack_magic = STACK_MAGIC;

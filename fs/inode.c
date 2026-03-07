@@ -117,6 +117,9 @@ struct inode* inode_open(struct partition* part,uint32_t inode_no){
 	new_inode->i_dev = part->i_rdev;
 	new_inode->i_open_cnts = 1;
 	new_inode->write_deny = false;
+    new_inode->i_sb = part->sb; // 建立归属超级块，以后读写数据块要用到他
+    new_inode->i_mount = NULL; // 默认不是挂载点
+    new_inode->i_mount_at = NULL;// 默认不是另一个分区的根
 
 	// 未命中，从磁盘读取，由于 sifs_read_inode 会用到 i_dev 和 i_no
     // 因此此处要先填充

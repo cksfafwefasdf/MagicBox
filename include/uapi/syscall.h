@@ -52,6 +52,7 @@
 #define	SYS_SIGPENDING 44
 #define	SYS_SIGPROCMASK 45
 #define SYS_MKFIFO 46
+#define SYS_UMOUNT 47
 
 // user interface
 extern uint32_t getpid(void);
@@ -85,7 +86,7 @@ extern void free_mem(void);
 extern void disk_info(void);
 extern void test_func(void);
 extern void read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uint32_t sec_cnt);
-extern void mount(const char* part_name);
+extern int32_t mount(char* dev_name, char* mount_path, char* type, unsigned long new_flags UNUSED, void * data UNUSED);
 extern int32_t mknod(const char* pathname, enum file_types type, uint32_t dev);
 extern int32_t dup2(uint32_t old_local_fd, uint32_t new_local_fd);
 extern pid_t setpgid(pid_t pid, pid_t pgid);
@@ -100,5 +101,6 @@ extern int kill(pid_t pid, int sig);
 extern int sigpending(uint32_t* set);
 extern int sigprocmask(int how, const uint32_t* set, uint32_t* oldset);
 extern int32_t mkfifo(const char* pathname);
+extern int32_t umount(const char* _mount_path);
 
 #endif

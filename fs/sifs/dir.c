@@ -10,9 +10,6 @@
 #include <sifs_sb.h>
 #include <inode.h>
 
-// 由于我们去除了 dir 结构，因此现在改用 file 来标记根目录
-struct inode* root_dir_inode; 
-
 void open_root_dir(struct partition* part) {
     root_dir_inode = inode_open(part, part->sb->s_root_ino);
 }

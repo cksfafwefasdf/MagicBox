@@ -66,6 +66,15 @@ void init(void) {
 
         setpgid(0, 0); // 确保自己进组，双重确认
 
+        int mnt_dir_fd = open("/mnt",O_RDONLY);
+
+        if(mnt_dir_fd==-1){
+            mkdir("/mnt");
+        }
+        if(mnt_dir_fd!=-1){
+            close(mnt_dir_fd);
+        }
+        
         // 检查 Shell 是否已经存在于文件系统中
         int fd = open(SHELL_PATH, O_RDONLY);
 

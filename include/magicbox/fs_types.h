@@ -51,6 +51,10 @@ struct inode{
 	// this tag is used for the 'already opened inode queue'
 	// to prevent redundant reads of inodes from the disk.
 
+	struct super_block* i_sb;      // 指向该 inode 所属分区的 VFS 超级块
+    struct inode* i_mount;         // 向下隧道，如果我是挂载点(如 /mnt)，我指向被挂载分区的根 inode
+    struct inode* i_mount_at;      // 向上隧道，如果我是被挂载分区的根，我指向父分区的挂载点 inode
+
 	struct dlist_elem lru_tag; // 哈希表节点：用于根据 (i_dev, i_no) 快速找到 inode
     struct dlist_elem hash_tag;  // LRU节点：用于当缓冲区满时，决定踢掉哪个 inode
 	union{

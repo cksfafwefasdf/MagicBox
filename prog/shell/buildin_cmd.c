@@ -399,21 +399,24 @@ void buildin_df(uint32_t argc UNUSED,char** argv UNUSED){
 	disk_info();
 }
 
+// mount dev/sdb1 mnt/sdb1 sifs
 void buildin_mount(uint32_t argc,char** argv){
-	
-	if(argc<2){
-		printf("mount: missing argument <partition name>!\n");
-		return;
-	}
-	if(argc>2){
-		printf("mount: only support one argument <partition name>!\n");
-		return;
-	}
 
-	if(strcmp(argv[1],"-h")==0){
-		printf("mount: usage: mount <partition name>\n");
+	if(argc!=4){
+		printf("usage: mount <dev_path> <target_dir> <type>\n");
+		printf("e.g. mount /dev/sdb1 /mnt/sdb1 sifs\n");
 		return;
 	}
 	
-	mount(argv[1]);
+	mount(argv[1],argv[2],argv[3],0,0);
+}
+
+void buildin_umount(uint32_t argc,char** argv){
+
+	if(argc!=2){
+		printf("usage: umount <target_dir>\n");
+		return;
+	}
+	
+	umount(argv[1]);
 }

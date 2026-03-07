@@ -9,4 +9,4 @@ file ../build/kernel/kernel.bin
 # b filesys_init
 # b mount_partition
 b init
-
+b sys_mount

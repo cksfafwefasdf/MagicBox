@@ -26,9 +26,12 @@
 #include <sifs_sb.h>
 #include <inode.h>
 
-
-struct partition* cur_part;
+// root_part 用于记录根分区，他是全局唯一的
+struct partition* root_part;
 struct inode* cur_dir_inode;
+
+// 由于我们去除了 dir 结构，因此现在改用 inode 来标记根目录
+struct inode* root_dir_inode; 
 
 static bool mount_partition(struct dlist_elem* pelem, void* arg) {
     char* part_name = (char*)arg;
@@ -49,7 +52,7 @@ static bool mount_partition(struct dlist_elem* pelem, void* arg) {
     // 之后我们实现虚拟文件系统后可以直接用VFS的多态方式来读取
     if (sifs_read_super(sb, NULL, 1) != NULL) {
         // 挂载成功，完成最后的绑定
-        cur_part = part;
+        root_part = part;
         printk("VFS: mounted %s as SIFS\n", part_name);
         return true;
     } 
@@ -135,9 +138,9 @@ mnt:
     }
 
     // 设置当前目录环境
-    // sifs_read_super 已经把 root_inode 存进了 cur_part->sb->s_root_inode
-    cur_dir_inode = cur_part->sb->s_root_inode; 
-    open_root_dir(cur_part);
+    // sifs_read_super 已经把 root_inode 存进了 root_part->sb->s_root_inode
+    cur_dir_inode = root_part->sb->s_root_inode; 
+    open_root_dir(root_part);
     // 初始化全局文件表
     uint32_t fd_idx = 0;
     while (fd_idx < MAX_FILE_OPEN_IN_SYSTEM) {
@@ -185,7 +188,7 @@ static int32_t search_file(const char* pathname, struct path_search_record* sear
     // 处理根目录特例
     if (!strcmp(pathname, "/") || !strcmp(pathname, "/.") || !strcmp(pathname, "/..")) {
         // 由于 root_dir 是全局 file，其 inode 应该始终打开
-        searched_record->parent_inode = inode_open(cur_part, root_dir_inode->i_no); 
+        searched_record->parent_inode = inode_open(root_part, root_dir_inode->i_no); 
         searched_record->file_type = FT_DIRECTORY;
         searched_record->searched_path[0] = 0;
         searched_record->i_dev = root_dir_inode->i_dev;
@@ -197,7 +200,7 @@ static int32_t search_file(const char* pathname, struct path_search_record* sear
     
     char* sub_path = (char*)pathname;
     // 初始起点，直接使用全局根目录的 inode
-    struct inode* parent_inode = inode_open(cur_part, root_dir_inode->i_no);
+    struct inode* parent_inode = inode_open(root_part, root_dir_inode->i_no);
     // struct inode* parent_inode = root_dir.fd_inode; 
 
     struct sifs_dir_entry dir_e; // 使用磁盘镜像结构
@@ -220,6 +223,34 @@ static int32_t search_file(const char* pathname, struct path_search_record* sear
         strcat(searched_record->searched_path, "/");
         strcat(searched_record->searched_path, name);
 
+        // 向上穿透,处理 .. 到达分区根的情况
+        // 如果解析的是 .. 且我们当前已经在一个被挂载分区的根
+        if (strcmp(name, "..") == 0 && 
+            parent_inode->i_no == parent_inode->i_sb->s_root_ino && 
+            parent_inode->i_mount_at != NULL) {
+            // 拿到挂载点实体（比如在 sda1 上的 mnt/sdb1 目录 inode）
+            struct inode* mp_inode = parent_inode->i_mount_at;
+            
+            // 切换环境：把 parent_inode 换成挂载点实体
+            struct inode* old_root = parent_inode;
+            parent_inode = inode_open(get_part_by_rdev(mp_inode->i_dev), mp_inode->i_no);
+            
+            // 如果不是全局根，要关闭旧的引用
+            if (old_root != root_dir_inode) {
+                inode_close(old_root);
+            }
+            
+            // 更新搜索记录和当前的 part
+            searched_record->parent_inode = parent_inode;
+            searched_record->i_dev = parent_inode->i_dev;
+            parent_inode_no = parent_inode->i_no;
+            part = get_part_by_rdev(parent_inode->i_dev);
+            
+            // 此时，parent_inode 已经变成了 sda1 上的 /mnt/sdb1
+            // 循环继续往下走，sifs_search_dir_entry 就会在 sda1 上查找 ".."
+            // 从而回到 /mnt
+        }
+
         // 在当前 inode 指向的目录中查找该名字
         if (sifs_search_dir_entry(part, parent_inode, name, &dir_e)) {
             memset(name, 0, MAX_FILE_NAME_LEN);
@@ -238,7 +269,28 @@ static int32_t search_file(const char* pathname, struct path_search_record* sear
                 }
 
                 // 进入下一级目录
-                parent_inode = inode_open(part, dir_e.i_no);
+                struct inode* next_inode = inode_open(part, dir_e.i_no);
+                //检查是否为挂载点
+                // 如果这个 inode 上挂了另一个分区的根，要跳转过去
+                // 使用 while 是为了处理递归挂载，比如 目录/下的目录a挂载了一个分区
+                // 其下的目录b又挂载了一个分区，我们访问 /a/b/file，此时就要递归处理挂载
+                while (next_inode->i_mount != NULL) {
+                    struct inode* mounted_root = next_inode->i_mount;
+                
+                    // 增加新分区根的引用计数
+                    inode_open(get_part_by_rdev(mounted_root->i_dev), mounted_root->i_no);
+                    
+                    // 关闭旧的挂载点实体
+                    inode_close(next_inode);
+                    
+                    // 现在我们站在了新分区的根上
+                    next_inode = mounted_root;
+                    
+                    // 更新 part，因为接下来的 sifs_search_dir_entry 必须去新硬盘读数据
+                    part = get_part_by_rdev(next_inode->i_dev);
+                }
+
+                parent_inode = next_inode;
                 searched_record->parent_inode = parent_inode;
                 searched_record->i_dev = parent_inode->i_dev;
                 continue;
@@ -264,7 +316,8 @@ static int32_t search_file(const char* pathname, struct path_search_record* sear
     searched_record->parent_inode = inode_open(part, parent_inode_no);
     
     searched_record->file_type = FT_DIRECTORY;
-    return dir_e.i_no;
+    // 我们需要返回的是 /dev/ 中，dev目录的i_no
+    return parent_inode->i_no;
 }
 
 // 将路径转换为绝对路径
@@ -975,80 +1028,120 @@ static int get_child_dir_name(struct partition* part, uint32_t p_inode_nr, uint3
     return -1;
 }
 
-char* sys_getcwd(char* buf,uint32_t size){
-	ASSERT(buf!=NULL);
-	void* io_buf = kmalloc(SECTOR_SIZE);
-	if(io_buf==NULL){
-		return NULL;
-	}
-	
-	struct task_struct* cur_thread = get_running_task_struct();
-	int32_t parent_inode_nr = 0;
-	int32_t child_inode_nr = cur_thread->cwd_inode_nr;
-	ASSERT(child_inode_nr>=0&&child_inode_nr<MAX_FILES_PER_PART);
+char* sys_getcwd(char* buf, uint32_t size) {
+    ASSERT(buf != NULL);
+    void* io_buf = kmalloc(SECTOR_SIZE);
+    if (io_buf == NULL) return NULL;
 
-    struct inode* temp_inode = inode_open(cur_part, cur_thread->cwd_inode_nr); 
-    struct partition* part = get_part_by_rdev(temp_inode->i_dev);
-    inode_close(temp_inode);
+    struct task_struct* cur_thread = get_running_task_struct();
+    memset(buf, 0, size);
+    char full_path_reverse[MAX_PATH_LEN] = {0};
 
-	
-	
-	if(child_inode_nr==0){
-		buf[0] = '/';
-		buf[1] = 0;
-		kfree(io_buf);
-		return buf;
-	}
+    // 使用临时指针进行回溯，不要直接修改 cur_thread->pwd
+    // 增加引用计数防止回溯过程中被释放
+    struct inode* cursor = inode_open(get_part_by_rdev(cur_thread->pwd->i_dev), cur_thread->pwd->i_no);
 
-	memset(buf,0,size);
-	char full_path_reverse[MAX_PATH_LEN] = {0};
-	
-	while ((child_inode_nr)){
-		parent_inode_nr = get_parent_dir_inode_nr(part,child_inode_nr,io_buf);
-		if(get_child_dir_name(part,parent_inode_nr,child_inode_nr,full_path_reverse,io_buf)==-1){
-			kfree(io_buf);
-			return NULL;
-		}
-		child_inode_nr = parent_inode_nr;
-	}
 
-	ASSERT(strlen(full_path_reverse)<=size);
+    // 只要不是“真正的全局根目录”就继续向上回溯。
+     // 真正的全局根 Inode 编号为 0 且 没有向上挂载的指针(i_mount_at == NULL)
+    while (!(cursor->i_no == 0 && cursor->i_mount_at == NULL)) {
+        struct partition* cur_part = get_part_by_rdev(cursor->i_dev);
+        uint32_t p_inode_nr;
+        uint32_t c_inode_nr = cursor->i_no;
 
-	char* last_slash;
-	while((last_slash=strrchr(full_path_reverse,'/'))){
-		uint16_t len = strlen(buf);
-		strcpy(buf+len,last_slash);
+        if (c_inode_nr == 0 && cursor->i_mount_at != NULL) {
+            // 情况 1，遇到了子分区的根。
+            // 我们需要穿透隧道，回到父分区的挂载点目录。
+            struct inode* mp_inode = cursor->i_mount_at; // 拿到挂载点实体(在父分区中)
+            struct partition* p_part = get_part_by_rdev(mp_inode->i_dev);
+            
+            // 找到挂载点在父分区中的父目录编号
+            p_inode_nr = get_parent_dir_inode_nr(p_part, mp_inode->i_no, io_buf);
+            // 获取挂载点的名字 (例如 "sdb1")
+            get_child_dir_name(p_part, p_inode_nr, mp_inode->i_no, full_path_reverse, io_buf);
+            
+            // 切换 cursor 到父分区的父目录，准备下一轮循环
+            inode_close(cursor);
+            cursor = inode_open(p_part, p_inode_nr);
+        } 
+        else {
+            // 情况 2，普通目录回溯。
+            p_inode_nr = get_parent_dir_inode_nr(cur_part, c_inode_nr, io_buf);
+            if (get_child_dir_name(cur_part, p_inode_nr, c_inode_nr, full_path_reverse, io_buf) == -1) {
+                // 如果回溯失败（理论不应发生）
+                inode_close(cursor);
+                kfree(io_buf);
+                return NULL;
+            }
+            
+            // 切换到父目录
+            inode_close(cursor);
+            cursor = inode_open(cur_part, p_inode_nr);
+        }
+    }
 
-		*last_slash = 0;
-	}
-	kfree(io_buf);
-	
-	return buf;
+    // 释放最后停在全局根上的 cursor
+    inode_close(cursor);
+
+    // 处理特殊情况：如果路径为空，说明当前就在全局根 "/"
+    if (full_path_reverse[0] == 0) {
+        buf[0] = '/';
+        buf[1] = 0;
+    } else {
+        // 路径反转拷贝逻辑。
+        // full_path_reverse 里的格式是 "/name2/name1" (从下往上拼的)
+        // 我们需要通过 strrchr 逐个切下来拼成正确的顺序
+        char* last_slash;
+        while ((last_slash = strrchr(full_path_reverse, '/'))) {
+            strcat(buf, last_slash);
+            *last_slash = 0; // 截断处理下一段
+        }
+    }
+
+    kfree(io_buf);
+    return buf;
 }
 
-int32_t sys_chdir(const char* _pathname){
-	int32_t ret = -1;
-	struct path_search_record searched_record;
-	memset(&searched_record,0,sizeof(struct path_search_record));
+int32_t sys_chdir(const char* _pathname) {
+    struct path_search_record record;
+    memset(&record, 0, sizeof(record));
 
-	char path[MAX_PATH_LEN] = {0};
-    make_abs_pathname(_pathname, path); // 统一转成绝对路径
-	
+    char path[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, path); 
 
-	int inode_no = search_file(path,&searched_record);
-	if(inode_no!=-1){
-		if(searched_record.file_type==FT_DIRECTORY){
-			get_running_task_struct()->cwd_inode_nr = inode_no;
-			ret = 0;
-		}else{
-			printk("sys_chdir: %s is regular file or other!\n",path);
-		}
-	}else{
-		printk("sys_chdir: path %s maybe not exist\n",searched_record.searched_path);
-	}
-	inode_close(searched_record.parent_inode);
-	return ret;
+    int inode_no = search_file(path, &record);
+    if (inode_no == -1) {
+        printk("sys_chdir: %s not exist\n", path);
+        return -1;
+    }
+
+    if (record.file_type != FT_DIRECTORY) {
+        printk("sys_chdir: %s is not a directory\n", path);
+        inode_close(record.parent_inode);
+        return -1;
+    }
+
+    // 目录切换
+    struct task_struct* cur = get_running_task_struct();
+    
+    // 打开目标目录的 Inode (增加引用计数)
+    // 如果是穿透挂载点，search_file 返回的是子分区根编号
+    struct inode* new_pwd = inode_open(get_part_by_rdev(record.i_dev), inode_no);
+
+    // 释放旧的当前目录 (减少引用计数)
+    if (cur->pwd != NULL) {
+        inode_close(cur->pwd);
+    }
+
+    // 这里的 parent_inode 是 search_file 产生的中间产物，必须关闭
+    inode_close(record.parent_inode);
+
+    // 更新进程的工作目录指针
+    cur->pwd = new_pwd;
+
+    return 0;
 }
+
 
 int32_t sys_stat(const char* _pathname,struct stat* buf){
 
@@ -1175,16 +1268,16 @@ void sys_disk_info() {
                             btmp.btmp_bytes_len = sifs_sb->sec_cnt / 8;
                             uint32_t free_sects = bitmap_count(&btmp);
                             uint32_t used_sects = (btmp.btmp_bytes_len * 8) - free_sects;
-
-                            char cur_flag_str[2] = {0};
-                            if (cur_part != NULL && !strcmp(cur_part->name, part->name)) {
-                                cur_flag_str[0] = '*';
+                            // 在根分区后面加一个 *
+                            char root_flag_str[2] = {0};
+                            if (root_part != NULL && !strcmp(root_part->name, part->name)) {
+                                root_flag_str[0] = '*';
                             }
 
                             printk("%s(%c)%s\t%x\t%d\t%d\t%d\n", 
                                    part->name, 
                                    (type == 0 ? 'P' : 'L'), 
-                                   cur_flag_str, 
+                                   root_flag_str, 
                                    sifs_sb->magic, 
                                    sifs_sb->sec_cnt, 
                                    used_sects, 
@@ -1217,59 +1310,234 @@ static bool check_disk_name(struct dlist_elem* pelem,void* arg){
 	return false;
 }
 
-void sys_mount(const char* part_name){
-	// printk("mount::before:::%x \n",cur_part->sb->data_start_lba);
-	struct dlist_elem* res = dlist_traversal(&partition_list,check_disk_name,(void*)part_name);
-	if(res==NULL){
-		printk("sys_mount: partition %s not found!\n",part_name);
-		return;
-	}
+static struct partition* get_part_by_name(char* part_name) {
+    struct dlist_elem* res = dlist_traversal(&partition_list, check_disk_name, (void*)part_name);
+    if (res == NULL) {
+        return NULL;
+    }
+    return member_to_entry(struct partition, part_tag, res);
+}
 
-	struct partition* part = member_to_entry(struct partition, part_tag, res);
+// 专门用于在路径解析过头（钻进子分区）时，退回到挂载点本身
+static struct inode* back_to_mountpoint(struct inode* inode) {
+    if (inode->i_mount == NULL && 
+        inode->i_no == inode->i_sb->s_root_ino && 
+        inode->i_mount_at != NULL) {
+        
+        struct inode* mp_inode = inode->i_mount_at;
+        // 增加挂载点的引用计数
+        inode_open(get_part_by_rdev(mp_inode->i_dev), mp_inode->i_no);
 
-	// 由于我们引入了全盘分区，因此需要区分现在挂载的到底是全盘分区还是正常的装有文件系统的分区
-	// 若是全盘分区则直接拒绝
-	// 临时申请一个缓冲区来读取潜在的超级块
-	struct sifs_super_block* sb_buf = (struct sifs_super_block*)kmalloc(SECTOR_SIZE);
-	
-	// 超级块在第一个扇区，因此使用 1
-	partition_read(part,1, sb_buf, 1);
+        return mp_inode;
+    }
+    inode_open(get_part_by_rdev(inode->i_dev), inode->i_no);
+    return inode;
+}
 
-	// 检查魔数是否匹配,即是否有文件系统
-	if (sb_buf->magic != SIFS_FS_MAGIC_NUMBER) {
-		printk("sys_mount: Error! Partition %s is not a valid filesystem (Magic Mismatch).\n", part_name);
-		kfree(sb_buf);
-		return ; // 找到了这个盘，但它不合法，直接返回 true 停止遍历
-	}
-
-    if(cur_part!=NULL){
-
-        if(cur_part->sb->sifs_info.block_bitmap.bits!=NULL){
-            kfree(cur_part->sb->sifs_info.block_bitmap.bits);
-		    cur_part->sb->sifs_info.block_bitmap.btmp_bytes_len = 0;
-        }
-
-        if(cur_part->sb->sifs_info.inode_bitmap.bits!=NULL){
-            // printk("remove inode bitmap\n");
-            kfree(cur_part->sb->sifs_info.inode_bitmap.bits);
-            cur_part->sb->sifs_info.inode_bitmap.btmp_bytes_len = 0;
-        }
-
-        kfree(cur_part->sb);
-
-        close_root_dir(cur_part);
-		printk("close root directory\n");
+int32_t sys_mount(char* dev_path, char* _mount_path, char* type, unsigned long new_flags UNUSED, void * data UNUSED) {
+    printk("start mounting...\n");
+    // 取出设备名
+    char* dev_name = strrchr(dev_path,'/') + 1;
+    // 通用 VFS 准备工作
+    // 获取设备分区
+    struct partition* part = get_part_by_name(dev_name);
+    if (!part){
+        printk("can't find block dev %s\n",dev_name);
+        return -1;
     }
 
-	dlist_traversal(&partition_list,mount_partition,(void*)part_name);
-	open_root_dir(cur_part);
+    // 防止一个分区被挂载在多个目录下（现在暂时只支持单分区挂载）
+    // 这个操作可以有效防止根文件系统例如sda1被再次挂载的情况
+    // 如果根 Inode 已经指向了一个挂载点，说明它真的被挂载了
+    if (part->sb != NULL && part->sb->s_root_inode != NULL && part->sb->s_root_inode->i_mount_at != NULL) {
+        printk("VFS: Device %s is already mounted at some directory!\n", dev_path);
+        return -1;
+    }
 
-	// 同步全局 cur_dir 指向新的 root_dir 内存
-    cur_dir_inode = root_dir_inode; 
+    // 找到挂载点目录
+    struct path_search_record record;
+    memset(&record, 0, sizeof(record));
+    char mount_path[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_mount_path, mount_path); // 统一转成绝对路径
+    // 在这里使用不分区穿透的版本
+    // 不会产生什么问题，因为如果该目录挂载了分区，那么我们就是要不穿透才能进行重复挂载的检查
+    // 如果没有挂载分区，那么 do_search_file 第三个参数即使为true也不会穿透，因此置为false就行
+    int32_t mp_inode_no = search_file(mount_path, &record);
 
-    // 强制让当前运行进程的路径回到根目录，防止它引用旧分区的 inode 编号
-    struct task_struct* cur = get_running_task_struct();
-    cur->cwd_inode_nr = cur_part->sb->s_root_ino;
+    if (mp_inode_no == -1){
+        printk("fail to find mount point\n");
+        return -1;
+    }
+
+    struct inode* mp_inode = inode_open(get_part_by_rdev(record.i_dev), mp_inode_no);
+
+    struct inode* back_mp_inode = back_to_mountpoint(mp_inode);
+
+    // 把刚 search_file 为了搜索而打开的父目录关掉
+    inode_close(record.parent_inode);
+
+    // 如果当前挂载点已经挂载了其他分区，那么拒绝挂载操作
+    if (back_mp_inode->i_mount != NULL) {
+        printk("VFS: mount failed! %s is already a mount point for another device.\n", mount_path);
+        inode_close(mp_inode);
+        inode_close(back_mp_inode);
+        return -1;
+    }
+
+    inode_close(back_mp_inode); 
+
+    // 挂载点必须是目录，且没被挂载
+    if (mp_inode->i_mount != NULL) {
+        printk("VFS: %s is already a mount point\n", mount_path);
+        inode_close(mp_inode);
+        return -1;
+    }
+
+    if (mp_inode->i_type != FT_DIRECTORY){
+        printk("VFS: mount target must be a direcotry\n", mount_path);
+        inode_close(mp_inode);
+        return -1;
+    }
+
+    // 分配并初始化通用的超级块
+    struct super_block* sb = kmalloc(sizeof(struct super_block));
+    memset(sb, 0, sizeof(struct super_block));
+    sb->s_dev = part->i_rdev;
+    part->sb = sb;
+
+    // 超级块加载分发驱动 
+    struct super_block* res = NULL;
+    if (strcmp(type, "sifs") == 0) {
+        res = sifs_read_super(sb, NULL, 0);
+        if(res==NULL){
+            printk("fail to mount %s, you should mkfs first!\n",dev_name);
+            goto rollback;
+        }
+    } 
+    /* 留位给其他文件系统
+    else if (strcmp(type, "ext2") == 0) {
+        res = ext2_read_super(sb, NULL, 0);
+    } 
+    */
+    else {
+        printk("VFS: Unknown filesystem type %s\n", type);
+        kfree(sb);
+        return -1;
+    }
+
+    // 建立隧道，向上穿透和向下穿透
+    if (res != NULL && res->s_root_inode != NULL) {
+        // sifs_read_super 已经帮我们把 root_inode 打开并存在 sb->s_root_inode 了
+        struct inode* root_inode = sb->s_root_inode;
+        
+        mp_inode->i_mount = root_inode; // 向下隧道, mp_inode 相当于是 /mnt/sdb1 中的 sdb1 目录
+        root_inode->i_mount_at = mp_inode; // 向上隧道，相当于是 sdb1分区的根目录
+        
+        // 挂载成功后，mp_inode 应该保持 open 状态（不被释放出内存）
+        // 这样隧道才稳定
+        printk("mount %s as %s done! mount at %s\n",dev_name,type,mount_path);
+        return 0;
+    }
+rollback:
+    // 失败回滚
+    printk("VFS: Failed to mount %s\n", dev_name);
+    part->sb = NULL; // 清除绑定关系
+    inode_close(mp_inode); // 释放挂载点引用
+    kfree(sb); // 释放超级块内存
+    return -1;
+}
+
+int32_t sys_umount(const char* _mount_path) {
+    // 找到挂载点目录的 inode
+    struct path_search_record record;
+    memset(&record, 0, sizeof(record));
+    
+    char mount_path[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_mount_path, mount_path); 
+
+    int32_t mp_inode_no = search_file(mount_path, &record);
+    if (mp_inode_no == -1) {
+        printk("VFS: umount target %s not found\n", mount_path);
+        return -1;
+    }
+
+    // search_file 可能带我们钻进了子分区
+    struct inode* target_inode = inode_open(get_part_by_rdev(record.i_dev), mp_inode_no);
+    
+    struct inode* mp_inode = target_inode;
+
+    // search_file 可能会带我进入到子分区的根目录中，这个子分区的根目录肯定不是挂载点
+    // 挂载点是例如 mnt/sdb1 的 sdb1，而不是sdb1的根
+    // 因此如果是这种情况，我们需要回溯回去
+    if (mp_inode->i_mount == NULL && mp_inode->i_no == get_part_by_rdev(mp_inode->i_dev)->sb->s_root_ino && mp_inode->i_mount_at != NULL) {
+        // 记录子分区的根
+        struct inode* child_root = mp_inode;
+        // 拿到真正的挂载点（在主分区里那个目录）
+        mp_inode = child_root->i_mount_at;
+        
+        // 增加挂载点的引用，关闭刚才误入的子分区根
+        inode_open(get_part_by_rdev(mp_inode->i_dev), mp_inode->i_no);
+        inode_close(child_root);
+    }
+
+    inode_close(record.parent_inode);
+
+    // 现在再检查，mp_inode 就是主分区里的那个目录了
+    if (mp_inode->i_mount == NULL) {
+        printk("VFS: %s is not a mount point\n", mount_path);
+        inode_close(mp_inode);
+        return -1;
+    }
+
+    // 获取被挂载分区的根 inode 和超级块
+    struct inode* child_root = mp_inode->i_mount;
+    struct super_block* sb = child_root->i_sb;
+    struct partition* part = get_part_by_rdev(sb->s_dev);
+
+    // 安全性检查, 检查设备是否繁忙
+    // child_root 被两个地方引用：sb->s_root_inode 和 mp_inode->i_mount
+    // 此外，inode_open 还会增加引用。
+    // 如果 i_open_cnt > 1 说明有进程 PWD 在这或文件打开着
+    // 如果等于 1，说明只有 sb 持有，可以释放
+    if (child_root->i_open_cnts > 1) {
+        printk("VFS: Device %x is busy, open_cnt is %x. Can't umount!\n", sb->s_dev, child_root->i_open_cnts);
+        inode_close(mp_inode);
+        return -1;
+    }
+
+    printk("VFS: start unmounting %s...\n", mount_path);
+
+    // 拆除隧道（断开联系）
+    mp_inode->i_mount = NULL; // 断开向下隧道
+    child_root->i_mount_at = NULL; // 断开向上隧道
+
+    // 释放文件系统特定资源
+    // 释放位图等内存缓冲区（这些是在 sifs_read_super 中分配的）
+    if (sb->sifs_info.block_bitmap.bits) {
+        kfree(sb->sifs_info.block_bitmap.bits);
+    }
+    if (sb->sifs_info.inode_bitmap.bits) {
+        kfree(sb->sifs_info.inode_bitmap.bits);
+    }
+
+    // 关闭子分区的根 inode（彻底释放出内存）
+    // 这一步会触发 inode_close 里的同步逻辑，将其写回磁盘
+    inode_close(child_root);
+
+    // 销毁超级块
+    kfree(sb);
+    part->sb = NULL; // 清除分区与超级块的绑定关系
+
+    // 释放挂载点 inode 的引用，对应本函数开头的 inode_open
+    // 在这之后，mp_inode 可能依然被 mount 时的 inode_open 锁定在内存中
+    // 我们在 mount 中没有执行 inode_close(mp_inode)，主要是为了维持上下通道稳定
+    // 所以这里需要执行两次 close 来抵消引用，或者确保 mount 逻辑与 umount 对称。
+    inode_close(mp_inode); 
+    
+    inode_close(mp_inode); 
+
+    printk("VFS: unmount %s done.\n", mount_path);
+    return 0;
 }
 
 // 创建特殊文件（字符/块设备/FIFO）
