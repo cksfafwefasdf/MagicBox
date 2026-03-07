@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    // 3. 计算布局 (与内核 sifs_format 逻辑严格对齐)
+    // 计算布局 (与内核 sifs_format 逻辑严格对齐)
     uint32_t boot_sector_sects = 1;
     uint32_t super_block_sects = 1;
     uint32_t inode_bitmap_sects = DIV_ROUND_UP(MAX_FILES_PER_PART, BITS_PER_SECTOR);
@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
     uint32_t block_bitmap_bit_len = free_sects - block_bitmap_sects;
     block_bitmap_sects = DIV_ROUND_UP(block_bitmap_bit_len, BITS_PER_SECTOR);
 
-    // 4. 构造超级块
+    // 构造超级块
     struct sifs_super_block sb;
     memset(&sb, 0, sizeof(sb));
     sb.magic = SIFS_FS_MAGIC_NUMBER;
@@ -68,12 +68,10 @@ int main(int argc, char** argv) {
     sb.root_inode_no = 0;
     sb.dir_entry_size = sizeof(struct sifs_dir_entry);
 
-    // 5. 准备内存缓冲区 (取最大元数据块的大小)
+    // 准备内存缓冲区 (取最大元数据块的大小)
     uint32_t max_sects = sb.inode_table_sects > sb.block_bitmap_sects ? sb.inode_table_sects : sb.block_bitmap_sects;
     uint8_t* buf = (uint8_t*)malloc(max_sects * SECTOR_SIZE);
     if (!buf) { printf("Error: Out of memory\n"); return -1; }
-
-    // --- 开始写入 ---
 
     // 写入超级块
     lseek(fd, 1 * SECTOR_SIZE, SEEK_SET);
