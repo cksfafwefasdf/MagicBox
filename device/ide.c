@@ -103,12 +103,12 @@ static bool partition_info(struct dlist_elem* pelem,void* arg UNUSED);
 
 
 // 定义 IDE 块设备的 file_operations
-struct file_operations ide_dev_fops = {
-    .read = ide_dev_read,
-    .write = ide_dev_write,
-    .open = NULL,  // 块设备 open 通常在 sys_open 统一处理
-    .release = NULL
-};
+// struct file_operations ide_dev_fops = {
+//     .read = ide_dev_read,
+//     .write = ide_dev_write,
+//     .open = NULL,  // 块设备 open 通常在 sys_open 统一处理
+//     .release = NULL
+// };
 
 static void ide_set_multiple_mode(struct disk* hd, uint8_t sec_per_block) {
     select_disk(hd);

@@ -82,16 +82,103 @@ struct path_search_record{
     uint32_t i_dev; // 所在设备号
 };
 
-// 用于 vfs，抽象文件操作
-struct file_operations {
-    int32_t (*read) (struct file* file, void* buf, uint32_t count);
-    int32_t (*write)(struct file* file, void* buf, uint32_t count);
-    int32_t (*open) (struct inode* inode, struct file* file);
-    int32_t (*release)(struct file* file);
-    // 预留 ioctl 来设置 TTY 属性 
-    int32_t (*ioctl)(struct file* file, uint32_t cmd, unsigned long arg);
+struct statfs {
+    long f_type; // 文件系统类型（比如 SIFS 的魔数）
+    long f_bsize; // 最优传输块大小（通常等于扇区大小，如 512 或 4096）
+    long f_blocks; // 分区总共有多少个块（总容量）
+    long f_bfree; // 剩余空闲块数
+    long f_bavail; // 普通用户可用的空闲块（单用户系统中，通常 f_bavail = f_bfree）
+    long f_files; // 分区总共有多少个 Inode 节点（总文件数上限）
+    long f_ffree; // 剩余可用的 Inode 节点数
+    long f_namelen; // 最大文件名长度
 };
 
+// 用于 vfs，抽象文件操作
+// 不同的文件类型（例如块设备文件、字符设备文件、普通文件、目录文件、pipe文件、fifo文件）会对应不同的操作集
+struct file_operations {
+	int (*lseek) (struct inode *, struct file *, uint32_t, int);
+	int (*read) (struct inode *, struct file *, char *, int);
+	int (*write) (struct inode *, struct file *, char *, int);
+	int (*readdir) (struct inode *, struct file *, struct dirent *, int);
+	// int (*select) (struct inode *, struct file *, int, select_table *);
+	int (*ioctl) (struct inode *, struct file *, unsigned int, unsigned long);
+	// int (*mmap) (struct inode *, struct file *, unsigned long, size_t, int, unsigned long);
+	int (*open) (struct inode *, struct file *);
+	void (*release) (struct inode *, struct file *);
+	// int (*fsync) (struct inode *, struct file *); // 将内存中的缓存强制同步回磁盘
+};
+
+// 不同文件系统有不同的inode操作集
+// 同意文件系统，根据不同的inode类型，分别填充这个inode操作集合里的不同函数
+// 例如 dir inode 会有 lookup, create, mkdir, rmdir, unlink 等
+// 设备 inode 通常几乎全是 NULL，它只是一个占位符。
+// 当 VFS 看到这个 Inode 时，它知道这不需要文件系统去做什么元数据操作，只需要去调用它的 i_fop（指向 TTY 或磁盘驱动）就可以了。
+// 普通文件 inode 它负责管理文件本身的数据块。一般包含函数：truncate (截断文件), bmap (逻辑块转物理块)。
+// 普通文件inode 没有 lookup/mkdir，因为普通文件不是容器，VFS 根本不会对它调用这些函数
+// 总的来说，同一文件系统主要分成 设备inode，目录inode和普通文件inode三种
+struct inode_operations {
+	struct file_operations * default_file_ops;
+	// 创建普通文件
+	int (*create) (struct inode *,const char *,int,int,struct inode **);
+	// 在给定的目录中，寻找名字为name的子项
+	// VFS 在解析路径 /a/b/c 时，会先拿到 / 的 inode，然后调用 root_inode->i_op->lookup(root, "a", ...) 得到 a 的 inode，如此递归。
+	int (*lookup) (struct inode *,const char *,int,struct inode **); 
+	// 硬链接
+	int (*link) (struct inode *,struct inode *,const char *,int); 
+	// 删除文件
+	int (*unlink) (struct inode *,const char *,int);
+	// 符号链接
+	// int (*symlink) (struct inode *,const char *,int,const char *);
+	// 创建子目录文件
+	int (*mkdir) (struct inode *,const char *,int,int);
+	int (*rmdir) (struct inode *,const char *,int);
+	// 创建设备节点
+	int (*mknod) (struct inode *,const char *,int,int,int);
+	// 将一个文件从 A 路径改为 B 路径。
+	// 如果是在同一个目录下改名，只需修改目录项。
+	// 如果是跨目录移动（比如把 /a/f1 移动到 /b/f2），则需要从 A 目录删除项，在 B 目录增加项。它是原子性的保证。
+	// 参数里有两个 inode。第一个是源目录，第二个是目标目录。
+	int (*rename) (struct inode *,const char *,int,struct inode *,const char *,int);
+	// 用户态调用（如 readlink 命令）。它把符号链接文件里的“内容”（即指向的路径字符串）读出来。
+	// int (*readlink) (struct inode *,char *,int);
+	// 路径解析时调用。
+	// 当访问 /mnt/link_to_a 时，路径解析引擎发现这是一个软链接，就会调用 follow_link。
+	// 它会告诉 VFS 别停下，继续去搜这个软链接指向的那个目标 inode
+	// int (*follow_link) (struct inode *,struct inode *,int,int,struct inode **);
+	// 块映射, 传入文件的逻辑块号（例如：文件的第 0, 1, 2 个块），返回该块在磁盘上的物理扇区号（LBA）。
+	// 最典型的是 Swap（交换分区）。
+	// 当内核需要把内存页换出到文件时，它不能通过文件系统层去写（那太慢且容易死锁）
+	// 它会通过 bmap 预先查好所有物理块位置，直接用驱动写裸扇区。
+	int (*bmap) (struct inode *,int);
+	// 截断文件（比如 open 时带了 O_TRUNC）。
+	// 它负责释放文件占用的磁盘块，并把 i_size 置为 0。
+	// void (*truncate) (struct inode *);
+	// 检查当前进程是否有权对该 inode 执行特定的操作（读、写、执行）
+	// int (*permission) (struct inode *, int);
+};
+
+// 在我们的实现中，为了简单起见，一个文件系统只会对应一个 super_operations
+// 在同一文件系统下不会和inode一样再进一步拆分！
+struct super_operations {
+	// 根据 inode->i_no，去磁盘上找到对应的扇区，读取原始数据并填充 struct inode 的其他字段（如大小、块映射、时间等）。
+	// 在linux中，当调用 iget(sb, nr) 时，如果内存缓存里没有，VFS 就会触发这个调用。
+	void (*read_inode) (struct inode *);
+	// 属性变更通知。当文件的权限（Chmod）或所有者（Chown）发生变化时，VFS 会通过这个函数通知文件系统，这块元数据变了，准备一下同步操作
+	// int (*notify_change) (int flags, struct inode *);
+	// 同步元数据。把内存中被修改过的 inode 属性（比如刚 write 完，文件变大了）写回磁盘。
+	// 这就是当前系统中一直手动调用的 inode_sync 的规范写法。
+	void (*write_inode) (struct inode *);
+	// 释放。当 Inode 的引用计数降为 0，准备从内存中销毁时调用。可以在这里做一些收尾工作。
+	void (*put_inode) (struct inode *);
+	// 卸载（Umount）时调用。负责释放该文件系统占用的所有内核资源，关闭磁盘驱动
+	void (*put_super) (struct super_block *);
+	// 同步超级块。比如 SIFS 里的位图（Bitmap）变了、空闲块数变了，这个函数负责把内存里的 super_block 结构写回磁盘的第一号扇区（或者对应的位置）。
+	void (*write_super) (struct super_block *);
+	// 查询统计信息。比如用户输入 df -h 命令时，VFS 就会调用这个函数来查询，这个分区总共多大？还剩多少空闲块？Inode 用了多少？
+	void (*statfs) (struct super_block *, struct statfs *);
+	// 重新挂载。比如原本是只读挂载（Read-Only），现在想改成读写（Read-Write），这个函数负责修改挂载标志位而不需要重新解析整个分区。
+	// int (*remount_fs) (struct super_block *, int *, char *);
+};
 
 struct super_block {
     // VFS 通用字段

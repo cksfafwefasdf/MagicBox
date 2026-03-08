@@ -15,12 +15,12 @@
 
 struct tty_struct console_tty;
 
-struct file_operations tty_dev_fops = {
-    .read = tty_dev_read,
-    .write = tty_dev_write,
-    .open = NULL,
-    .release = NULL
-};
+// struct file_operations tty_dev_fops = {
+//     .read = tty_dev_read,
+//     .write = tty_dev_write,
+//     .open = NULL,
+//     .release = NULL
+// };
 
 int32_t tty_write(char* buf, uint32_t count) {
     uint32_t i = 0;
@@ -180,7 +180,7 @@ void tty_init() {
 
     lock_init(&console_tty.tty_lock);
 
-    register_char_dev(TTY_MAJOR, &tty_dev_fops, "tty");
+    // register_char_dev(TTY_MAJOR, &tty_dev_fops, "tty");
 }
 
 // --------------- 以下的代码用于 tty 设备适配虚拟文件系统 ---------------
@@ -197,5 +197,5 @@ int32_t tty_dev_write(struct file* file, void* buf, uint32_t count) {
 
 // 初始化：将 TTY 注册为 0 号字符设备
 void tty_dev_init() {
-    register_char_dev(0, &tty_dev_fops, "tty");
+    // register_char_dev(0, &tty_dev_fops, "tty");
 }

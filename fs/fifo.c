@@ -64,10 +64,10 @@ int32_t fifo_write(struct file* file, void* buf, uint32_t count){
 	return pipe_write(file,buf,count);
 }
 
-struct file_operations fifo_f_op = {
-	fifo_read, // read
-	fifo_write, // write
-	fifo_open, // open
-	fifo_release, // close
-	NULL // ioctl
-};
+// struct file_operations fifo_f_op = {
+// 	fifo_read, // read
+// 	fifo_write, // write
+// 	fifo_open, // open
+// 	fifo_release, // close
+// 	NULL // ioctl
+// };

@@ -9,12 +9,12 @@
 static struct lock console_lock;
 
 // Console 通常只负责输出，读可以指向 TTY 的读或者返回 0
-struct file_operations console_dev_fops = {
-    .read = NULL, 
-    .write = console_dev_write,
-    .open = NULL,
-    .release = NULL
-};
+// struct file_operations console_dev_fops = {
+//     .read = NULL, 
+//     .write = console_dev_write,
+//     .open = NULL,
+//     .release = NULL
+// };
 
 // 适配 VFS 的写函数
 int32_t console_dev_write(struct file* file, void* buf, uint32_t count) {
@@ -30,7 +30,7 @@ int32_t console_dev_write(struct file* file, void* buf, uint32_t count) {
 
 void console_init(void){
 	lock_init(&console_lock);
-	register_char_dev(CONSOLE_MAJOR, &console_dev_fops, "console");
+	// register_char_dev(CONSOLE_MAJOR, &console_dev_fops, "console");
 }
 
 void console_acquire(void){
