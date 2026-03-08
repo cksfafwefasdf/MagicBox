@@ -55,6 +55,8 @@
 
 - `open()`, `read()`, `write()`, `close()`: POSIX-like file operations.
 
+- `mount()` / `umount()`: Implements UNIX-like VFS mounting/unmounting, establishing "tunnels" between parent directories and child partition roots.
+
 - `pipe()`: Creates Linux-style anonymous pipes for parent-child communication.
 - `mkfifo()`: Creates persistent named pipe nodes in the file system for unrelated process IPC.
 - `mknod()`: Supports the creation of special files or device nodes (e.g., in `/dev`).
@@ -73,9 +75,12 @@
 - `malloc()` / `free()`: User-space heap management based on the kernel's Arena allocator.
 - `brk()`: (Stub) A placeholder for future fine-grained heap boundary control.
 
-**Storage & Recovery (Experimental):**
+**Storage & Recovery :**
 
-- `readraw()` & `mount()`: Direct disk access and partition mounting.
+- ~~readraw()~~ : *(Deprecated)* Previously used for raw sector access; now superseded by the unified device-file interface, aligning with the "Everything is a File" philosophy.
+- `open("/dev/...", ...)`: Replaces legacy disk access. All block devices (e.g., `sda`, `sdb1`) are abstracted as files, enabling user-space tools like `mkfs` and `hexdump` to operate via standard I/O calls.  
+  - *Example*: `open("/dev/sda", O_RDONLY)` now provides raw disk access, enabling user-space tools like `mkfs` and `hexdump` to operate via standard POSIX I/O without extra kernel support.
+
 
 
 
