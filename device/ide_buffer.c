@@ -132,7 +132,7 @@ static struct buffer_head* getblk(struct disk* dev, uint32_t lba){
     // 但是也正因为如此，我们在这里需要对这样的缓冲块进行一个额外处理
     // 先将其从hash表中移除出来，然后再重新为其在hash表中分配新位置
     if(false != bh->b_valid){
-        hash_remove_elem(&global_ide_buffer.hash_table,&bh->hash_tag);
+        hash_remove(&global_ide_buffer.hash_table,&bh->hash_tag);
     }
     bh->b_blocknr = lba;
     bh->b_dev = dev; 

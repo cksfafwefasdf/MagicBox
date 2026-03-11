@@ -88,3 +88,19 @@ uint32_t strchrs(const char* str,uint8_t ch){
 	}	
 	return cnt;
 }
+
+char* strncat(char* dst_, const char* src_, uint32_t n) {
+    assert(dst_ != NULL && src_ != NULL);
+    char* str = dst_;
+    while (*str++);
+    --str; // 移到 \0 的位置
+    
+    // 拷贝 n 个字符
+    uint32_t i = 0;
+    while (i < n && *src_ != '\0') {
+        *str++ = *src_++;
+        i++;
+    }
+    *str = '\0'; // 强制封口
+    return dst_;
+}

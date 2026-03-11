@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fs_types.h>
 #include <file_table.h>
+#include <inode.h>
 
 int32_t sys_pipe(int32_t pipefd[2]) {
 
@@ -175,6 +176,8 @@ int32_t pipe_write(struct file* file, const void* buf, uint32_t count) {
     return bytes_written;
 }
 
+// release 函数只负责状态的维护，不负责缓冲区的释放
+// 为保证资源管理的一致性，缓冲区的回收逻辑放到 inode_close 中进行
 int32_t pipe_release(struct file* f) {
     struct inode* inode = f->fd_inode;
     struct pipe_inode_info* pii = (struct pipe_inode_info*)&inode->pipe_i;
@@ -198,6 +201,9 @@ int32_t pipe_release(struct file* f) {
     if (p->queue.consumer != NULL) {
         ioq_wakeup(&p->queue.consumer);
     }
+
+    // release 函数只负责状态的维护，不负责缓冲区的释放
+    // 为保证资源管理的一致性，缓冲区的回收逻辑放到 inode_close 中进行
 
     return 0;
 }

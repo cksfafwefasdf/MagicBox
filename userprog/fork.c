@@ -108,8 +108,6 @@ static void update_f_cnts(struct task_struct* thread) {
     }
 }
 
-uint32_t test_global_data = 0;
-
 static int32_t copy_process(struct task_struct* child_thread,struct task_struct* parent_thread){
 	
 	void* buf_page = get_kernel_pages(1);

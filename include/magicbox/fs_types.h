@@ -22,10 +22,9 @@
 // 匿名 inode 的 i_no
 #define ANONY_I_NO 0xffffffff
 
-enum bitmap_type{
-	INODE_BITMAP,
-	BLOCK_BITMAP
-};
+#define FS_REQUIRES_DEV      0x01 // 需要物理设备（如 SIFS, Ext2）
+#define FS_SINGLE            0x02 // 整个系统只有一个实例（如 procfs） 
+#define FS_NOMOUNT           0x04 // 不允许用户从外部挂载
 
 // 内存inode
 // VFS 直接操作的inode 对象
@@ -54,6 +53,8 @@ struct inode{
 	struct super_block* i_sb;      // 指向该 inode 所属分区的 VFS 超级块
     struct inode* i_mount;         // 向下隧道，如果我是挂载点(如 /mnt)，我指向被挂载分区的根 inode
     struct inode* i_mount_at;      // 向上隧道，如果我是被挂载分区的根，我指向父分区的挂载点 inode
+
+	struct inode_operations* i_op;
 
 	struct dlist_elem lru_tag; // 哈希表节点：用于根据 (i_dev, i_no) 快速找到 inode
     struct dlist_elem hash_tag;  // LRU节点：用于当缓冲区满时，决定踢掉哪个 inode
@@ -119,26 +120,26 @@ struct file_operations {
 struct inode_operations {
 	struct file_operations * default_file_ops;
 	// 创建普通文件
-	int (*create) (struct inode *,const char *,int,int,struct inode **);
+	int (*create) (struct inode *,char *,int,int);
 	// 在给定的目录中，寻找名字为name的子项
 	// VFS 在解析路径 /a/b/c 时，会先拿到 / 的 inode，然后调用 root_inode->i_op->lookup(root, "a", ...) 得到 a 的 inode，如此递归。
-	int (*lookup) (struct inode *,const char *,int,struct inode **); 
+	int (*lookup) (struct inode *,char *,int,struct inode **); 
 	// 硬链接
-	int (*link) (struct inode *,struct inode *,const char *,int); 
+	// int (*link) (struct inode *,struct inode *,const char *,int); 
 	// 删除文件
-	int (*unlink) (struct inode *,const char *,int);
+	int (*unlink) (struct inode *,char *,int);
 	// 符号链接
-	// int (*symlink) (struct inode *,const char *,int,const char *);
+	// int (*symlink) (struct inode *,char *,int,const char *);
 	// 创建子目录文件
-	int (*mkdir) (struct inode *,const char *,int,int);
-	int (*rmdir) (struct inode *,const char *,int);
+	int (*mkdir) (struct inode *,char *,int,int);
+	int (*rmdir) (struct inode *,char *,int);
 	// 创建设备节点
-	int (*mknod) (struct inode *,const char *,int,int,int);
+	int (*mknod) (struct inode *,char *,int,int,int);
 	// 将一个文件从 A 路径改为 B 路径。
 	// 如果是在同一个目录下改名，只需修改目录项。
 	// 如果是跨目录移动（比如把 /a/f1 移动到 /b/f2），则需要从 A 目录删除项，在 B 目录增加项。它是原子性的保证。
 	// 参数里有两个 inode。第一个是源目录，第二个是目标目录。
-	int (*rename) (struct inode *,const char *,int,struct inode *,const char *,int);
+	int (*rename) (struct inode *,char *,int,struct inode *,char *,int);
 	// 用户态调用（如 readlink 命令）。它把符号链接文件里的“内容”（即指向的路径字符串）读出来。
 	// int (*readlink) (struct inode *,char *,int);
 	// 路径解析时调用。
@@ -187,6 +188,8 @@ struct super_block {
     uint32_t s_root_ino; // 该超级块的根目录的 inode 的编号
 	uint32_t s_magic;
     struct inode* s_root_inode; // 指向该超级块的根目录的 inode
+
+	struct super_operations* s_op;
     
     // VFS 对不同文件系统打的补丁
     union {
@@ -198,8 +201,9 @@ struct super_block {
 // 用来定义超级块的填充操作
 // 主要用于填充 info 结构体
 struct file_system_type {
-	struct super_block *(*read_super) (struct super_block *, void *, int);
-	char *name;
-	int requires_dev;
+    char *name;
+    int flags; // 使用宏，如 FS_REQUIRES_DEV, 用于表示这个文件系统是否对应真实的设备，例如pipe文件系统就不对应真实的设备，他是内存文件系统
+    struct super_block *(*read_super) (struct super_block *, void *, int);
+    struct dlist_elem fs_elem; // 用于建立一个文件系统链表，以便于后续动态加载更多文件系统
 };
 #endif

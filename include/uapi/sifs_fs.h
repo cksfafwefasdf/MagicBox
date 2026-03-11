@@ -2,8 +2,8 @@
 #define __INCLUDE_UAPI_SIFS_FS_H
 
 #include <stdint.h>
-#include <sifs_inode.h>
 #include <unistd.h>
+#include <sifs_inode.h>
 
 /*
     该文件中定义的全是 sifs 对应的磁盘镜像

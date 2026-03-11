@@ -75,7 +75,7 @@ int32_t inode_register_to_cache(struct inode* inode){
             
             if (victim->i_open_cnts == 0) {
                 // 真正从系统中抹除这个 inode
-                hash_remove_elem(&inode_global_cache.hash_table, &victim->hash_tag);
+                hash_remove(&inode_global_cache.hash_table, &victim->hash_tag);
                 dlist_remove(&victim->lru_tag);
                 kfree(victim); 
                 break; // 腾出一个位置就行
@@ -85,6 +85,41 @@ int32_t inode_register_to_cache(struct inode* inode){
     }
     lock_release(&inode_global_cache.lock);
     return 0;
+}
+
+// 将 inode 的缓存强制从内存中驱逐
+void inode_evict(struct inode* inode) {
+    if (inode == NULL) return;
+
+    lock_acquire(&inode_global_cache.lock);
+#ifdef DEBUG_INODE_CACHE
+    PUTS("evict inode: ",inode);
+    PUTS("evict ino: ",inode->i_no);
+#endif
+   
+    // 从全局哈希表中移除
+    // 这样之后任何 inode_open 都会因为找不到而触发重新读盘（读到已删除状态）
+    // 最好用 hash_remove_elem，它是基于dlist_remove直接实现的
+    // 不依赖于 condition 函数，这样的话即使key损坏了（比如实现释放了这块区域的内存，之后再移除缓存）也不会出错
+    // 能用物理地址解决的决不要用逻辑标识解决，因为物理地址是唯一的！
+    hash_remove(&inode_global_cache.hash_table, &inode->hash_tag);
+    // 从 LRU 链表中移除
+    dlist_remove(&inode->lru_tag);
+    lock_release(&inode_global_cache.lock);
+
+    // 释放关联资源，主要针对fifo和pipe
+    // 只要指向的内存不为空就强制清除其下的内存
+    if (inode->i_type == FT_FIFO || inode->i_type == FT_PIPE) {
+        if (inode->pipe_i.base != 0) {
+            mfree_page(PF_KERNEL, (void*)inode->pipe_i.base, 1);
+            inode->pipe_i.base = 0;
+        }
+    }
+    // memset(inode,0,sizeof(struct inode));
+    // 彻底销毁内存对象
+    inode->hash_tag.prev = inode->hash_tag.next = NULL;
+    inode->lru_tag.prev = inode->lru_tag.next = NULL;
+    kfree(inode);
 }
 
 // load the inode from disk into memory
@@ -99,12 +134,23 @@ struct inode* inode_open(struct partition* part,uint32_t inode_no){
     de = hash_find(&inode_global_cache.hash_table, &ik);
     if (de != NULL) {
         inode_found = member_to_entry(struct inode, hash_tag, de);
+
+        // 如果这里崩了，说明你的缓存里可能存进了脏东西！
+        // 用于诊断缓存不一致的问题
+        ASSERT(inode_found->i_no == inode_no && inode_found->i_dev == part->i_rdev);
+
         inode_found->i_open_cnts++;
         // 无论 open_cnts 是多少，只要被访问，就更新它在 LRU 中的位置
         // 保证 LRU 队尾永远是最近最活跃的
         dlist_remove(&inode_found->lru_tag);
         dlist_push_back(&inode_global_cache.lru_list, &inode_found->lru_tag);
         lock_release(&inode_global_cache.lock);
+
+#ifdef DEBUG_INODE_CACHE
+        PUTS("cache hit ino: ",inode_found->i_no);
+        PUTS("cache hit inode: ",inode_found);
+#endif
+
         return inode_found;
     }
     lock_release(&inode_global_cache.lock);
@@ -121,10 +167,10 @@ struct inode* inode_open(struct partition* part,uint32_t inode_no){
     new_inode->i_mount = NULL; // 默认不是挂载点
     new_inode->i_mount_at = NULL;// 默认不是另一个分区的根
 
-	// 未命中，从磁盘读取，由于 sifs_read_inode 会用到 i_dev 和 i_no
+	// 未命中，从磁盘读取，由于 read_inode 会用到 i_dev 和 i_no
     // 因此此处要先填充
-    if(part->sb->s_magic == SIFS_FS_MAGIC_NUMBER){
-        sifs_read_inode(part, new_inode);
+    if(part->sb->s_op != NULL){
+        part->sb->s_op->read_inode(new_inode);
     }else{
         PANIC("Unknown file system!");
     }
@@ -166,7 +212,7 @@ struct inode* inode_open(struct partition* part,uint32_t inode_no){
 void inode_close(struct inode* inode){
 	if (inode == NULL) return;
     lock_acquire(&inode_global_cache.lock); // 必须拿锁，保护全局缓存一致性
-	if(--inode->i_open_cnts==0){
+	if(--inode->i_open_cnts<=0){
 
 		// 对 FIFO 和 PIPE 的缓冲区进行回收
 		// 让缓冲区随inode的消亡同时消亡，保证强一致性
@@ -189,4 +235,36 @@ void inode_close(struct inode* inode){
 		// }
 	}
     lock_release(&inode_global_cache.lock);
+}
+
+// 创建匿名 inode
+// 只在内存中创建，不去操作磁盘，主要是匿名 pipe 来用
+struct inode* make_anonymous_inode() {
+    struct inode* inode = (struct inode*)kmalloc(sizeof(struct inode));
+    if (inode == NULL) return NULL;
+
+    memset(inode, 0, sizeof(struct inode));
+
+    // 核心身份标识
+    inode->i_no = ANONY_I_NO; // 使用-1标志匿名inode
+    inode->i_dev = -1; // 使用 -1 （全1）标志其没有存储设备
+    inode->i_type = FT_PIPE;
+    
+    // 初始化引用计数：由 sys_pipe 进一步管理
+    inode->i_open_cnts = 0; 
+
+    // 注意！不要执行 dlist_pusb_back(&open_inodes, &inode->inode_tag) 
+    // 匿名管道永远都不需要被搜索
+
+    return inode;
+}
+
+// 该函数的作用主要是将swap_page函数从具体的文件系统中解耦
+int32_t inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_t count) {
+    if(inode->i_sb->s_magic == SIFS_FS_MAGIC_NUMBER){
+        return sifs_inode_read_data(inode,offset,buf,count);
+    }else{
+        PANIC("unkonwn fs type!");
+    }
+    return -1;
 }

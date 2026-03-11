@@ -8,13 +8,14 @@
 #include <fs.h>
 #include <ide_buffer.h>
 #include <sifs_sb.h>
+#include <sifs_fs.h>
 #include <inode.h>
 
 void open_root_dir(struct partition* part) {
     root_dir_inode = inode_open(part, part->sb->s_root_ino);
 }
 
-void close_root_dir(struct partition* part) {
+void close_root_dir() {
     // 确保根目录确实存在且被打开了
     if (root_dir_inode != NULL) {
         // 调用 inode_close，它会处理引用计数和磁盘同步
@@ -22,7 +23,7 @@ void close_root_dir(struct partition* part) {
     }
 }
 
-bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, const char* name, struct sifs_dir_entry* de) {
+bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, const char* name,int len, struct sifs_dir_entry* de) {
     // 计算所有可能的块地址（包括一级间接块）
     uint32_t block_cnt = DIRECT_INDEX_BLOCK + (SECTOR_SIZE / ADDR_BYTES_32BIT);
     uint32_t* all_blocks_addr = (uint32_t*)kmalloc(block_cnt * ADDR_BYTES_32BIT);
@@ -67,13 +68,21 @@ bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, cons
         struct sifs_dir_entry* p_de = (struct sifs_dir_entry*)buf;
 
         uint32_t dir_entry_idx = 0;
+        // 这里的 f_type != FT_UNKNOWN 是为了跳过已删除的条目
+
         while (dir_entry_idx < dir_entry_cnt) {
-            // printk("p_de name:%s\n",p_de->filename);
             // 这里的 f_type != FT_UNKNOWN 是为了跳过已删除的条目
-            if (name[0] != '\0' && p_de->f_type != FT_UNKNOWN && !strcmp(p_de->filename, name)) {
+            // 比较内容的前 len 个字节是否一致
+            // 用于处理当要检查的文件是 /bin/dir/fi 字符串中 bin 目录的 dir 目录项时
+            // 这个 dir 字符串的下一个字符不是 '\0'，因此不好用strcmp直接比较
+            // 要用mem_cmp
+            // strlen(p_de->filename) == (uint32_t)len 用于检查磁盘上的真实目录项的名称长度是否也是len
+            // 防止出现我们要查找的目录项其实是bin目录项，但是匹配到的却是 binary 目录项的情况
+            if (p_de->f_type != FT_UNKNOWN && 
+                strlen(p_de->filename) == (uint32_t)len &&
+                memcmp(p_de->filename, name, len) == 0) {
 
                 memcpy(de, p_de, dir_entry_size);
-
                 kfree(buf);
                 kfree(all_blocks_addr);
                 return true;
@@ -90,15 +99,23 @@ bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, cons
 }
 
 // 这里的 p_de 必须指向从磁盘读出来的 sector 缓冲区，所以使用针对文件系统特化的 sifs_dir_entry
-void sifs_create_dir_entry(char* filename, uint32_t inode_no, enum file_types file_type, struct sifs_dir_entry* p_de) {
-    ASSERT(strlen(filename) <= MAX_FILE_NAME_LEN);
+void sifs_create_dir_entry (char* filename, uint32_t len, uint32_t inode_no, enum file_types file_type, struct sifs_dir_entry* p_de) {
+    // 保护性检查
+    ASSERT(len <= MAX_FILE_NAME_LEN);
 
-    // 清除旧数据，确保 filename 后面到结构体结束的部分全是 0
+    // 清除旧数据，保证结构体干净
     memset(p_de, 0, sizeof(struct sifs_dir_entry));
 
-    memcpy(p_de->filename, filename, strlen(filename));
+    // 使用传入的 len 进行拷贝，而不是 strlen
+    memcpy(p_de->filename, filename, len);
+    
     p_de->i_no = inode_no;
     p_de->f_type = file_type;
+    
+    // 显式确保磁盘结构体里的文件名是 \0 结尾
+    if (len < MAX_FILE_NAME_LEN) {
+        p_de->filename[len] = '\0';
+    }
 }
 
 bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de, void* io_buf) {
@@ -113,7 +130,6 @@ bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de
         PUTS("list: ",pinode);
     }
 #endif
-    
 
     uint32_t dir_entry_size = part->sb->sifs_info.sb_raw.dir_entry_size;
     uint32_t dir_entrys_per_sec = (SECTOR_SIZE / dir_entry_size);
@@ -304,8 +320,8 @@ bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, u
         // i_size 标记的是该目录文件目前所达到的最大逻辑偏移量。
         // 他只增不减，这是为了便于处理空洞，具体原因可以阅读i_size字段处的解释
         // parent_inode->i_size -= dir_entry_size;
-        memset(io_buf, 0, SECTOR_SIZE * 2);
-        inode_sync(part, parent_inode, io_buf);
+        // memset(io_buf, 0, SECTOR_SIZE * 2);
+        parent_inode->i_sb->s_op->write_inode(parent_inode);
 
         return true;
     }
@@ -457,7 +473,7 @@ int32_t sifs_dir_remove(struct inode* parent_inode, struct inode* child_inode) {
 
     // 彻底回收子目录 Inode 及它占用的第 0 个数据块
     // inode_release 内部会根据 i_sectors 回收所有已分配的数据块位图
-    inode_release(part, child_inode->i_no);
+    sifs_inode_release(part, child_inode->i_no);
 
     kfree(io_buf);
     return 0;

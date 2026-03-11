@@ -28,12 +28,11 @@ struct sifs_inode_info{
     };
 };
 
-extern void inode_init(struct partition* part, uint32_t inode_no,struct inode* new_inode,enum file_types ft);
-extern void inode_sync(struct partition* part,struct inode* inode,void* io_buf);
-extern void inode_release(struct partition* part,uint32_t inode_no);
-extern void inode_delete(struct partition* part,uint32_t inode_no,void* io_buf);
-extern struct inode* make_anonymous_inode(void);
-extern int32_t inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_t count);
-extern void sifs_read_inode(struct partition* part, struct inode* inode);
+extern int32_t sifs_inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_t count);
+extern void sifs_inode_release(struct partition* part,uint32_t inode_no);
 
+extern struct inode_operations sifs_block_inode_operations;
+extern struct inode_operations sifs_char_inode_operations;
+extern struct inode_operations sifs_file_inode_operations;
+extern struct inode_operations sifs_dir_inode_operations;
 #endif

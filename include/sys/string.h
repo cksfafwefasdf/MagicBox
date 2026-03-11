@@ -22,4 +22,6 @@ extern char* strrchr(const char* str,const uint8_t ch);
 extern char* strcat(char* dst_,const char* src_);
 // find how many times ch appears in str
 extern uint32_t strchrs(const char* str,uint8_t ch);
+// only concatenate n characters
+extern char* strncat(char* dst_, const char* src_, uint32_t n);
 #endif

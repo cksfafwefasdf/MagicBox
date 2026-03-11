@@ -23,8 +23,7 @@ struct hashtable{
 };
 
 extern void hash_free(struct hashtable *hash); 
-extern void hash_remove_elem(struct hashtable *hash, struct dlist_elem* pelem);
-extern void hash_remove(struct hashtable *hash, void *arg);
+extern void hash_remove(struct hashtable *hash, struct dlist_elem* pelem);
 extern void hash_insert(struct hashtable *hash, void *arg, struct dlist_elem* pelem);
 extern struct dlist_elem* hash_find(struct hashtable *hash, void *arg);
 extern void hash_init(struct hashtable *hash,uint32_t bucket_nr, hash_callback hash_func, func_condition condition);

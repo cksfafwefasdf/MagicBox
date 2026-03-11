@@ -43,23 +43,13 @@ void hash_insert(struct hashtable *hash, void *arg, struct dlist_elem* pelem){
 	hash->elem_nr++;
 }
 
-void hash_remove(struct hashtable *hash, void *arg){
-	uint32_t bucket_idx = get_bucket(hash,arg);
-	struct dlist_elem* felem = dlist_traversal(&hash->buckets[bucket_idx],hash->condition,arg);
-	if(NULL==felem) return;
-	dlist_remove(felem);
-	hash->elem_nr--;
-}
-
-/* O(1) 版本的删除：直接剥离节点，不需要 Key，也不需要重新计算哈希 */
-void hash_remove_elem(struct hashtable *hash,struct dlist_elem* pelem) {
+//  O(1) 版本的删除：直接剥离节点，不需要 Key，也不需要重新计算哈希
+void hash_remove(struct hashtable *hash,struct dlist_elem* pelem) {
     if (pelem != NULL) {
         dlist_remove(pelem);
 		hash->elem_nr--;
     }
 }
-
-
 
 void hash_free(struct hashtable *hash){
 	if(NULL!=hash->buckets) kfree(hash->buckets);

@@ -937,6 +937,7 @@ void swap_page(uint32_t err_code,void* err_vaddr){
     // 直接杀掉，不要尝试查找 VMA：
     if (vaddr < 0x1000) {
         printk("CRITICAL: Null Pointer Access at %x! Terminating.\n", vaddr);
+        print_stacktrace();
         while(1);
     }
 

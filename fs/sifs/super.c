@@ -6,6 +6,53 @@
 #include <global.h>
 #include <stdio-kernel.h>
 #include <inode.h>
+#include <memory.h>
+#include <unistd.h>
+
+int32_t inode_bitmap_alloc(struct partition* part){
+	int32_t bit_idx = bitmap_scan(&part->sb->sifs_info.inode_bitmap,1);
+	if(bit_idx==-1){
+		return -1;
+	}
+	bitmap_set(&part->sb->sifs_info.inode_bitmap,bit_idx,1);
+	return bit_idx;
+}
+
+int32_t block_bitmap_alloc(struct partition* part){
+	int32_t bit_idx = bitmap_scan(&part->sb->sifs_info.block_bitmap,1);
+	if(bit_idx==-1){
+		return -1;
+	}
+	bitmap_set(&part->sb->sifs_info.block_bitmap,bit_idx,1);
+	return (part->sb->sifs_info.sb_raw.data_start_lba+bit_idx);
+}
+
+// write the sector containing the bit_idx of the in-memory bitmap back to disk
+void bitmap_sync(struct partition* part,uint32_t bit_idx,enum bitmap_type btmp_type){
+	// Since bit_idx is in bits, we first convert it to bytes by dividing by 8
+	uint32_t off_sec = bit_idx/(8*SECTOR_SIZE); 
+
+	uint32_t off_size = off_sec*SECTOR_SIZE;
+
+	uint32_t sec_lba;
+	uint8_t* bitmap_off;
+
+	switch (btmp_type){
+		case INODE_BITMAP:
+			sec_lba = part->sb->sifs_info.sb_raw.inode_bitmap_lba+off_sec;
+			bitmap_off = part->sb->sifs_info.inode_bitmap.bits+off_size;
+			break;
+		case BLOCK_BITMAP:
+			sec_lba = part->sb->sifs_info.sb_raw.block_bitmap_lba+off_sec;
+			bitmap_off = part->sb->sifs_info.block_bitmap.bits+off_size;
+			break;
+		default:
+			PANIC("unknown bitmap type!!!\n");
+			return;
+	}
+	partition_write(part,sec_lba,bitmap_off,1);
+}
+
 
 // logic formatlize 
 void sifs_format(struct partition* part){
@@ -130,7 +177,7 @@ void sifs_format(struct partition* part){
 	printk("%s format done\n",part->name);
 }
 
-struct super_block * sifs_read_super(struct super_block *sb, void *data, int silent) {
+static struct super_block * sifs_read_super(struct super_block *sb, void *data UNUSED, int silent) {
     // 通过逻辑设备号（s_dev）定位到分区结构体
     struct partition* part = get_part_by_rdev(sb->s_dev);
     
@@ -169,6 +216,9 @@ struct super_block * sifs_read_super(struct super_block *sb, void *data, int sil
     sb->sifs_info.inode_bitmap.bits = kmalloc(sb->sifs_info.inode_bitmap.btmp_bytes_len);
     partition_read(part, raw->inode_bitmap_lba, sb->sifs_info.inode_bitmap.bits, i_bm_sects);
 
+	// 挂载操作集
+	sb->s_op = &sifs_super_ops;
+
     // 建立根目录的 inode
     // 这一步会让 VFS 拥有入口点
     sb->s_root_inode = inode_open(part, sb->sifs_info.sb_raw.root_inode_no);
@@ -182,3 +232,184 @@ struct super_block * sifs_read_super(struct super_block *sb, void *data, int sil
 
     return sb;
 }
+
+// Calculate the logical sector offset and byte offset within the sector by inode number
+static void inode_locate(struct partition* part,uint32_t inode_no,struct inode_position* inode_pos){
+
+	ASSERT(inode_no<MAX_FILES_PER_PART);
+	uint32_t inode_table_lba = part->sb->sifs_info.sb_raw.inode_table_lba;
+
+	uint32_t inode_size = sizeof(struct sifs_inode);
+	// total bytes offset
+	uint32_t off_size = inode_no*inode_size;
+
+	uint32_t off_sec = off_size/SECTOR_SIZE;
+	// offset in sectors
+	uint32_t off_size_in_sec = off_size%SECTOR_SIZE;
+	// remaining sector space from off_size_in_sec
+	uint32_t left_in_sec = SECTOR_SIZE-off_size_in_sec;
+	// check if the inode spans two sectors
+	if(left_in_sec<inode_size){
+		inode_pos->two_sec = true;
+	}else{
+		inode_pos->two_sec = false;
+	}
+	inode_pos->sec_lba = inode_table_lba+off_sec;
+	inode_pos->off_size = off_size_in_sec;
+}
+
+// Write the inode back to disk
+// Sync the inode to disk
+// 这个函数是sifs写回inode的唯一入口
+// 在此之前，我们都只操作 inode 结构体上的 i_rdev, i_size, i_type
+// 而不是操作 sifs_inode 上的
+static void sifs_write_inode(struct inode *inode){
+	// printk("inode->i_dev:%x  part->i_rdev:%x \n",inode->i_dev,part->i_rdev);
+	struct partition* part = get_part_by_rdev(inode->i_dev);
+	ASSERT(inode->i_dev == part->i_rdev);
+	uint8_t inode_no = inode->i_no;
+	struct inode_position inode_pos;
+	inode_locate(part,inode_no,&inode_pos);
+
+	ASSERT(inode_pos.sec_lba<=(part->sec_cnt));
+
+	char* inode_buf = (char*)kmalloc(SECTOR_SIZE*2);
+	memset(inode_buf, 0, SECTOR_SIZE * 2);
+
+	if(inode_buf==NULL){
+		PANIC("sifs_write_inode: fail to kmalloc for inode_buf!");
+	}
+
+	uint8_t sec_to_write = inode_pos.two_sec?2:1;
+
+	partition_read(part,inode_pos.sec_lba,inode_buf,sec_to_write);
+	struct sifs_inode* si = (struct sifs_inode*)(inode_buf + inode_pos.off_size);
+	si->i_type = inode->i_type;
+	si->i_size = inode->i_size;
+	si->sii = inode->sifs_i;
+	// memcpy((inode_buf+inode_pos.off_size),&inode->sifs_i,sizeof(struct sifs_inode));
+	partition_write(part,inode_pos.sec_lba,inode_buf,sec_to_write);
+	// PUTS("write type: ",si->i_type);
+	kfree(inode_buf);
+}
+
+static void sifs_read_inode(struct inode* inode) {
+    struct inode_position inode_pos;
+	struct partition* part = get_part_by_rdev(inode->i_dev);
+    inode_locate(part, inode->i_no, &inode_pos);
+
+    uint8_t sec_to_read = inode_pos.two_sec ? 2 : 1;
+    char* inode_buf = (char*)kmalloc(SECTOR_SIZE * sec_to_read);
+    
+    partition_read(part, inode_pos.sec_lba, inode_buf, sec_to_read);
+    
+    struct sifs_inode* si = (struct sifs_inode*)(inode_buf + inode_pos.off_size);
+
+    // 填充通用字段
+    inode->i_size = si->i_size;
+    inode->i_type = si->i_type;
+    
+    // 填充 SIFS 特有字段
+    inode->sifs_i = si->sii;
+
+    if (inode->i_type == FT_CHAR_SPECIAL || inode->i_type == FT_BLOCK_SPECIAL) {
+        inode->i_rdev = si->sii.i_rdev; 
+    }
+
+	// 根据文件类型赋予操作集
+    switch (inode->i_type) {
+        case FT_REGULAR:
+            inode->i_op = &sifs_file_inode_operations;
+            break;
+        case FT_DIRECTORY:
+            inode->i_op = &sifs_dir_inode_operations;
+            break;
+        case FT_CHAR_SPECIAL:
+            inode->i_op = &sifs_char_inode_operations;
+            break;
+        case FT_BLOCK_SPECIAL:
+            inode->i_op = &sifs_block_inode_operations;
+            break;
+        default:
+            inode->i_op = NULL;
+            break;
+    }
+
+    kfree(inode_buf);
+}
+
+// 用于在umount时，释放和文件系统相关的内存资源
+// 例如FAT中是内存表，sifs中就是位图
+static void sifs_put_super(struct super_block *sb){
+    if (sb->sifs_info.block_bitmap.bits) {
+        kfree(sb->sifs_info.block_bitmap.bits);
+        sb->sifs_info.block_bitmap.bits = NULL;
+    }
+    if (sb->sifs_info.inode_bitmap.bits) {
+        kfree(sb->sifs_info.inode_bitmap.bits);
+        sb->sifs_info.inode_bitmap.bits = NULL;
+    }
+}
+
+static void sifs_statfs(struct super_block *sb, struct statfs *buf) {
+    struct sifs_super_block* sifs_sb = &sb->sifs_info.sb_raw;
+	struct partition* part = get_part_by_rdev(sb->s_dev);
+
+    // 填充静态信息
+    buf->f_type    = sifs_sb->magic;
+    buf->f_bsize   = SECTOR_SIZE;
+    buf->f_blocks  = sifs_sb->sec_cnt;
+    buf->f_namelen = MAX_PATH_LEN;
+
+    // 现场计算动态信息
+    uint32_t btmp_sects = sifs_sb->block_bitmap_sects;
+    uint8_t* btmp_buf = kmalloc(btmp_sects * SECTOR_SIZE);
+
+	if (btmp_buf == NULL) {
+        PANIC("sifs_statfs: fail to kmalloc for btmp_buf");
+    }
+	
+	partition_read(part, sifs_sb->block_bitmap_lba, btmp_buf, btmp_sects);
+
+	struct bitmap btmp;
+	btmp.bits = btmp_buf;
+	btmp.btmp_bytes_len = sifs_sb->sec_cnt / 8;
+
+	uint32_t free_sects = bitmap_count(&btmp);
+	buf->f_bfree  = free_sects;
+	buf->f_bavail = free_sects; // 单用户，全可用
+
+	kfree(btmp_buf);
+    
+}
+
+void sifs_inode_delete(struct partition* part,uint32_t inode_no,void* io_buf){
+	ASSERT(inode_no<MAX_FILES_PER_PART);
+	struct inode_position inode_pos;
+	inode_locate(part,inode_no,&inode_pos);
+	ASSERT(inode_pos.sec_lba<=(part->sec_cnt));
+
+	char* inode_buf = (char*)io_buf;
+	uint8_t sec_to_op = inode_pos.two_sec?2:1;
+
+	partition_read(part,inode_pos.sec_lba,inode_buf,sec_to_op);
+	memset((inode_buf+inode_pos.off_size),0,sizeof(struct sifs_inode));
+	partition_write(part,inode_pos.sec_lba,inode_buf,sec_to_op);
+	
+}
+
+// 这些函数全都是通过sifs_super_ops导出的，因此全部声明成static
+struct super_operations sifs_super_ops = {
+    .read_inode  = sifs_read_inode,
+    .write_inode = sifs_write_inode, 
+    .put_inode   = NULL, // 由于我们采用强制同步的方式，没有延迟写，因此直接在write_inode中就做完所有操作了，暂时不需要put_inode
+    .put_super   = sifs_put_super, // 对应释放位图内存的逻辑
+    .write_super = NULL, // 我们sifs的super_block里面的字段都是初始化时直接填好的，之后不会再变，因此我们不需要同步内存超级块的操作
+    .statfs      = sifs_statfs        // 对应 df 命令用的统计逻辑
+};
+
+struct file_system_type sifs_fs_type = {
+    .name = "sifs",
+    .flags = FS_REQUIRES_DEV, // sifs是有设备对应的，不是内存文件系统
+    .read_super = sifs_read_super 
+};
