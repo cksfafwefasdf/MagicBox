@@ -256,16 +256,7 @@ void ide_init(){
 		disk_size[d_idx] = cylinders*heads*sectors*SECTOR_SIZE;
 	}
 
-	register_block_dev(IDE_MAJOR, &ide_dev_fops, "ide_disk");
-	
 	printk("ide_init done\n");
-	// uint8_t* bf = kmalloc(512);
-	// ide_read(&channels[0].devices[0], 0, bf,1);
-	// int i=0;
-	// for(i=0;i<512;i++){
-	// 	printk("%x ",bf[i]);
-	// }
-
 }
 
 static void select_disk(struct disk* hd){
@@ -599,8 +590,8 @@ void sys_read_sectors(const char* hd_name, uint32_t lba, uint8_t* buf, uint32_t 
 // file VFS 文件结构
 // buf 用户缓冲区
 // count 读取字节数
-int32_t ide_dev_read(struct file* file, void* buf, uint32_t count) {
-    struct inode* inode = file->fd_inode;
+static int32_t ide_dev_read(struct inode* inode, struct file* file, char* buf, int count) {
+    ASSERT(file->fd_inode==inode);
 	printk("inode->i_rdev:%x\n",inode->i_rdev);
     struct partition* part = get_part_by_rdev(inode->i_rdev);
     uint32_t part_size_bytes = part->sec_cnt * SECTOR_SIZE;
@@ -667,8 +658,8 @@ int32_t ide_dev_read(struct file* file, void* buf, uint32_t count) {
 
 // 磁盘设备 VFS 读取接口
 // 参数含义同 ide_dev_read
-int32_t ide_dev_write(struct file* file, void* buf, uint32_t count) {
-    struct inode* inode = file->fd_inode;
+static int32_t ide_dev_write(struct inode* inode, struct file* file, char* buf, int count) {
+    ASSERT(file->fd_inode==inode);
     
     uint32_t minor = MINOR(inode->i_rdev);
     // 拦截整盘写操作 (sda, sdb 等)
@@ -735,9 +726,8 @@ int32_t ide_dev_write(struct file* file, void* buf, uint32_t count) {
     return (int32_t)count;
 }
 
-int32_t ide_ioctl(struct file* filp, uint32_t cmd, uint32_t arg) {
-    // 获取该设备文件对应的 inode
-    struct inode* inode = filp->fd_inode;
+static int32_t ide_ioctl(struct inode * inode, struct file* filp, uint32_t cmd, uint32_t arg) {
+    ASSERT(inode==filp->fd_inode);
     
     // 通过 inode 中存储的 i_rdev 找到对应的分区结构体
     // 使用 get_part_by_rdev 在磁盘列表中匹配主次设备号
@@ -765,6 +755,42 @@ int32_t ide_ioctl(struct file* filp, uint32_t cmd, uint32_t arg) {
     }
 }
 
+// offset 可能为负数！表示往前回拨！
+static int32_t ide_lseek(struct inode* inode, struct file* pf, int32_t offset, int whence) {
+
+	int32_t new_pos = 0;
+	int32_t file_size = inode->i_size;
+	enum file_types type = inode->i_type;
+
+	// 先计算指针位置
+	switch (whence){
+		case SEEK_SET:
+			new_pos = offset;
+			break;
+		case SEEK_CUR:
+			new_pos = (int32_t)pf->fd_pos + offset;
+			break;
+		case SEEK_END:
+			new_pos = file_size+offset;
+			break;
+		default:
+			printk("sys_lseek: error! unknown whence!\n");
+			return -1;
+	}
+
+    ASSERT(type == FT_BLOCK_SPECIAL);
+
+    // 块设备, 检查是否超过分区物理边界
+    struct partition* part = get_part_by_rdev(pf->fd_inode->i_rdev);
+    uint32_t part_size = part->sec_cnt * SECTOR_SIZE;
+    if (new_pos < 0 || (uint32_t)new_pos >= part_size) {
+        return -1;
+    }
+	
+	pf->fd_pos = new_pos;
+	return pf->fd_pos;
+}
+
 // 通过 vfs 逻辑设备号拿到 partition
 struct partition* get_part_by_rdev(uint32_t rdev) {
     struct dlist_elem* elem = partition_list.head.next;
@@ -778,3 +804,13 @@ struct partition* get_part_by_rdev(uint32_t rdev) {
 
     return NULL; 
 }
+
+struct file_operations ide_file_operations = {
+	.lseek 		= ide_lseek,
+	.read 		= ide_dev_read,
+	.write 		= ide_dev_write,
+	.readdir 	= NULL,
+	.ioctl 		= ide_ioctl,
+	.open 		= NULL,
+	.release 	= NULL
+};

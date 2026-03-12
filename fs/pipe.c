@@ -45,6 +45,8 @@ int32_t sys_pipe(int32_t pipefd[2]) {
     // file_table[gfd_r].f_type = FT_PIPE;
     file_table[gfd_r].f_count = 1;      // 初始由当前进程的一个局部 FD 指向
     
+    file_table[gfd_r].f_op = &pipe_file_operations;
+
     int32_t gfd_w = get_free_slot_in_global();
     if (gfd_w == -1) { 
 		// 释放已占用的 gfd_r 等资源 
@@ -54,6 +56,8 @@ int32_t sys_pipe(int32_t pipefd[2]) {
     file_table[gfd_w].fd_flag = O_WRONLY;
     // file_table[gfd_w].f_type = FT_PIPE;
     file_table[gfd_w].f_count = 1;      // 初始由当前进程的一个局部 FD 指向
+
+    file_table[gfd_w].f_op = &pipe_file_operations;
 
     // 映射到进程
     int32_t lfd_r = pcb_fd_install(gfd_r);
@@ -102,11 +106,11 @@ int32_t init_pipe(struct inode* inode) {
     return 0;
 }
 
-int32_t pipe_read(struct file* file, void* buf, uint32_t count) {
+int32_t pipe_read(struct inode* inode UNUSED, struct file* file, char* buf, int32_t count) {
     struct pipe_inode_info* pii = (struct pipe_inode_info*)&file->fd_inode->pipe_i;
     struct pipe* p = pii->base;
     char* buffer = buf;
-    uint32_t bytes_read = 0;
+    int32_t bytes_read = 0;
 
     while (bytes_read < count) {
 		// 每次检查前关中断，保护 ioq_empty 和 counts 的读取
@@ -138,11 +142,11 @@ int32_t pipe_read(struct file* file, void* buf, uint32_t count) {
     return bytes_read;
 }
 
-int32_t pipe_write(struct file* file, const void* buf, uint32_t count) {
+int32_t pipe_write(struct inode* inode UNUSED, struct file* file, char* buf, int32_t count) {
     struct pipe_inode_info* pii = (struct pipe_inode_info*)&file->fd_inode->pipe_i;
     struct pipe* p = pii->base;
     const char* buffer = buf;
-    uint32_t bytes_written = 0;
+    int32_t bytes_written = 0;
 
     while (bytes_written < count) {
         enum intr_status old_status = intr_disable();
@@ -178,8 +182,8 @@ int32_t pipe_write(struct file* file, const void* buf, uint32_t count) {
 
 // release 函数只负责状态的维护，不负责缓冲区的释放
 // 为保证资源管理的一致性，缓冲区的回收逻辑放到 inode_close 中进行
-int32_t pipe_release(struct file* f) {
-    struct inode* inode = f->fd_inode;
+int32_t pipe_release(struct inode* inode, struct file* f) {
+    ASSERT(inode==f->fd_inode);
     struct pipe_inode_info* pii = (struct pipe_inode_info*)&inode->pipe_i;
     struct pipe* p = pii->base;
     if(!p) return 0;
@@ -208,3 +212,15 @@ int32_t pipe_release(struct file* f) {
     return 0;
 }
 
+// 我们的 pipe 的写端和读端的 f_op 都是赋值的 pipe_file_operations
+// 在Linux里面是分开的，有一个 pipe_read_operations 和 pipe_write_operations
+// 读端write是NULL，写端read是NULL，我们先统一给这个，后期有时间再来优化
+struct file_operations pipe_file_operations = {
+	.lseek 		= NULL,
+	.read 		= pipe_read,
+	.write 		= pipe_write,
+	.readdir 	= NULL,
+	.ioctl 		= NULL,
+	.open 		= NULL, // 匿名管道在文件系统上没有实体，所以没有open
+	.release 	= pipe_release 
+};

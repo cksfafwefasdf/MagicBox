@@ -73,7 +73,7 @@ struct file{
 	// inode 的 i_open_cnts 表示有多少个全局 file结构指向同一个inode
 	// 通过多设置一个 f_count，将inode的生命周期管理和file的生命周期管理分开了
 	uint32_t f_count;     
-	struct file_operations* fops; // 指向该文件的具体操作集
+	struct file_operations* f_op; // 指向该文件的具体操作集
 };
 
 struct path_search_record{
@@ -97,15 +97,16 @@ struct statfs {
 // 用于 vfs，抽象文件操作
 // 不同的文件类型（例如块设备文件、字符设备文件、普通文件、目录文件、pipe文件、fifo文件）会对应不同的操作集
 struct file_operations {
-	int (*lseek) (struct inode *, struct file *, uint32_t, int);
+	int (*lseek) (struct inode *, struct file *, int32_t, int32_t);
 	int (*read) (struct inode *, struct file *, char *, int);
 	int (*write) (struct inode *, struct file *, char *, int);
 	int (*readdir) (struct inode *, struct file *, struct dirent *, int);
 	// int (*select) (struct inode *, struct file *, int, select_table *);
-	int (*ioctl) (struct inode *, struct file *, unsigned int, unsigned long);
+	int (*ioctl) (struct inode *, struct file *, uint32_t, uint32_t);
 	// int (*mmap) (struct inode *, struct file *, unsigned long, size_t, int, unsigned long);
 	int (*open) (struct inode *, struct file *);
-	void (*release) (struct inode *, struct file *);
+	// 由 close 操作中，打开计数为0时调用
+	int32_t (*release) (struct inode *, struct file *);
 	// int (*fsync) (struct inode *, struct file *); // 将内存中的缓存强制同步回磁盘
 };
 

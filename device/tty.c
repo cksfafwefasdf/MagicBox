@@ -11,16 +11,9 @@
 #include <fs_types.h>
 #include <fs.h>
 #include <ioctl.h>
-
+#include <debug.h>
 
 struct tty_struct console_tty;
-
-// struct file_operations tty_dev_fops = {
-//     .read = tty_dev_read,
-//     .write = tty_dev_write,
-//     .open = NULL,
-//     .release = NULL
-// };
 
 int32_t tty_write(char* buf, uint32_t count) {
     uint32_t i = 0;
@@ -125,9 +118,8 @@ int tty_read(char* buf, uint32_t count) {
     return i;
 }
 
-int32_t tty_ioctl(struct file* file, uint32_t cmd, uint32_t arg) {
-
-    struct inode* inode = file->fd_inode;
+static int32_t tty_ioctl(struct inode* inode, struct file* file, uint32_t cmd, uint32_t arg) {
+    ASSERT(inode == file->fd_inode);
     uint32_t rdev = inode->i_rdev;
 
     // 确保主设备号确实是 TTY_MAJOR
@@ -180,22 +172,26 @@ void tty_init() {
 
     lock_init(&console_tty.tty_lock);
 
-    // register_char_dev(TTY_MAJOR, &tty_dev_fops, "tty");
 }
 
 // --------------- 以下的代码用于 tty 设备适配虚拟文件系统 ---------------
 
 // 适配 read
-int32_t tty_dev_read(struct file* file, void* buf, uint32_t count) {
+static int32_t tty_dev_read(struct inode* inode UNUSED, struct file* file UNUSED, char* buf, int32_t count) {
     return tty_read(buf, count); 
 }
 
 // 适配 write
-int32_t tty_dev_write(struct file* file, void* buf, uint32_t count) {
+static int32_t tty_dev_write(struct inode* inode UNUSED, struct file* file UNUSED, char* buf, int32_t count) {
     return tty_write(buf, count);
 }
 
-// 初始化：将 TTY 注册为 0 号字符设备
-void tty_dev_init() {
-    // register_char_dev(0, &tty_dev_fops, "tty");
-}
+struct file_operations tty_file_operations = {
+	.lseek 		= NULL,
+	.read 		= tty_dev_read,
+	.write 		= tty_dev_write,
+	.readdir 	= NULL,
+	.ioctl 		= tty_ioctl,
+	.open 		= NULL,
+	.release 	= NULL
+};

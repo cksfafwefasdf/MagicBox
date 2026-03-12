@@ -5,6 +5,12 @@
 #include <interrupt.h>
 #include <inode.h>
 #include <stdio-kernel.h>
+#include <fifo.h>
+#include <tty.h>
+#include <ide.h>
+#include <sifs_file.h>
+#include <device.h>
+#include <debug.h>
 
 /*
     该文件中对file的操作与具体的文件系统无关
@@ -47,7 +53,7 @@ int32_t file_close(struct file* file){
         // 此时将指針置空是安全的，因为没有 FD 指向这里了
         file->fd_inode = NULL; 
         file->fd_pos = 0;
-        file->fops = NULL;
+        file->f_op = NULL;
         file->fd_flag = 0;
     }
 	return 0;
@@ -80,5 +86,48 @@ int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
 			return -1;
 		}
 	}
+
+	enum file_types type = file_table[fd_idx].fd_inode->i_type;
+
+	switch (type) {
+        case FT_PIPE:
+			file_table[fd_idx].f_op = &pipe_file_operations;
+			break;
+
+		case FT_FIFO: // 具名管道和匿名管道在读写逻辑上是完全一样的
+            // 管道逻辑
+            file_table[fd_idx].f_op = &fifo_file_operations;
+			break;
+
+        case FT_CHAR_SPECIAL: {
+            // 字符设备分发
+            uint32_t major = MAJOR(file_table[fd_idx].fd_inode->i_rdev);
+            if (major == TTY_MAJOR) {
+                file_table[fd_idx].f_op = &tty_file_operations;
+            }else{
+				printk("file_open: this file do not have f_op\n");
+			}
+
+            // 以后在此可以扩展其他字符设备
+            break;
+        }
+
+        case FT_BLOCK_SPECIAL:
+			file_table[fd_idx].f_op = &ide_file_operations;
+			break;
+
+        case FT_REGULAR:
+			file_table[fd_idx].f_op = &sifs_file_file_operations;
+			break;
+
+        case FT_DIRECTORY:
+            file_table[fd_idx].f_op = &sifs_dir_file_operations;
+			break;
+
+        default:
+            printk("sys_read: unknown file type %d!\n", type);
+            PANIC("unknown file type!");
+    }
+
 	return pcb_fd_install(fd_idx);
 }

@@ -47,5 +47,5 @@ int main(int argc,char** argv){
 	
 	free(buf);
 	close(fd);
-	return 66;
+	return 0;
 }

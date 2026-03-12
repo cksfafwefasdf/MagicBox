@@ -87,16 +87,13 @@ extern void ide_init(void);
 extern void intr_handler_hd(uint8_t irq_no);
 extern void sys_readraw(const char* disk_name,uint32_t lba,const char* filename,uint32_t file_size);
 extern void sys_read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uint32_t sec_cnt);
-extern int32_t ide_dev_write(struct file* file, void* buf, uint32_t count);
-extern int32_t ide_dev_read(struct file* file, void* buf, uint32_t count);
 extern struct partition* get_part_by_rdev(uint32_t rdev);
-extern int32_t ide_ioctl(struct file *file,uint32_t cmd,uint32_t arg);
 
 extern struct ide_channel channels[2];
 extern uint8_t channel_cnt;
 extern struct dlist partition_list;
 extern uint32_t* disk_size;
 extern uint8_t disk_num;
-struct file_operations ide_dev_fops;
+struct file_operations ide_file_operations;
 
 #endif

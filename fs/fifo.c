@@ -3,7 +3,7 @@
 #include <fs_types.h>
 #include <interrupt.h>
 
-int32_t fifo_open(struct inode* inode, struct file* file){
+static int32_t fifo_open(struct inode* inode, struct file* file){
 	// 如果 FIFO 还没分配内存缓冲区，则分配 (第一次打开)，该逻辑在 init_pipe 中处理
 	// FIFO 本质上就只是 PIPE 在文件系统上的一个封装
 	// PIPE 只能用于相互认识的进程之间的通信，比如 父进程和 fork 后的子进程
@@ -52,22 +52,24 @@ int32_t fifo_open(struct inode* inode, struct file* file){
 	return 0;
 }
 
-int32_t fifo_release(struct file* file){
-	return pipe_release(file);
+static int32_t fifo_release(struct inode* inode, struct file* file){
+	return pipe_release(inode ,file);
 }
 
-int32_t fifo_read(struct file* file, void* buf, uint32_t count){
-	return pipe_read(file, buf, count);
+static int32_t fifo_read(struct inode* inode, struct file* file, char* buf, int32_t count){
+	return pipe_read(inode,file, buf, count);
 }
 
-int32_t fifo_write(struct file* file, void* buf, uint32_t count){
-	return pipe_write(file,buf,count);
+static int32_t fifo_write(struct inode* inode, struct file* file, char* buf, int32_t count){
+	return pipe_write(inode,file,buf,count);
 }
 
-// struct file_operations fifo_f_op = {
-// 	fifo_read, // read
-// 	fifo_write, // write
-// 	fifo_open, // open
-// 	fifo_release, // close
-// 	NULL // ioctl
-// };
+struct file_operations fifo_file_operations = {
+	.lseek 		= NULL,
+	.read 		= fifo_read,
+	.write 		= fifo_write,
+	.readdir 	= NULL,
+	.ioctl 		= NULL,
+	.open 		= fifo_open,
+	.release 	= fifo_release
+};

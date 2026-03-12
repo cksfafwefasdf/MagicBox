@@ -6,6 +6,7 @@
 #include <tty.h>
 #include <file_table.h>
 #include <thread.h>
+#include <stdio-kernel.h>
 #include <ide.h>
 
 int32_t sys_ioctl(int fd, uint32_t cmd, uint32_t arg) {
@@ -20,24 +21,10 @@ int32_t sys_ioctl(int fd, uint32_t cmd, uint32_t arg) {
 
     if (file->fd_inode == NULL) return -EBADF; // 错误码 2：该描述符是空的
 
-    // 和 sys_open 一样，进行分发
-    switch (inode->i_type) {
-        case FT_CHAR_SPECIAL:
-            // 字符设备分发
-            if (MAJOR(inode->i_rdev) == TTY_MAJOR) {
-                return tty_ioctl(file, cmd, arg);
-            }
-            return -ENOTTY;
-
-        case FT_BLOCK_SPECIAL:
-            // 块设备分发
-            if (MAJOR(inode->i_rdev) == IDE_MAJOR) {
-                return ide_ioctl(file, cmd, arg);
-            }
-            return -ENOTTY;
-
-        default:
-            // 普通文件或目录目前可能不支持 ioctl
-            return -ENOTTY;
+    if(file->f_op!=NULL&&file->f_op->ioctl!=NULL){
+        return file->f_op->ioctl(inode,file, cmd, arg);
+    }else{
+        printk("sys_ioctl: this type of device do not support ioctl!\n");
+        return -ENOTTY;
     }
 }

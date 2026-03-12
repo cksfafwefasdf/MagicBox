@@ -32,15 +32,12 @@ struct tty_struct {
 
 extern struct tty_struct console_tty;
 // TTY 的操作集
-extern struct file_operations tty_dev_fops;
+extern struct file_operations tty_file_operations;
 
 extern int tty_read(char* buf, uint32_t count);
 extern void tty_init(void);
 extern void tty_input_handler(char c);
 extern int tty_write(char* buf, uint32_t count);
 extern void tty_dev_init(void);
-extern int32_t tty_dev_read(struct file* file, void* buf, uint32_t count);
-extern int32_t tty_dev_write(struct file* file, void* buf, uint32_t count);
-extern int32_t tty_ioctl(struct file* file, uint32_t cmd, uint32_t arg); 
 
 #endif

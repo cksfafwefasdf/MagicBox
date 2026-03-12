@@ -24,10 +24,14 @@ struct pipe {
 // pipe_release pipe_write pipe_read 可以融入到 sys_close sys_write sys_read 中
 // 但是 sys_pipe 没办法弄到 sys_open 中！因为 sys_open 是基于路径的，而匿名管道没有路径
 // 而另外三个函数是可以融入的，因为这三个函数是基于句柄的，pipe 有句柄
-extern int32_t pipe_release(struct file* file);
-extern int32_t pipe_write(struct file* file, const void* buf, uint32_t count);
-extern int32_t pipe_read(struct file* file, void* buf, uint32_t count);
+// pipe_release pipe_write pipe_read fifo也要用，不能弄成 static
+extern int32_t pipe_release(struct inode* inode, struct file* file);
+extern int32_t pipe_write(struct inode* inode, struct file* file, char* buf, int32_t count);
+extern int32_t pipe_read(struct inode* inode, struct file* file, char* buf, int32_t count);
+
 extern int32_t sys_pipe(int32_t pipefd[2]);
 extern int32_t init_pipe(struct inode* inode);
+
+extern struct file_operations pipe_file_operations;
 
 #endif

@@ -485,8 +485,7 @@ static int32_t sifs_create(struct inode *dir, char *name, int len, int mode UNUS
 
 // 普通文件的 Inode 操作集
 struct inode_operations sifs_file_inode_operations = {
-    // .default_file_ops = &sifs_file_operations,
-    .default_file_ops = NULL,
+    .default_file_ops = &sifs_file_file_operations,
     .create     = NULL,      // 普通文件下通常不能再创建文件
     .lookup     = NULL,      // 普通文件没有子项
     .unlink     = NULL,
@@ -499,8 +498,7 @@ struct inode_operations sifs_file_inode_operations = {
 
 // 目录文件的 Inode 操作集
 struct inode_operations sifs_dir_inode_operations = {
-    // .default_file_ops = &sifs_dir_operations,
-    .default_file_ops = NULL, // 暂时为 NULL，等file操作实现完毕补上
+    .default_file_ops = &sifs_dir_file_operations,
     .create     = sifs_create,
     .lookup     = sifs_lookup,
     .unlink     = sifs_unlink,
@@ -528,8 +526,8 @@ struct inode_operations sifs_char_inode_operations = {
 
 // 块设备的 Inode 操作集
 struct inode_operations sifs_block_inode_operations = {
-    // .default_file_ops = &sifs_block_dev_operations, // 指向块设备通用的文件操作，后期来补
-    .default_file_ops = NULL, // 指向块设备通用的文件操作
+    // .default_file_ops = &ide_file_operations, // 指向块设备通用的文件操作，后期来补
+    .default_file_ops = NULL, // 指向块设备通用的文件操作，后期来补
     .create     = NULL, 
     .lookup     = NULL,
     .unlink     = NULL,

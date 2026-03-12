@@ -16,7 +16,8 @@
 #include <inode.h>
 #include <errno.h>
 
-int32_t sifs_file_write(struct file* file,const void* buf,uint32_t count){
+// file 和 dir 都会用这个 write
+static int32_t sifs_file_write(struct inode* inode UNUSED, struct file* file,char* buf,int32_t count){
 
 	struct partition* part = get_part_by_rdev(file->fd_inode->i_dev);
 
@@ -37,8 +38,8 @@ int32_t sifs_file_write(struct file* file,const void* buf,uint32_t count){
 		return -1;
 	}
 
-	const uint8_t* src = buf;
-	uint32_t bytes_written = 0;
+	const uint8_t* src = (uint8_t*) buf;
+	int32_t bytes_written = 0;
 	uint32_t size_left = count;
 	int32_t block_lba = -1;
 	uint32_t block_bitmap_idx = 0;
@@ -197,7 +198,7 @@ int32_t sifs_file_write(struct file* file,const void* buf,uint32_t count){
 	return bytes_written;
 }
 
-int32_t sifs_file_read(struct file* file,void* buf,uint32_t count){
+static int32_t sifs_file_read(struct inode* inode UNUSED, struct file* file,char* buf,int32_t count){
 	
 	struct partition* part = get_part_by_rdev(file->fd_inode->i_dev);
 
@@ -304,3 +305,60 @@ int32_t sifs_file_read(struct file* file,void* buf,uint32_t count){
 	return bytes_read;
 }
 
+// offset 可能为负数！表示往前回拨！
+static int32_t sifs_generic_lseek(struct inode* inode, struct file* pf, int32_t offset, int whence){
+
+	ASSERT(whence>0&&whence<4);
+
+	int32_t new_pos = 0;
+	int32_t file_size = inode->i_size;
+	enum file_types type = inode->i_type;
+
+	// 先计算指针位置
+	switch (whence){
+		case SEEK_SET:
+			new_pos = offset;
+			break;
+		case SEEK_CUR:
+			new_pos = (int32_t)pf->fd_pos + offset;
+			break;
+		case SEEK_END:
+			new_pos = file_size + offset;
+			break;
+		default:
+			printk("sys_lseek: error! unknown whence!\n");
+			return -1;
+	}
+
+	ASSERT(type == FT_REGULAR || type == FT_DIRECTORY);
+	// 根据计算出的结果进行边界检查
+	// 普通文件和目录：严格受 i_size 限制
+	if (new_pos < 0 || (uint32_t)new_pos > pf->fd_inode->i_size) {
+		return -1;
+	}
+	
+	pf->fd_pos = new_pos;
+	return pf->fd_pos;
+}
+
+struct file_operations sifs_file_file_operations = {
+	.lseek 		= sifs_generic_lseek,
+	.read 		= sifs_file_read,
+	.write 		= sifs_file_write,
+	.readdir 	= NULL,
+	.ioctl 		= NULL,
+	.open 		= NULL,
+	.release 	= NULL
+};
+
+struct file_operations sifs_dir_file_operations = {
+	.lseek 		= sifs_generic_lseek,
+	.read 		= NULL,
+	// 用户态只能 mkdir，写目录的操作其实是由 create 操作内部来写的父目录
+	// 所以目录文件的 write 直接置为空就行
+	.write 		= NULL,
+	.readdir 	= sifs_dir_read,
+	.ioctl 		= NULL,
+	.open 		= NULL,
+	.release 	= NULL
+};
