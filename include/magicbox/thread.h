@@ -9,7 +9,7 @@
 
 // each process can open 8 files at most
 #define MAX_FILES_OPEN_PER_PROC 8
-#define TASK_NAME_LEN 16
+#define TASK_NAME_LEN 64
 #define MAX_PID_NUM 1024
 #define MAX_PID_NUM_IN_BYTE MAX_PID_NUM/8
 #define STACK_MAGIC 0x20030000
