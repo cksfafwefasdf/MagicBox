@@ -23,7 +23,7 @@ extern void open_root_dir(struct partition* part);
 extern void sifs_create_dir_entry(char* filename, uint32_t len, uint32_t inode_no, enum file_types file_type, struct sifs_dir_entry* p_de);
 extern bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de, void* io_buf);
 extern bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, uint32_t inode_no, void* io_buf);
-extern int32_t sifs_dir_read(struct inode* inode, struct file* file, struct dirent* de, int count);
+extern int32_t sifs_readdir(struct inode* inode, struct file* file, struct dirent* de, int count);
 extern int32_t sifs_dir_remove(struct inode* parent_inode, struct inode* child_inode);
 extern bool sifs_dir_is_empty(struct inode* dir_inode);
 extern void close_root_dir(void);

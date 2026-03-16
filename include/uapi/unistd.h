@@ -11,9 +11,6 @@
 
 #define UNUSED __attribute__((unused))
 
-#define SECTOR_SIZE 512
-#define BLOCK_SIZE SECTOR_SIZE
-
 // waitpid 的参数
 #define WNOHANG    1    // 0001
 #define WUNTRACED  2    // 0010
@@ -24,14 +21,18 @@
 #define MAX_ARG_NR 16
 #define CMD_NUM 64
 
+// 该类型定义和linux目录项中的完全一致，不需要特别转化
+// 除了FT_PIPE，由于他不需要存储在硬盘上，因此linux没有定义它
 enum file_types{
 	FT_UNKNOWN, // unsupported type
 	FT_REGULAR, // regular file
 	FT_DIRECTORY, // directory file
 	FT_CHAR_SPECIAL, // 字符设备
 	FT_BLOCK_SPECIAL, // 块设备
+	FT_FIFO, // 具名管道，不占磁盘数据块但inode要写回磁盘
+	FT_SOCKET, // UNIX 套接字
+	FT_SYMBOLIC_LINK, // 符号链接
 	FT_PIPE, // 匿名管道，inode都不写回磁盘
-	FT_FIFO // 具名管道，不占磁盘数据块但inode要写回磁盘
 };
 
 enum oflags{ // operation flags

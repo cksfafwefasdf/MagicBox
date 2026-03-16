@@ -99,7 +99,7 @@ bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, cons
 }
 
 // 这里的 p_de 必须指向从磁盘读出来的 sector 缓冲区，所以使用针对文件系统特化的 sifs_dir_entry
-void sifs_create_dir_entry (char* filename, uint32_t len, uint32_t inode_no, enum file_types file_type, struct sifs_dir_entry* p_de) {
+void sifs_create_dir_entry(char* filename, uint32_t len, uint32_t inode_no, enum file_types file_type, struct sifs_dir_entry* p_de){
     // 保护性检查
     ASSERT(len <= MAX_FILE_NAME_LEN);
 
@@ -328,7 +328,7 @@ bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, u
     return false;
 }
 	
-int32_t sifs_dir_read(struct inode* inode UNUSED, struct file* file, struct dirent* de, int count UNUSED) {
+int32_t sifs_readdir(struct inode* inode UNUSED, struct file* file, struct dirent* de, int count UNUSED) {
     struct inode* dir_inode = file->fd_inode;
     struct partition* part = get_part_by_rdev(dir_inode->i_dev);
     uint32_t dir_entry_size = part->sb->sifs_info.sb_raw.dir_entry_size;
@@ -426,7 +426,7 @@ bool sifs_dir_is_empty(struct inode* dir_inode) {
 
     struct dirent de;
     // sifs_dir_read 返回 0 表示读到一个有效条目
-    while (sifs_dir_read(temp_f.fd_inode,&temp_f, &de,0) == 0) {
+    while (sifs_readdir(temp_f.fd_inode,&temp_f, &de,0) == 0) {
         // 过滤掉每个目录都有的两个固定成员
         if (strcmp(de.d_name, ".") != 0 && strcmp(de.d_name, "..") != 0) {
             // 只要发现一个不是 . 也不是 .. 的有效条目，目录就不为空

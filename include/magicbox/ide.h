@@ -6,6 +6,7 @@
 #include <sync.h>
 #include <stdbool.h>
 #include <fs_types.h>
+#include <ide_buffer.h>
 
 
 #define CHANNEL_NUM 2

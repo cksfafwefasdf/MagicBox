@@ -4,6 +4,7 @@
 #include <global.h>
 #include <syscall.h>
 #include <stdint.h>
+#include <fs_types.h>
 
 
 // 将八进制字符串转换为十进制整数

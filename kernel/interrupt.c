@@ -81,7 +81,9 @@ static void pic_init(void){
     // IMR for master 
     outb(PIC_M_DATA,0xf8);
     // IMR(intr mask) for slave
-    outb(PIC_S_DATA,0xbf);
+    // outb(PIC_S_DATA,0xbf);
+    // 不要屏蔽磁盘的secondary通道，以便支持更多的磁盘
+    outb(PIC_S_DATA, 0x3f);
 
     put_str("init pic done\n");
 }

@@ -16,6 +16,7 @@ fi
 # 定义镜像的完整路径变量
 HD60_PATH="$TARGET_DIR/hd60M.img"
 HD80_PATH="$TARGET_DIR/hd80M.img"
+HD20_SHARE_PATH="$TARGET_DIR/hd20M_share.img" # 用于创建ext2文件系统的实验
 
 # 创建 hd60M.img
 echo "Creating $HD60_PATH..."
@@ -55,7 +56,18 @@ echo "Partitioning $HD80_PATH..."
   echo w
 ) | fdisk "$HD80_PATH"
 
+echo "Creating $HD20_SHARE_PATH..."
+qemu-img create -f raw "$HD20_SHARE_PATH" 20M
+
+echo "Partitioning $HD20_SHARE_PATH..."
+(
+  echo n; echo p; echo 1; echo 2048; echo 22527
+  echo n; echo p; echo 2; echo 22528; echo 40959
+  echo w
+) | fdisk "$HD20_SHARE_PATH"
+
 echo "---------------------------------------"
 echo "Done! Verified with fdisk -l:"
 fdisk -l "$HD80_PATH"
 fdisk -l "$HD60_PATH"
+fdisk -l "$HD20_SHARE_PATH"

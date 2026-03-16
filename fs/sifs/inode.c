@@ -144,7 +144,7 @@ int32_t sifs_inode_read_data(struct inode* inode, uint32_t offset, void* buf, ui
 
     // 准备缓冲区和块地址表
 
-    uint8_t* io_buf = kmalloc(BLOCK_SIZE);
+    uint8_t* io_buf = kmalloc(SIFS_BLOCK_SIZE);
     uint32_t* all_blocks_addr = (uint32_t*)kmalloc(TOTAL_BLOCK_COUNT * sizeof(uint32_t));
     if (!io_buf || !all_blocks_addr) {
         PANIC("inode_read_data: kmalloc failed");
@@ -152,7 +152,7 @@ int32_t sifs_inode_read_data(struct inode* inode, uint32_t offset, void* buf, ui
     memset(all_blocks_addr, 0, TOTAL_BLOCK_COUNT * sizeof(uint32_t));
 
     // 填充 block 地址表
-    uint32_t block_end_idx = (offset + size_left - 1) / BLOCK_SIZE;
+    uint32_t block_end_idx = (offset + size_left - 1) / SIFS_BLOCK_SIZE;
 
     // 填充直接块 (0-11)
     uint32_t idx = 0;
@@ -176,11 +176,11 @@ int32_t sifs_inode_read_data(struct inode* inode, uint32_t offset, void* buf, ui
     uint32_t curr_pos = offset;
 
     while (bytes_read < size_left) {
-        uint32_t sec_idx = curr_pos / BLOCK_SIZE;
+        uint32_t sec_idx = curr_pos / SIFS_BLOCK_SIZE;
         uint32_t sec_lba = all_blocks_addr[sec_idx];
         
-        uint32_t sec_off_bytes = curr_pos % BLOCK_SIZE;
-        uint32_t sec_left_bytes = BLOCK_SIZE - sec_off_bytes;
+        uint32_t sec_off_bytes = curr_pos % SIFS_BLOCK_SIZE;
+        uint32_t sec_left_bytes = SIFS_BLOCK_SIZE - sec_off_bytes;
         uint32_t chunk_size = (size_left - bytes_read < sec_left_bytes) ? 
                                (size_left - bytes_read) : sec_left_bytes;
 

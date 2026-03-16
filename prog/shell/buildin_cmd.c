@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <unistd.h>
+#include <stdint.h>
 #include "buildin_cmd.h"
 #include "shell.h"
 

@@ -15,7 +15,7 @@ OBJDUMP := objdump
 # 自动化目录管理
 # 定义参与内核编译的子目录（白名单）
 # 这里不包含用户程序目录 prog/，因为那里的 main 函数会与内核 main 冲突
-KERNEL_SUBDIRS := kernel device thread userprog fs lib mm lib/kernel lib/user lib/common fs/sifs
+KERNEL_SUBDIRS := kernel device thread userprog fs lib mm lib/kernel lib/user lib/common fs/sifs fs/ext2
 
 # 自动获取所有 C 和 ASM 源文件
 # 使用 wildcard 查找
@@ -83,7 +83,7 @@ $(USER_LIBC_A): $(USER_LIB_OBJS)
 all: mk_dir boot build hd gdb_symbol disasm
 
 # 链接内核
-$(BUILD_DIR)/kernel.bin: $(OBJS)
+$(BUILD_DIR)/kernel.elf: $(OBJS)
 	@echo "Linking Kernel..."
 	$(LD) $(LDFLAGS) $^ -o $@
 
@@ -113,10 +113,17 @@ $(BUILD_DIR)/loader.bin: boot/loader.s
 # 如果 .h 文件改了，Make 会自动重编包含它的 .c
 -include $(OBJS:.o=.d)
 
+# 生成一个剥离了符号表的内核镜像，加载到磁盘中时加载的是这个镜像，而不是原本的那个带符号表的
+# 带符号表的仅用于gdb调试时使用，但是为了能正确处理符号表，编译链接的目标对象都是那个带符号表的 elf 文件
+# 这个 bin 对象是通过 elf 文件剥离符号表产生的
+$(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf
+	strip --strip-debug $(BUILD_DIR)/kernel.elf -o $(BUILD_DIR)/kernel.bin
+
 mk_dir:
 	@mkdir -p $(BUILD_DIR) $(BUILD_DIR_PROG)
 
-hd:
+# 加载内核时依赖的是没有符号表的镜像
+hd: $(BUILD_DIR)/kernel.bin 
 	@echo "Writing to Disk Image..."
 	dd if=$(BUILD_DIR)/mbr.bin of=$(DISK_DIR)/hd60M.img count=1 bs=446 conv=notrunc
 	printf '\125\252' | dd of=$(DISK_DIR)/hd60M.img bs=1 count=2 seek=510 conv=notrunc
@@ -127,10 +134,10 @@ clean:
 	rm -rf $(BUILD_ROOT)/*
 
 # USER_LIBC_A 是用户需要的静态库，我们把那些用户需要的包打成一个静态库
-build: $(BUILD_DIR)/kernel.bin $(USER_LIBC_A)
+build: $(BUILD_DIR)/kernel.elf $(USER_LIBC_A)
 
 gdb_symbol:
-	$(OBJCOPY) --only-keep-debug $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/kernel.sym
+	$(OBJCOPY) --only-keep-debug $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.sym
 
 disasm:
 	$(OBJDUMP) -b binary -m i8086 -D $(BUILD_DIR)/mbr.bin > $(BUILD_DIR)/disasm_mbr

@@ -5,6 +5,8 @@
 #include <sifs_inode.h>
 #include <sifs_sb.h>
 #include <pipe.h>
+#include <ext2_sb.h>
+#include <ext2_inode.h>
 
 /*
 	虚拟文件系统层的头文件
@@ -25,6 +27,8 @@
 #define FS_REQUIRES_DEV      0x01 // 需要物理设备（如 SIFS, Ext2）
 #define FS_SINGLE            0x02 // 整个系统只有一个实例（如 procfs） 
 #define FS_NOMOUNT           0x04 // 不允许用户从外部挂载
+
+#define SECTOR_SIZE 512
 
 // 内存inode
 // VFS 直接操作的inode 对象
@@ -61,6 +65,7 @@ struct inode{
 	union{
 		struct sifs_inode_info sifs_i;
 		struct pipe_inode_info pipe_i;
+		struct ext2_inode_info ext2_i; 
 	};
 };
 
@@ -151,6 +156,7 @@ struct inode_operations {
 	// 最典型的是 Swap（交换分区）。
 	// 当内核需要把内存页换出到文件时，它不能通过文件系统层去写（那太慢且容易死锁）
 	// 它会通过 bmap 预先查好所有物理块位置，直接用驱动写裸扇区。
+	// 这个函数主要是用于解析间址块的
 	int (*bmap) (struct inode *,int);
 	// 截断文件（比如 open 时带了 O_TRUNC）。
 	// 它负责释放文件占用的磁盘块，并把 i_size 置为 0。
@@ -195,7 +201,7 @@ struct super_block {
     // VFS 对不同文件系统打的补丁
     union {
         struct sifs_sb_info sifs_info; // 此时这里就包含了运行时的状态
-        // struct ext2_sb_info ext2_info;
+        struct ext2_sb_info ext2_info;
     };
 };
 

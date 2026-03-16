@@ -15,14 +15,15 @@
 #include <sifs_sb.h>
 #include <inode.h>
 #include <errno.h>
+#include <sifs_fs.h>
 
 // file 和 dir 都会用这个 write
 static int32_t sifs_file_write(struct inode* inode UNUSED, struct file* file,char* buf,int32_t count){
 
 	struct partition* part = get_part_by_rdev(file->fd_inode->i_dev);
 
-	if((file->fd_inode->i_size+count)>(BLOCK_SIZE*TOTAL_BLOCK_COUNT)){
-		printk("exceed max file_size %d bytes, write file failed!\n",BLOCK_SIZE*TOTAL_BLOCK_COUNT);
+	if((file->fd_inode->i_size+count)>(SIFS_BLOCK_SIZE*TOTAL_BLOCK_COUNT)){
+		printk("exceed max file_size %d bytes, write file failed!\n",SIFS_BLOCK_SIZE*TOTAL_BLOCK_COUNT);
 		return -1;
 	}
 	// since the file may span 2 sectors
@@ -65,9 +66,9 @@ static int32_t sifs_file_write(struct inode* inode UNUSED, struct file* file,cha
 		bitmap_sync(part,block_bitmap_idx,BLOCK_BITMAP);
 	}
 
-	uint32_t file_has_used_blocks = file->fd_inode->i_size/BLOCK_SIZE+1;
+	uint32_t file_has_used_blocks = file->fd_inode->i_size/SIFS_BLOCK_SIZE+1;
 
-	uint32_t file_will_use_blocks = (file->fd_inode->i_size+count)/BLOCK_SIZE+1;
+	uint32_t file_will_use_blocks = (file->fd_inode->i_size+count)/SIFS_BLOCK_SIZE+1;
 	ASSERT(file_will_use_blocks<=TOTAL_BLOCK_COUNT);
 
 	uint32_t addr_blocks = file_will_use_blocks - file_has_used_blocks;
@@ -170,11 +171,11 @@ static int32_t sifs_file_write(struct inode* inode UNUSED, struct file* file,cha
 	file->fd_pos = file->fd_inode->i_size-1;
 
 	while(bytes_written<count){
-		memset(io_buf,0,BLOCK_SIZE);
-		sec_idx = file->fd_inode->i_size/BLOCK_SIZE;
+		memset(io_buf,0,SIFS_BLOCK_SIZE);
+		sec_idx = file->fd_inode->i_size/SIFS_BLOCK_SIZE;
 		sec_lba = all_blocks_addr[sec_idx];
-		sec_off_bytes = file->fd_inode->i_size% BLOCK_SIZE;
-		sec_left_bytes = BLOCK_SIZE - sec_off_bytes;
+		sec_off_bytes = file->fd_inode->i_size% SIFS_BLOCK_SIZE;
+		sec_left_bytes = SIFS_BLOCK_SIZE - sec_off_bytes;
 
 		chunk_size = size_left<sec_left_bytes?size_left:sec_left_bytes;
 		if(last_valid_block_with_space){
@@ -212,7 +213,7 @@ static int32_t sifs_file_read(struct inode* inode UNUSED, struct file* file,char
 			return -1;
 		}
 	}
-	uint8_t *io_buf = kmalloc(BLOCK_SIZE);
+	uint8_t *io_buf = kmalloc(SIFS_BLOCK_SIZE);
 	
 	if(io_buf==NULL){
 		printk("file_read: kmalloc for io_buf failed!\n");
@@ -228,8 +229,8 @@ static int32_t sifs_file_read(struct inode* inode UNUSED, struct file* file,char
 		return -1;
 	}
 
-	uint32_t block_read_start_idx = file->fd_pos/BLOCK_SIZE;
-	uint32_t block_read_end_idx = (file->fd_pos+size)/BLOCK_SIZE;
+	uint32_t block_read_start_idx = file->fd_pos/SIFS_BLOCK_SIZE;
+	uint32_t block_read_end_idx = (file->fd_pos+size)/SIFS_BLOCK_SIZE;
 	uint32_t read_blocks = block_read_start_idx-block_read_end_idx;
 
 	ASSERT(block_read_start_idx<TOTAL_BLOCK_COUNT-1&&block_read_end_idx<TOTAL_BLOCK_COUNT-1);
@@ -281,13 +282,13 @@ static int32_t sifs_file_read(struct inode* inode UNUSED, struct file* file,char
 	uint32_t sec_idx,sec_lba,sec_off_bytes,sec_left_bytes,chunk_size;
 	uint32_t bytes_read = 0;
 	while(bytes_read<size){
-		sec_idx = file->fd_pos/BLOCK_SIZE;
+		sec_idx = file->fd_pos/SIFS_BLOCK_SIZE;
 		sec_lba = all_blocks_addr[sec_idx];
-		sec_off_bytes = file->fd_pos%BLOCK_SIZE;
-		sec_left_bytes = BLOCK_SIZE-sec_off_bytes;
+		sec_off_bytes = file->fd_pos%SIFS_BLOCK_SIZE;
+		sec_left_bytes = SIFS_BLOCK_SIZE-sec_off_bytes;
 		chunk_size = size_left<sec_left_bytes?size_left:sec_left_bytes;
 		ASSERT(sec_idx < TOTAL_BLOCK_COUNT);
-		memset(io_buf,0,BLOCK_SIZE);
+		memset(io_buf,0,SIFS_BLOCK_SIZE);
 		
 		partition_read(part,sec_lba,io_buf,1);
 
@@ -357,7 +358,7 @@ struct file_operations sifs_dir_file_operations = {
 	// 用户态只能 mkdir，写目录的操作其实是由 create 操作内部来写的父目录
 	// 所以目录文件的 write 直接置为空就行
 	.write 		= NULL,
-	.readdir 	= sifs_dir_read,
+	.readdir 	= sifs_readdir,
 	.ioctl 		= NULL,
 	.open 		= NULL,
 	.release 	= NULL

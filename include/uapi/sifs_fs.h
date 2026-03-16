@@ -11,6 +11,8 @@
 
 #define SIFS_FS_MAGIC_NUMBER 0x20030000 // magic number for this file system
 
+#define SIFS_BLOCK_SIZE SECTOR_SIZE
+
 struct sifs_super_block{
 	uint32_t magic; // the type of the file system
 	uint32_t sec_cnt; // the number of the sector in this partition

@@ -101,15 +101,6 @@ static uint32_t identify_disk(struct disk* hd);
 static void partition_scan(struct disk* hd,uint32_t ext_lba);
 static bool partition_info(struct dlist_elem* pelem,void* arg UNUSED);
 
-
-// 定义 IDE 块设备的 file_operations
-// struct file_operations ide_dev_fops = {
-//     .read = ide_dev_read,
-//     .write = ide_dev_write,
-//     .open = NULL,  // 块设备 open 通常在 sys_open 统一处理
-//     .release = NULL
-// };
-
 static void ide_set_multiple_mode(struct disk* hd, uint8_t sec_per_block) {
     select_disk(hd);
     outb(reg_sect_cnt(hd->my_channel), sec_per_block);
@@ -206,12 +197,14 @@ void ide_init(){
             hd->i_rdev = MAKEDEV(3, hd_idx * 16);
 
 			memset(hd->name,0,sizeof(hd->name));
-			sprintf(hd->name,"sd%c",'a'+channel_no*2+dev_no);
 			
 			uint32_t sectors = identify_disk(hd);
+			if(sectors==0){ // 如果读出来扇区数是0，说明此处没设备，那么直接进行下一轮循环，
+				goto next_round;
+			}
 			hd->total_sectors = sectors;
 
-			
+			sprintf(hd->name,"sd%c",'a'+channel_no*2+dev_no);
 
 			// 初始化全盘分区的基本信息
 			memset(&hd->all_disk_part, 0, sizeof(struct partition));
@@ -228,6 +221,7 @@ void ide_init(){
 
 			ide_set_multiple_mode(hd, SECTORS_PER_OP_BLOCK); // 注入设置
 			partition_scan(hd,0);
+next_round:
 			ext_lba_base = 0;
 			p_no=0;
 			l_no=0;
@@ -430,6 +424,13 @@ static void swap_pairs_bytes(const char* dst,char* buf,uint32_t len){
 static uint32_t identify_disk(struct disk* hd){
 	char id_info[512];
 	select_disk(hd);
+
+	uint8_t status = inb(reg_status(hd->my_channel));
+	// 如果状态是 0x00，通常意味着该位置没有设备，直接返回
+    if (status == 0) {
+        return 0; 
+    }
+
 	cmd_out(hd->my_channel,CMD_IDENTIFY);
 
 	sema_wait(&hd->my_channel->wait_disk);
@@ -437,7 +438,8 @@ static uint32_t identify_disk(struct disk* hd){
 	if(!busy_wait(hd)){
 		char error[64];
 		sprintf(error,"%s identify failed!!!!!!!\n",hd->name);
-		PANIC(error);
+		sema_signal(&hd->my_channel->wait_disk);
+		return 0;
 	}
 	read_from_sector(hd,id_info,1);
 	

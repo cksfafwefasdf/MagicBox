@@ -11,6 +11,7 @@
 #include <sifs_file.h>
 #include <device.h>
 #include <debug.h>
+#include <ext2_file.h>
 
 /*
     该文件中对file的操作与具体的文件系统无关
@@ -89,6 +90,8 @@ int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
 
 	enum file_types type = file_table[fd_idx].fd_inode->i_type;
 
+	struct super_block* sb = file_table[fd_idx].fd_inode->i_sb;
+
 	switch (type) {
         case FT_PIPE:
 			file_table[fd_idx].f_op = &pipe_file_operations;
@@ -117,11 +120,24 @@ int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
 			break;
 
         case FT_REGULAR:
-			file_table[fd_idx].f_op = &sifs_file_file_operations;
+			if(sb->s_magic==SIFS_FS_MAGIC_NUMBER){
+				file_table[fd_idx].f_op = &sifs_file_file_operations;
+			}else if(sb->s_magic==EXT2_MAGIC_NUMBER){
+				file_table[fd_idx].f_op = &ext2_file_operations;
+			}else{
+				PANIC("unknown file type!");
+			}
+			
 			break;
 
         case FT_DIRECTORY:
-            file_table[fd_idx].f_op = &sifs_dir_file_operations;
+			if(sb->s_magic==SIFS_FS_MAGIC_NUMBER){
+				file_table[fd_idx].f_op = &sifs_dir_file_operations;
+			}else if(sb->s_magic==EXT2_MAGIC_NUMBER){
+				file_table[fd_idx].f_op = &ext2_file_operations;
+			}else{
+				PANIC("unknown file type!");
+			}
 			break;
 
         default:

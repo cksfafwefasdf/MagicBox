@@ -21,6 +21,8 @@
 #include <inode.h>
 #include <file.h>
 #include <errno.h>
+#include <stdio.h>
+#include <ext2_sb.h>
 
 
 // root_part 用于记录根分区，他是全局唯一的
@@ -160,10 +162,14 @@ void filesys_init() {
         channel_no++;
     }
 
+    
+
 mnt:
+
     dlist_init(&file_systems);
 
     register_filesystem(&sifs_fs_type);
+    register_filesystem(&ext2_fs_type);
 
     // 调用 mount_partition 进行挂载
     // mount_partition 内部会调用 sifs_read_super，加载超级块
@@ -848,13 +854,13 @@ char* sys_getcwd(char* buf, uint32_t size) {
 
     // 回溯主循环
     // 只要不是“真正的全局根目录”就继续向上回溯。
-    // 真正的全局根 Inode 编号为 0 且 没有向上挂载的指针(i_mount_at == NULL)
-    while (!(cursor->i_no == 0 && cursor->i_mount_at == NULL)) {
+    // 真正的全局根 Inode 编号为 s_root_ino 且 没有向上挂载的指针(i_mount_at == NULL)
+    while (!(cursor->i_no == cursor->i_sb->s_root_ino && cursor->i_mount_at == NULL)) {
         struct inode* parent = NULL;
         memset(component_name,0,MAX_FILE_NAME_LEN);
         uint32_t child_ino = cursor->i_no;
 
-        if (child_ino == 0 && cursor->i_mount_at != NULL) {
+        if (child_ino == cursor->i_sb->s_root_ino && cursor->i_mount_at != NULL) {
             // 情况 1，遇到了子分区的根。
             // 我们需要穿透隧道，回到父分区的挂载点目录。
             struct inode* mp_inode = cursor->i_mount_at; // 拿到父分区中的挂载点实体 (在父分区中)
@@ -965,7 +971,7 @@ int32_t sys_stat(const char* _pathname,struct stat* buf){
 
 	if(!strcmp(path,"/")||!strcmp(path,"/.")||!strcmp(path,"/..")){
 		buf->st_filetype = FT_DIRECTORY;
-		buf->st_ino = 0;
+		buf->st_ino = root_dir_inode->i_no;
 		buf->st_size = root_dir_inode->i_size;
 		return 0;
 	}
@@ -1221,7 +1227,6 @@ int32_t sys_mount(char* dev_path, char* _mount_path, char* type, unsigned long n
     part->sb = sb;
 
     // 超级块加载分发驱动 
-
     struct file_system_type *fst = find_filesystem(type);
     struct super_block* res = NULL;
     if (fst && (fst->flags & FS_REQUIRES_DEV)) {
@@ -1326,10 +1331,10 @@ int32_t sys_umount(const char* _mount_path) {
     // 释放文件系统特定资源
     // 释放位图等内存缓冲区（这些是在 read_super 中分配的）
     
-    if(sb->s_op != NULL){
+    if(sb->s_op != NULL && sb->s_op->put_super != NULL){
         sb->s_op->put_super(sb);
     }else{
-        PANIC("unknown s_op!");
+        printk("sys_umount: warning, put_super is NULL\n");
     }
 
     // 关闭子分区的根 inode（彻底释放出内存）
