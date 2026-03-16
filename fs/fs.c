@@ -1230,6 +1230,7 @@ int32_t sys_mount(char* dev_path, char* _mount_path, char* type, unsigned long n
     struct file_system_type *fst = find_filesystem(type);
     struct super_block* res = NULL;
     if (fst && (fst->flags & FS_REQUIRES_DEV)) {
+        printk("addr sb:%x\n",sb);
         // 获取分区并 read_super
         res = fst->read_super(sb, NULL, 0);
         if(res==NULL){

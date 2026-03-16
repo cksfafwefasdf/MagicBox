@@ -39,7 +39,7 @@ int main(int argc,char** argv){
 	int read_bytes = 0;
 	while(1){
 		read_bytes = read(fd,buf,buf_size);
-		if(read_bytes==-1){
+		if(read_bytes<=0){
 			break;
 		}
 		write(1,buf,read_bytes);

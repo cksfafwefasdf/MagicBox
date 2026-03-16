@@ -59,7 +59,6 @@ static struct super_block * ext2_read_super(struct super_block *sb, void *data U
     // 缓存块组描述符表 (GDT)
     // 计算 GDT 总字节大小
     uint32_t gdt_size = sb->ext2_info.group_desc_cnt * sizeof(struct ext2_group_desc);
-    sb->ext2_info.group_desc = (struct ext2_group_desc*)kmalloc(gdt_size);
 
     // 对于 1KB 块，GDT 在 Block 2；对于 >1KB 块，GDT 在 Block 1
     uint32_t gdt_block = (sb->s_block_size == EXT2_BLOCK_UNIT) ? 2 : 1;
@@ -68,6 +67,10 @@ static struct super_block * ext2_read_super(struct super_block *sb, void *data U
     // 通用公式：(s_first_data_block + 1) * (block_size / 512)
     uint32_t gdt_lba = BLOCK_TO_SECTOR(sb, gdt_block);
     uint32_t gdt_sects = DIV_ROUND_UP(gdt_size, SECTOR_SIZE);
+
+    sb->ext2_info.group_desc = (struct ext2_group_desc*)kmalloc(gdt_sects*SECTOR_SIZE);
+
+    
 
     // 在ext2中，块组描述符有可能在其他的块组内部还会单独有一个备份
     // 但是无论如何，我们只去读分区最开始的那个一定存在的原本就行
@@ -166,11 +169,19 @@ static void ext2_read_inode(struct inode* inode) {
     kfree(inode_buf);
 }
 
+static void ext2_put_super(struct super_block *sb) {
+    if (sb->ext2_info.group_desc) {
+        kfree(sb->ext2_info.group_desc);
+        sb->ext2_info.group_desc = NULL;
+    }
+    // 后期的位图啥的操作也要在这里完成，目前只实现了块组描述符的加载，所以先释放块组描述符
+}
+
 struct super_operations ext2_super_ops = {
     .read_inode  = ext2_read_inode,
     .write_inode = NULL, 
     .put_inode   = NULL,
-    .put_super   = NULL,
+    .put_super   = ext2_put_super,
     .write_super = NULL,
     .statfs      = NULL 
 };

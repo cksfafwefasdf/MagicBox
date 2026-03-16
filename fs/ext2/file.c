@@ -84,9 +84,67 @@ static int32_t ext2_readdir(struct inode* inode UNUSED, struct file* file, struc
     return -1;
 }
 
+static int32_t ext2_file_read(struct inode* inode, struct file* file, char* buf, int32_t count) {
+    struct partition* part = get_part_by_rdev(inode->i_dev);
+    struct super_block* sb = inode->i_sb;
+    
+    // 确定块大小
+    uint32_t block_size = EXT2_BLOCK_UNIT << sb->ext2_info.sb_raw.s_log_block_size;
+    
+    // 边界检查,不能读过文件末尾
+    uint32_t size = count;
+    if (file->fd_pos + count > inode->i_size) {
+        size = inode->i_size - file->fd_pos;
+    }
+    
+    if (size <= 0) {
+        // 读完了或者参数不对
+        return 0; 
+    }
+
+    // 申请一个块大小的缓冲区，用于处理非块对齐的读取
+    uint8_t* io_buf = kmalloc(block_size);
+    if (!io_buf) return -ENOMEM;
+
+    uint32_t bytes_read = 0;
+    uint32_t size_left = size;
+    uint8_t* buf_dst = (uint8_t*)buf;
+
+    while (bytes_read < size) {
+        // 计算当前逻辑块号和块内偏移
+        uint32_t block_idx = file->fd_pos / block_size;
+        uint32_t offset_in_block = file->fd_pos % block_size;
+        
+        // 计算当前这轮循环能读多少字节
+        uint32_t sec_left_in_block = block_size - offset_in_block;
+        uint32_t chunk_size = (size_left < sec_left_in_block) ? size_left : sec_left_in_block;
+
+        // 利用 bmap 找到物理块号
+        uint32_t phys_block = inode->i_op->bmap(inode, block_idx);
+
+        if (phys_block == 0) {
+            // Ext2 支持空洞文件（Sparse File），如果块号为 0，填充 0
+            memset(buf_dst, 0, chunk_size);
+        } else {
+            // 读取整个块到 io_buf
+            partition_read(part, BLOCK_TO_SECTOR(sb, phys_block), io_buf, block_size / SECTOR_SIZE);
+            memcpy(buf_dst, io_buf + offset_in_block, chunk_size);
+        }
+
+        // 更新状态
+        buf_dst += chunk_size;
+        file->fd_pos += chunk_size;
+        bytes_read += chunk_size;
+        size_left -= chunk_size;
+    }
+
+    kfree(io_buf);
+    return bytes_read;
+}
+
 struct file_operations ext2_file_operations = {
 	.lseek 		= NULL,
-	.read 		= NULL,
+	.read 		= ext2_file_read,
 	.write 		= NULL,
 	.readdir 	= ext2_readdir,
 	.ioctl 		= NULL,
