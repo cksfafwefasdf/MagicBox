@@ -18,6 +18,10 @@
 #include <sifs_fs.h>
 
 // file 和 dir 都会用这个 write
+// sifs_file_read 是以 i_size 为基准来推 fd_pos 的，这不符合posix标准
+// 这直接默认把write搞成append模式了，按理说如果我们什么标志位都不给的话，写操作是会从fd_pos=0处开始写
+// 也就是说此时的写操作会把早些时候写在前面的数据给覆盖了，但这是正常的，posix标准就是这样的
+// 我们新的ext2的write遵循的是这样的逻辑，sifs不遵守，这点需要注意
 static int32_t sifs_file_write(struct inode* inode UNUSED, struct file* file,char* buf,int32_t count){
 
 	struct partition* part = get_part_by_rdev(file->fd_inode->i_dev);

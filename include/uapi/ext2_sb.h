@@ -4,6 +4,12 @@
 #include <stdint.h>
 
 struct partition;
+struct super_block;
+
+enum ext2_bitmap_type {
+	EXT2_INODE_BITMAP,
+	EXT2_BLOCK_BITMAP
+};
 
 struct ext2_group_desc {
     uint32_t bg_block_bitmap; // 块位图所在的块号
@@ -35,6 +41,10 @@ struct ext2_sb_info {
     // 如果要更通用，相关的位图管理可能需要按需加载。
     // 暂时我们可以只缓存第一个块组的位图，或者先不缓存，读的时候现场读。
 };
+
+extern void ext2_sync_gdt(struct super_block *sb);
+extern uint16_t ext2_encode_type(enum file_types ft,uint16_t mode);
+extern enum file_types ext2_decode_type(uint16_t mode);
 
 extern struct file_system_type ext2_fs_type;
 extern struct super_operations ext2_super_ops;

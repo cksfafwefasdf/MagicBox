@@ -53,6 +53,8 @@
 #define	SYS_SIGPROCMASK 45
 #define SYS_MKFIFO 46
 #define SYS_UMOUNT 47
+#define SYS_RENAME 48
+#define SYS_STATFS 49
 
 // user interface
 extern uint32_t getpid(void);
@@ -102,5 +104,8 @@ extern int sigpending(uint32_t* set);
 extern int sigprocmask(int how, const uint32_t* set, uint32_t* oldset);
 extern int32_t mkfifo(const char* pathname);
 extern int32_t umount(const char* _mount_path);
+extern int32_t rename(const char* _old_path, const char* _new_path);
+extern int32_t statfs(const char* path, struct statfs* buf);
+extern void* calloc(uint32_t nmemb, uint32_t size); 
 
 #endif

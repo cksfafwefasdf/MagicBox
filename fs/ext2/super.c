@@ -9,15 +9,27 @@
 #include <unistd.h>
 
 // 将 ext2 的 i_mode 字段转换成我们系统的 i_type 字段 
-static enum file_types ext2_decode_type(uint16_t mode) {
+enum file_types ext2_decode_type(uint16_t mode) {
     if (S_ISREG(mode))  return FT_REGULAR;
     if (S_ISDIR(mode))  return FT_DIRECTORY;
     if (S_ISCHR(mode))  return FT_CHAR_SPECIAL;
     if (S_ISBLK(mode))  return FT_BLOCK_SPECIAL;
     if (S_ISFIFO(mode)) return FT_FIFO;
-    // if (S_ISLNK(mode))  return FT_SYMLINK;
-    // if (S_ISSOCK(mode)) return FT_SOCKET;
+    if (S_ISLNK(mode))  return FT_SYMBOLIC_LINK;
+    if (S_ISSOCK(mode)) return FT_SOCKET;
     return FT_UNKNOWN;
+}
+
+uint16_t ext2_encode_type(enum file_types ft,uint16_t mode) {
+    if (ft == FT_REGULAR)  return S_IFREG|mode;
+    if (ft == FT_DIRECTORY)  return S_IFDIR|mode;
+    if (ft == FT_CHAR_SPECIAL)  return S_IFCHR|mode;
+    if (ft == FT_BLOCK_SPECIAL)  return S_IFBLK|mode;
+    if (ft == FT_FIFO)  return S_IFIFO|mode;
+    if (ft == FT_SOCKET)  return S_IFSOCK|mode;
+    if (ft == FT_SYMBOLIC_LINK)  return S_IFLNK|mode;
+
+    return 0;
 }
 
 static struct super_block * ext2_read_super(struct super_block *sb, void *data UNUSED, int silent) {
@@ -38,7 +50,7 @@ static struct super_block * ext2_read_super(struct super_block *sb, void *data U
     struct ext2_super_block* raw = &sb->ext2_info.sb_raw;
 
     // 校验魔数
-    if (raw->s_magic != 0xEF53) {
+    if (raw->s_magic != EXT2_MAGIC_NUMBER) {
         if (!silent) printk("VFS: device %d is not an ext2 filesystem\n", sb->s_dev);
         return NULL;
     }
@@ -169,6 +181,76 @@ static void ext2_read_inode(struct inode* inode) {
     kfree(inode_buf);
 }
 
+static void ext2_write_inode(struct inode* inode) {
+    struct super_block* sb = inode->i_sb;
+    struct ext2_sb_info* ext2_info = &sb->ext2_info;
+    struct partition* part = get_part_by_rdev(inode->i_dev);
+
+    // 定位该 Inode 在磁盘上的位置
+    uint32_t i_no = inode->i_no;
+    // Ext2 Inode 编号从 1 开始计算
+    uint32_t group = (i_no - 1) / ext2_info->sb_raw.s_inodes_per_group;
+    uint32_t index = (i_no - 1) % ext2_info->sb_raw.s_inodes_per_group;
+
+    // 找到对应块组的 Inode Table 起始块号
+    uint32_t inode_table_block = ext2_info->group_desc[group].bg_inode_table;
+    
+    // 计算在 Inode Table 内部的字节偏移
+    uint32_t inode_size = sizeof(struct ext2_inode);
+    uint32_t byte_offset = index * inode_size;
+    
+    // 转换为扇区 LBA 和扇区内偏移
+    uint32_t sec_lba = BLOCK_TO_SECTOR(sb, inode_table_block) + (byte_offset / SECTOR_SIZE);
+    uint32_t off_in_sec = byte_offset % SECTOR_SIZE;
+
+    // Read-Modify-Write (RMW) 过程
+    // 即使 Ext2 不会跨扇区（因为 ext2 的 inode 的大小是128或者256，不会跨扇区）
+    // 但为了安全起见我们仍分配 1 个扇区缓冲区
+    char* io_buf = (char*)kmalloc(SECTOR_SIZE);
+    if (io_buf == NULL) {
+        PANIC("ext2_write_inode: fail to kmalloc for io_buf");
+    }
+
+    // 先读出整块扇区，避免破坏同扇区的其他 Inode
+    partition_read(part, sec_lba, io_buf, 1);
+
+    // 找到缓冲区中的目标位置
+    struct ext2_inode* ei = (struct ext2_inode*)(io_buf + off_in_sec);
+
+    // 同步字段
+    ei->i_mode = inode->ext2_i.i_mode; // 包含文件类型和权限
+    ei->i_size = inode->i_size;
+    ei->i_links_count = inode->ext2_i.i_links_count;
+    ei->i_blocks = inode->ext2_i.i_blocks; // 这是以 512 字节为单位的计数，而不是真的按 block 计数
+    
+    // 拷贝块寻址数组 (i_block[15])
+    memcpy(ei->i_block, inode->ext2_i.i_block, sizeof(uint32_t) * 15);
+
+    // 后期实现时间相关的 atime/mtime/ctime 操作的话
+    // 可以在这里进行时间戳相关的操作，在此先留位
+    // ei->i_mtime = ...
+
+    // 写回磁盘
+    partition_write(part, sec_lba, io_buf, 1);
+
+    kfree(io_buf);
+}
+
+// 由于 ext2 的超级块里面维护了很多实时的计数信息，因此如果要卸载超级块的话必须要同步一下
+// 该函数只负责同步超级块，其余的像是块组描述符、位图啥的不在此同步，由 mkdir create 等操作自行调用，这样也更灵活
+static void ext2_write_super(struct super_block *sb) {
+    struct partition *part = get_part_by_rdev(sb->s_dev);
+    
+    // Ext2 超级块始终在分区的 1024 字节偏移处
+    // 无论块大小是 1KB, 2KB 还是 4KB，LBA 始终是从 2 开始（512字节扇区）
+    // 超级块结构体本身 1024 字节，所以占 2 个扇区
+    uint32_t sb_lba = 2; 
+    uint32_t sb_sects = 2;
+
+    // 直接将内存中维护的 sb_raw 写回磁盘
+    partition_write(part, sb_lba, &sb->ext2_info.sb_raw, sb_sects);
+}
+
 static void ext2_put_super(struct super_block *sb) {
     if (sb->ext2_info.group_desc) {
         kfree(sb->ext2_info.group_desc);
@@ -177,13 +259,53 @@ static void ext2_put_super(struct super_block *sb) {
     // 后期的位图啥的操作也要在这里完成，目前只实现了块组描述符的加载，所以先释放块组描述符
 }
 
+static void ext2_statfs(struct super_block *sb, struct statfs *buf) {
+    struct ext2_sb_info* ext2_info = &sb->ext2_info;
+    struct ext2_super_block* raw_sb = &ext2_info->sb_raw;
+
+    // 填充文件系统基本信息
+    buf->f_type = raw_sb->s_magic;// Ext2 Magic: 0xEF53
+    buf->f_bsize = sb->s_block_size; // 块大小 (1KB, 2KB 或 4KB)
+    buf->f_blocks = raw_sb->s_blocks_count; // 总块数（扇区数，不是真的块数）
+    buf->f_namelen = EXT2_MAX_FILE_NAME_LEN; // Ext2 默认最大文件名长度
+
+    // 直接从超级块读取空闲信息 (账本数据)
+    // s_free_blocks_count 是全局总空闲块
+    buf->f_bfree = raw_sb->s_free_blocks_count;
+    
+    // Ext2 有为超级用户保留块的概念 (s_r_blocks_count)
+    // 普通用户可用的空间 = 总空闲 - 保留空间
+    if (buf->f_bfree > raw_sb->s_r_blocks_count) {
+        buf->f_bavail = buf->f_bfree - raw_sb->s_r_blocks_count;
+    } else {
+        buf->f_bavail = 0;
+    }
+
+    // 填充 Inode 相关信息
+    buf->f_files = raw_sb->s_inodes_count; // 总 Inode 数
+    buf->f_ffree = raw_sb->s_free_inodes_count; // 空闲 Inode 数
+}
+
+//  块组描述符同步函数
+void ext2_sync_gdt(struct super_block *sb) {
+    struct ext2_sb_info *ext2_info = &sb->ext2_info;
+    struct partition *part = get_part_by_rdev(sb->s_dev);
+
+    uint32_t gdt_block = (sb->s_block_size == 1024) ? 2 : 1;
+    uint32_t gdt_lba = BLOCK_TO_SECTOR(sb, gdt_block);
+    
+    // 整个 GDT 数组同步写回
+    uint32_t gdt_size = ext2_info->group_desc_cnt * sizeof(struct ext2_group_desc);
+    partition_write(part, gdt_lba, ext2_info->group_desc, DIV_ROUND_UP(gdt_size, SECTOR_SIZE));
+}
+
 struct super_operations ext2_super_ops = {
     .read_inode  = ext2_read_inode,
-    .write_inode = NULL, 
-    .put_inode   = NULL,
+    .write_inode = ext2_write_inode, 
+    .put_inode   = NULL, // 我们使用直写式缓存，不做延迟写，所以此处为NULL
     .put_super   = ext2_put_super,
-    .write_super = NULL,
-    .statfs      = NULL 
+    .write_super = ext2_write_super,
+    .statfs      = ext2_statfs 
 };
 
 struct file_system_type ext2_fs_type = {

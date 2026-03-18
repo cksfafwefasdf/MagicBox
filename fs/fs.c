@@ -34,6 +34,10 @@ struct dlist file_systems;
 // 由于我们去除了 dir 结构，因此现在改用 inode 来标记根目录
 struct inode* root_dir_inode; 
 
+static void open_root_dir(struct partition* part) {
+    root_dir_inode = inode_open(part, part->sb->s_root_ino);
+}
+
 // 注册文件系统
 static void register_filesystem(struct file_system_type *fs) {
     // 简单地推入后台即可
@@ -101,20 +105,31 @@ static bool mount_root_partition(struct dlist_elem* pelem, void* arg) {
 }
 
 // 检查是否具有文件系统，如果是的话返回对应魔数，否则返回-1
-static int32_t has_fs(struct partition* part){
-    // 临时申请一个磁盘超级块缓冲区，仅用于探测
-    void* sb_buf = kmalloc(SECTOR_SIZE);
+static int32_t has_fs(struct partition* part) {
+    // 申请 1024 字节，因为 Ext2 的超级块在偏移 1024 处
+    void* sb_buf = kmalloc(1024); 
     if (sb_buf == NULL) PANIC("has_fs: kmalloc failed!");
-    partition_read(part,1, sb_buf, 1);
+
+    // 读取前 2 个扇区 (LBA 1 是 SIFS 超级块，LBA 2 是 Ext2 超级块的一半)
+    partition_read(part, 1, sb_buf, 2); 
+
     int32_t ret = -1;
-    // 检查魔数，如果没有则格式化
-    
-    if (((struct sifs_super_block*)sb_buf)->magic == SIFS_FS_MAGIC_NUMBER) {
+
+    // 检查 SIFS (偏移 0，即 LBA 1)
+    struct sifs_super_block* sifs_sb = (struct sifs_super_block*)sb_buf;
+    if (sifs_sb->magic == SIFS_FS_MAGIC_NUMBER) {
         ret = SIFS_FS_MAGIC_NUMBER;
+    } else {
+        // 检查 Ext2 (偏移 512，即 LBA 2)
+        // Ext2 标准偏移是 1024，相对于分区起始。
+        // 由于我们进行的是partition_read(part, 1,...)，即起始偏移以及走了一个扇区了
+        // 因此此处偏移量只加512字节就行了
+        struct ext2_super_block* ext2_sb = (struct ext2_super_block*)((char*)sb_buf + 512);
+        if (ext2_sb->s_magic == EXT2_MAGIC_NUMBER) {
+            ret = EXT2_MAGIC_NUMBER;
+        }
     }
-    // else if(((struct ext2_super_block*)sb_buf)->magic != EXT2_FS_MAGIC_NUMBER)
-    
-    // 探测完毕，释放临时缓冲区
+
     kfree(sb_buf);
     return ret;
 }
@@ -123,12 +138,18 @@ void filesys_init() {
 
     inode_cache_init();
 
+    dlist_init(&file_systems);
+
+    register_filesystem(&sifs_fs_type);
+    register_filesystem(&ext2_fs_type);
+
     uint8_t channel_no = 0, dev_no = 0;
     bool first_flag = true;
     char default_part[MAX_DISK_NAME_LEN] = {0};
 
     printk("Searching filesystem......\n");
-
+    // 检查第一个有效分区里面是否有文件系统
+    // 有就用，没有就为其初始化一个sifs文件系统
     while (channel_no < channel_cnt) {
         dev_no = 0;
         while (dev_no < 2) {
@@ -139,7 +160,7 @@ void filesys_init() {
             uint8_t part_idx = 0;
             while (part_idx < 12) {
                 if (part_idx == 4) part = hd->logic_parts;
-
+                // 如果一个分区的扇区数为0，那么它就是个无效的扇区，跳过
                 if (part->sec_cnt != 0) {
 
                     if(has_fs(part)==-1){
@@ -165,11 +186,6 @@ void filesys_init() {
     
 
 mnt:
-
-    dlist_init(&file_systems);
-
-    register_filesystem(&sifs_fs_type);
-    register_filesystem(&ext2_fs_type);
 
     // 调用 mount_partition 进行挂载
     // mount_partition 内部会调用 sifs_read_super，加载超级块
@@ -402,7 +418,7 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
         // 这个操作应该是要放到 VFS 层做的而不是具体的文件系统来做
         // 因为不管是什么文件系统下的文件，他们file结构的填充和inode缓存的建立都是一样的
         if(searched_record.parent_inode->i_op!=NULL&&searched_record.parent_inode->i_op->create!=NULL){
-            final_inode_no = searched_record.parent_inode->i_op->create(searched_record.parent_inode, filename, strlen(filename), 0);
+            final_inode_no = searched_record.parent_inode->i_op->create(searched_record.parent_inode, filename, strlen(filename), 0777);
         }else{
             PANIC("searched_record.parent_inode->i_op is NULL");
         }
@@ -418,6 +434,23 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
         // file is existed, open the file
 		// O_RDONLY,O_WRONLY,O_RDWR
         final_inode_no = inode_no;
+
+        if (flags & O_TRUNC) {
+            // 获取对应的 inode 对象 
+            struct partition* part = get_part_by_rdev(searched_record.i_dev);
+            struct inode* inode = inode_open(part, final_inode_no);
+            
+            // 只有普通文件才允许截断
+            // 按理说，我们只会给普通文件的inode操作集里面放上 truncate
+            // 因此我们只要判断 truncate 不为空就行
+            if (inode->i_op && inode->i_op->truncate) {
+                // truncate和什么都不加的区别就是
+                // truncate会把文件给清空再从头写
+                // 但是什么都不加不会不清空文件，而是直接从头覆盖
+                inode->i_op->truncate(inode);
+            }
+            inode_close(inode); 
+        }
     }
 
     struct partition* part = get_part_by_rdev(searched_record.i_dev);
@@ -425,14 +458,20 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
     // 因此这个操作就这么留在这就行，然后将普通文件，设备文件等的 open 置为 NULL 即可
     fd = file_open(part,final_inode_no,flags);
 
-
 	// 对于 FIFO 的处理 
 	// 检查这个 FIFO 之前是否被打开过
     // fd 为 -1 是正常的，我们可以通过这一点来判断文件是否存在！
     if (fd != -1) {
+        // 处理追加模式
+        
         struct task_struct* cur = get_running_task_struct();
         struct file* f = &file_table[cur->fd_table[fd]];
         struct inode* inode = f->fd_inode;
+
+        if(flags & O_APPEND){
+            f->fd_pos = f->fd_inode->i_size;
+        }
+
         if(f->f_op && f->f_op->open){
             printk("try to open fifo\n");
             int32_t ret = f->f_op->open(inode,f);
@@ -673,7 +712,9 @@ int32_t sys_mkdir(const char* _pathname) {
 
     int32_t dir_i_no = -1;
     if(parent_inode->i_op != NULL && parent_inode->i_op->mkdir!=NULL){
-        dir_i_no = parent_inode->i_op->mkdir(parent_inode, dir_name, len, 0);
+        // ext2会处理权限位，但是我们的系统并没有权限管理，因此直接给777满权限
+        // 这个0开头的数字是一个8进制数字
+        dir_i_no = parent_inode->i_op->mkdir(parent_inode, dir_name, len, 0777);
     }else{
         PANIC("parent_inode->i_op is NULL");
     }
@@ -999,129 +1040,6 @@ int32_t sys_stat(const char* _pathname,struct stat* buf){
 	return ret;
 }
 
-// partition formatlize 512B-blocks used avaliable
-void sys_disk_info() {
-    uint8_t channel_idx;
-    printk("disk number: %d\n", disk_num);
-
-    // 磁盘容量单位处理逻
-    char** granularits = kmalloc(sizeof(char*) * disk_num);
-    uint8_t* div_cnts = kmalloc(sizeof(uint8_t) * disk_num);
-    memset(div_cnts, 0, disk_num);
-
-    for (int i = 0; i < disk_num; i++) {
-        uint32_t temp_size = disk_size[i];
-        while (temp_size > 1024) {
-            temp_size /= 1024;
-            div_cnts[i]++;
-        }
-        char* units[] = {"B", "KB", "MB", "GB", "TB"};
-        granularits[i] = (div_cnts[i] < 5) ? units[div_cnts[i]] : "OVERFLOW!";
-    }
-
-    // 打印磁盘基本容量 (sda, sdb...)
-    for (channel_idx = 0; channel_idx < CHANNEL_NUM; channel_idx++) {
-        for (uint8_t ide_idx = 0; ide_idx < DEVICE_NUM_PER_CHANNEL; ide_idx++) {
-            struct disk* hd = &channels[channel_idx].devices[ide_idx];
-            if (!hd->name[0]) continue;
-            uint8_t d_idx = channel_idx * DISK_NUM_IN_CHANNEL + ide_idx;
-            uint32_t display_size = disk_size[d_idx];
-            for(int j=0; j<div_cnts[d_idx]; j++) display_size /= 1024;
-            printk("%s\t%d%s\n", hd->name, display_size, granularits[d_idx]);
-        }
-    }
-
-    printk("partition\tformatlize\t512B-blocks\tused\tavaliable\n");
-
-    // 分区遍历与统计
-    for (channel_idx = 0; channel_idx < CHANNEL_NUM; channel_idx++) {
-        for (uint8_t device_idx = 0; device_idx < DEVICE_NUM_PER_CHANNEL; device_idx++) {
-            struct disk* hd = &channels[channel_idx].devices[device_idx];
-            if (!hd->name[0]) continue;
-
-            bool has_partition = false;
-            for (uint8_t i = 0; i < PRIM_PARTS_NUM; i++) {
-                if (hd->prim_parts[i].name[0]) { has_partition = true; break; }
-            }
-
-            if (has_partition) {
-                for (int type = 0; type < 2; type++) {
-                    int limit = (type == 0) ? PRIM_PARTS_NUM : LOGIC_PARTS_NUM;
-                    for (int p_idx = 0; p_idx < limit; p_idx++) {
-                        struct partition* part = (type == 0) ? &hd->prim_parts[p_idx] : &hd->logic_parts[p_idx];
-                        if (!part->name[0]) continue;
-
-                        struct statfs st = {0};
-                        bool is_sifs = false;
-                        
-                        // 如果挂载了，走 VFS 接口；没挂载，走临时读取逻辑
-                        /*
-                            硬编码稍后要替换成操作集
-                            if (part->sb != NULL && part->sb->s_op->statfs != NULL) {
-                                part->sb->s_op->statfs(part->sb, &st);
-                            } 
-                        */
-                        if (part->sb != NULL && part->sb->s_op != NULL) {
-                            part->sb->s_op->statfs(part->sb, &st);
-                            is_sifs = true;
-                        } else {
-                            struct sifs_super_block temp_sb;
-                            partition_read(part, 1, &temp_sb, 1);
-                            if (temp_sb.magic == SIFS_FS_MAGIC_NUMBER) {
-                                is_sifs = true;
-                                st.f_type = temp_sb.magic;
-                                st.f_blocks = temp_sb.sec_cnt;
-
-                                // 由于没挂载，因此这里需要现场扫位图
-                                uint32_t btmp_sects = temp_sb.block_bitmap_sects;
-                                uint8_t* btmp_buf = kmalloc(btmp_sects * SECTOR_SIZE);
-                                if (btmp_buf) {
-                                    partition_read(part, temp_sb.block_bitmap_lba, btmp_buf, btmp_sects);
-                                    struct bitmap btmp = {.bits = btmp_buf, .btmp_bytes_len = temp_sb.sec_cnt / 8};
-                                    st.f_bfree = bitmap_count(&btmp);
-                                    kfree(btmp_buf);
-                                }
-                            }
-                        }
-
-                        if (!is_sifs) {
-                            // 没有文件系统就输出 -
-                            printk("%s(%c)\t-\t-\t-\t-\n", part->name, (type == 0 ? 'P' : 'L'));
-                        } else {
-                            // 计算位图并打印
-                            uint32_t used_sects = st.f_blocks - st.f_bfree;
-                            
-                            // 根分区打 * 标记
-                            char root_flag_str[2] = {0};
-                            if (root_part != NULL && !strcmp(root_part->name, part->name)) {
-                                root_flag_str[0] = '*';
-                            }
-
-                            // 完全还原你的 printk 格式
-                            printk("%s(%c)%s\t%x\t%d\t%d\t%d\n", 
-                                part->name, 
-                                (type == 0 ? 'P' : 'L'), 
-                                root_flag_str, 
-                                st.f_type, 
-                                st.f_blocks, 
-                                used_sects, 
-                                st.f_bfree);
-                        }
-                    }
-                }
-            } else {
-                // R means raw disk
-                uint8_t d_idx = channel_idx * DISK_NUM_IN_CHANNEL + device_idx;
-                uint32_t display_size = disk_size[d_idx];
-                for(int j=0; j<div_cnts[d_idx]; j++) display_size /= 1024;
-                printk("%s(R)\t-\t-\t-\t%d%s\n", hd->name, display_size, granularits[d_idx]);
-            }
-        }
-    }
-    kfree(granularits);
-    kfree(div_cnts);
-}
-
 static bool check_disk_name(struct dlist_elem* pelem,void* arg){
 	char* part_name = (char*) arg;
 	struct partition* part = member_to_entry(struct partition,part_tag,pelem);
@@ -1230,13 +1148,13 @@ int32_t sys_mount(char* dev_path, char* _mount_path, char* type, unsigned long n
     struct file_system_type *fst = find_filesystem(type);
     struct super_block* res = NULL;
     if (fst && (fst->flags & FS_REQUIRES_DEV)) {
-        printk("addr sb:%x\n",sb);
         // 获取分区并 read_super
         res = fst->read_super(sb, NULL, 0);
         if(res==NULL){
             printk("fail to mount %s, you should mkfs first!\n",dev_name);
             goto rollback;
         }
+
     }else{
         printk("VFS: Unknown filesystem type %s\n", type);
         kfree(sb);
@@ -1542,4 +1460,258 @@ int32_t sys_mkfifo(const char* pathname) {
     // 逻辑基本等同于 sys_mknod(pathname, FT_FIFO, 0)
 	// 因为 fifo 和设备inode一样，都是只有inode没有对应磁盘数据块
     return sys_mknod(pathname, FT_FIFO, 0); 
+}
+
+// rename 只能负责统一设备（分区）上的重命名（移动）操作
+// 如果要跨设备移动文件，需要在用户层进行封装
+// 跨设备的移动文件通常是在新分区直接write一个一模一样的老文件
+// 然后将老文件给unlink了
+// 因为同分区 rename 是原子的（或者接近原子），要么成功，要么失败，文件不会丢。
+// 跨分区的话原子性无法保证
+int32_t sys_rename(const char* _old_path, const char* _new_path) {
+    char* old_pathname = kmalloc(MAX_PATH_LEN);
+    char* new_pathname = kmalloc(MAX_PATH_LEN);
+    int32_t ret = -1;
+    
+    // 先不处理申请失败的情况
+    ASSERT(old_pathname!=NULL);
+    ASSERT(new_pathname!=NULL);
+
+    // 统一转成绝对路径 
+    make_abs_pathname(_old_path, old_pathname);
+    make_abs_pathname(_new_path, new_pathname);
+
+    // 解析旧路径
+    struct path_search_record old_record;
+    memset(&old_record, 0, sizeof(struct path_search_record));
+    int old_ino = search_file(old_pathname, &old_record);
+    if (old_ino == -1) {
+        // 源文件不存在
+        goto fail;
+    }
+
+    // 解析新路径
+    struct path_search_record new_record;
+    memset(&new_record, 0, sizeof(struct path_search_record));
+    int new_ino = search_file(new_pathname, &new_record);
+    // new_ino == -1 是正常的，说明目标位置尚未被占用
+    // 关键修正：确保新路径所在的父目录是存在的
+    if (new_record.parent_inode == NULL) {
+        printk("sys_rename: target directory does not exist\n");
+        ret = -ENOENT;
+        goto fail;
+    }
+
+    // 确保跨路径操作是在同一个设备/分区上
+    if (old_record.i_dev != new_record.i_dev) {
+        printk("sys_rename: cannot rename across devices\n");
+        ret = -EXDEV;
+        goto fail;
+    }
+
+    // 提取文件名
+    char* old_name = strrchr(old_pathname, '/') + 1;
+    char* new_name = strrchr(new_pathname, '/') + 1;
+
+    // 调用具体文件系统的 rename 实现
+    if (old_record.parent_inode->i_op && old_record.parent_inode->i_op->rename) {
+        ret = old_record.parent_inode->i_op->rename(
+            old_record.parent_inode, old_name, strlen(old_name),
+            new_record.parent_inode, new_name, strlen(new_name)
+        );
+    }
+
+    // 清理 Inode 引用
+    inode_close(old_record.parent_inode);
+    inode_close(new_record.parent_inode);
+    kfree(old_pathname);
+    kfree(new_pathname);
+    return ret;
+
+fail:
+    if (old_record.parent_inode) inode_close(old_record.parent_inode);
+    if (new_record.parent_inode) inode_close(new_record.parent_inode);
+    kfree(old_pathname);
+    kfree(new_pathname);
+    return ret;
+}
+
+int32_t sys_statfs(const char* path, struct statfs* buf) {
+    char* abs_path = kmalloc(MAX_PATH_LEN);
+    if (!abs_path) return -ENOMEM;
+
+    // 标准化路径
+    make_abs_pathname(path, abs_path);
+
+    // 查找路径对应的 inode
+    struct path_search_record record;
+    memset(&record, 0, sizeof(struct path_search_record));
+    int inode_no = search_file(abs_path, &record);
+
+    // 即使文件没找到，只要父目录在，通常也能定位到文件系统
+    // 但最稳妥的是要求路径必须存在
+    if (inode_no == -1) {
+        if (record.parent_inode) inode_close(record.parent_inode);
+        kfree(abs_path);
+        return -ENOENT;
+    }
+
+    // 获取 inode (search_file 返回编号，我们需要拿到内存中的 inode 结构以获取 sb)
+    struct partition* part = get_part_by_rdev(record.i_dev);
+    struct inode* target_inode = inode_open(part, inode_no);
+
+    // 调用底层文件系统的 statfs
+    struct super_block* sb = target_inode->i_sb;
+    int32_t ret = -1;
+    if (sb->s_op && sb->s_op->statfs) {
+        // 在内核空间先填充一个临时 buffer
+        struct statfs tmp_buf;
+        memset(&tmp_buf, 0, sizeof(struct statfs));
+        
+        sb->s_op->statfs(sb, &tmp_buf);
+        
+        // 将内核数据拷贝到用户态缓冲区
+        memcpy(buf, &tmp_buf, sizeof(struct statfs));
+        ret = 0;
+    }
+
+    // 清理
+    inode_close(target_inode);
+    if (record.parent_inode) inode_close(record.parent_inode);
+    kfree(abs_path);
+
+    return ret;
+}
+
+// 辅助函数，尝试探测未挂载分区的文件系统类型并获取基本统计
+// 返回值：0-成功识别, -1-识别失败
+static int32_t probe_fs_unmounted(struct partition* part, struct statfs* st) {
+    // 尝试探测 SIFS
+    struct sifs_super_block sifs_sb;
+    partition_read(part, 1, &sifs_sb, 1); // 假设 SIFS 超级块在第 1 扇区
+    if (sifs_sb.magic == SIFS_FS_MAGIC_NUMBER) {
+        st->f_type = sifs_sb.magic;
+        st->f_blocks = sifs_sb.sec_cnt;
+        st->f_bsize = SECTOR_SIZE; // SIFS 以扇区为单位
+
+        uint32_t btmp_sects = sifs_sb.block_bitmap_sects;
+        uint8_t* btmp_buf = kmalloc(btmp_sects * SECTOR_SIZE);
+        if (btmp_buf) {
+            partition_read(part, sifs_sb.block_bitmap_lba, btmp_buf, btmp_sects);
+            struct bitmap btmp = {.bits = btmp_buf, .btmp_bytes_len = sifs_sb.sec_cnt / 8};
+            st->f_bfree = bitmap_count(&btmp);
+            kfree(btmp_buf);
+        }
+        return 0;
+    }
+
+    // 尝试探测 Ext2
+    struct ext2_super_block ext2_sb;
+    partition_read(part, 2, &ext2_sb, 2); // Ext2 超级块在 1024 字节偏移处
+    if (ext2_sb.s_magic == EXT2_MAGIC_NUMBER) {
+        st->f_type = ext2_sb.s_magic;
+        st->f_blocks = ext2_sb.s_blocks_count;
+        st->f_bfree = ext2_sb.s_free_blocks_count;
+        st->f_bsize = EXT2_BLOCK_UNIT << ext2_sb.s_log_block_size;
+        return 0;
+    }
+
+    return -1;
+}
+
+void sys_disk_info() {
+    uint8_t channel_idx;
+    printk("disk number: %d\n", disk_num);
+
+    // 磁盘容量单位预处理，打印磁盘的总览信息
+    char** granulars = kmalloc(sizeof(char*) * disk_num);
+    uint8_t* div_cnts = kmalloc(sizeof(uint8_t) * disk_num);
+    memset(div_cnts, 0, disk_num);
+
+    for (int i = 0; i < disk_num; i++) {
+        uint32_t temp_size = disk_size[i];
+        while (temp_size >= 1024) {
+            temp_size /= 1024;
+            div_cnts[i]++;
+        }
+        char* units[] = {"B", "KB", "MB", "GB", "TB"};
+        granulars[i] = (div_cnts[i] < 5) ? units[div_cnts[i]] : "OVR!";
+    }
+
+    // 打印磁盘基本容量
+    for (channel_idx = 0; channel_idx < CHANNEL_NUM; channel_idx++) {
+        for (uint8_t ide_idx = 0; ide_idx < DEVICE_NUM_PER_CHANNEL; ide_idx++) {
+            struct disk* hd = &channels[channel_idx].devices[ide_idx];
+            if (!hd->name[0]) continue;
+            uint8_t d_idx = channel_idx * DISK_NUM_IN_CHANNEL + ide_idx;
+            uint32_t display_size = disk_size[d_idx];
+            for(int j=0; j < div_cnts[d_idx]; j++) display_size /= 1024;
+            printk("%s\t%d%s\n", hd->name, display_size, granulars[d_idx]);
+        }
+    }
+
+    printk("partition\tformat\t512B-blocks\tused\tavailable\n");
+
+    // 3. 遍历硬件结构体打印详细信息
+    for (channel_idx = 0; channel_idx < CHANNEL_NUM; channel_idx++) {
+        for (uint8_t device_idx = 0; device_idx < DEVICE_NUM_PER_CHANNEL; device_idx++) {
+            struct disk* hd = &channels[channel_idx].devices[device_idx];
+            if (!hd->name[0]) continue;
+
+            // 检查该磁盘是否有分区
+            bool has_partition = false;
+            for (uint8_t i = 0; i < PRIM_PARTS_NUM; i++) {
+                if (hd->prim_parts[i].name[0]) { has_partition = true; break; }
+            }
+
+            if (has_partition) {
+                for (int type = 0; type < 2; type++) {
+                    int limit = (type == 0) ? PRIM_PARTS_NUM : LOGIC_PARTS_NUM;
+                    for (int p_idx = 0; p_idx < limit; p_idx++) {
+                        struct partition* part = (type == 0) ? &hd->prim_parts[p_idx] : &hd->logic_parts[p_idx];
+                        if (!part->name[0]) continue;
+
+                        struct statfs st = {0};
+                        bool fs_ready = false;
+
+                        if (part->sb != NULL && part->sb->s_op && part->sb->s_op->statfs) {
+                            //  已挂载，直接调用 VFS 接口
+                            part->sb->s_op->statfs(part->sb, &st);
+                            fs_ready = true;
+                        } else {
+                            // 未挂载，尝试手动识别超级块
+                            if (probe_fs_unmounted(part, &st) == 0) {
+                                fs_ready = true;
+                            }
+                        }
+
+                        if (!fs_ready) {
+                            printk("%s(%c)\t-\t-\t-\t-\n", part->name, (type == 0 ? 'P' : 'L'));
+                        } else {
+                            // 统一计算（此处我们将所有单位统一转化为 512B 块进行显示）
+                            uint32_t ratio = st.f_bsize / 512;
+                            uint32_t total_512 = st.f_blocks * ratio;
+                            uint32_t free_512 = st.f_bfree * ratio;
+                            uint32_t used_512 = total_512 - free_512;
+
+                            char root_flag = ' ';
+                            if (root_part != NULL && !strcmp(root_part->name, part->name)) root_flag = '*';
+
+                            printk("%s(%c)%c\t%x\t%d\t%d\t%d\n", 
+                                   part->name, (type == 0 ? 'P' : 'L'), root_flag,
+                                   st.f_type, total_512, used_512, free_512);
+                        }
+                    }
+                }
+            } else {
+                // Raw Disk 处理
+                uint8_t d_idx = channel_idx * DISK_NUM_IN_CHANNEL + device_idx;
+                uint32_t d_size = disk_size[d_idx];
+                for(int j=0; j < div_cnts[d_idx]; j++) d_size /= 1024;
+                printk("%s(R)\t-\t-\t-\t%d%s\n", hd->name, d_size, granulars[d_idx]);
+            }
+        }
+    }
+    kfree(granulars);
+    kfree(div_cnts);
 }

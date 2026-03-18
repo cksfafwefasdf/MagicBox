@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <ide.h>
 #include <stdio-kernel.h>
+#include <debug.h>
+#include <ext2_inode.h>
 
 static int32_t ext2_readdir(struct inode* inode UNUSED, struct file* file, struct dirent* de, int count UNUSED) {
     struct inode* dir_inode = file->fd_inode;
@@ -55,12 +57,15 @@ static int32_t ext2_readdir(struct inode* inode UNUSED, struct file* file, struc
             if (p_de->i_no != 0) {
                 // 找到有效条目，填充通用 dirent
                 de->d_ino = p_de->i_no;
-                de->d_type = p_de->file_type; // Ext2 的 file_type 与你的 enum 兼容
+                de->d_type = p_de->file_type; // Ext2 的 file_type 与 enum 类型兼容
                 de->d_off = file->fd_pos;
                 de->d_reclen = sizeof(struct dirent);
                 
                 // 清空并拷贝文件名
                 memset(de->d_name, 0, MAX_FILE_NAME_LEN);
+                // 如果文件名超过vfs的支持，那么就截断
+                // 目前有一个问题，ext2使用的是变长目录项，它文件名的最大长度是255，但是我们vfs最大只支持64
+                // 因此此处可能会发生截断
                 uint32_t name_copy_len = (p_de->name_len < MAX_FILE_NAME_LEN) ? p_de->name_len : (MAX_FILE_NAME_LEN - 1);
                 memcpy(de->d_name, p_de->name, name_copy_len);
                 
@@ -142,10 +147,139 @@ static int32_t ext2_file_read(struct inode* inode, struct file* file, char* buf,
     return bytes_read;
 }
 
+static int32_t ext2_generic_lseek(struct inode* inode, struct file* pf, int32_t offset, int whence) {
+    int32_t new_pos = 0;
+    uint32_t file_size = inode->i_size;
+
+    switch (whence) {
+        case SEEK_SET:
+            new_pos = offset;
+            break;
+        case SEEK_CUR:
+            new_pos = (int32_t)pf->fd_pos + offset;
+            break;
+        case SEEK_END:
+            new_pos = (int32_t)file_size + offset;
+            break;
+        default:
+            return -EINVAL;
+    }
+
+    // 基础边界检查：不能偏移到文件开头之前
+    if (new_pos < 0) {
+        return -EINVAL;
+    }
+
+    // 针对目录的特殊限制
+    // 在 Ext2 中，目录的 fd_pos 必须是 4 字节对齐的（或者必须指向有效的 dir_entry 开头）
+    // 为了简单，我们要求目录的 lseek 不能超过 size
+    if (inode->i_type == FT_DIRECTORY) {
+        if ((uint32_t)new_pos > file_size) {
+            return -EINVAL;
+        }
+    }
+
+    // 针对普通文件的扩展 (Sparse File 支持)
+    // 理论上普通文件可以 lseek 超过 i_size，但我们的系统中还没写好“空洞”自动填充逻辑
+    // 因此可以先沿用SIFS里面的那种严格限制：
+    if (inode->i_type == FT_REGULAR) {
+        if ((uint32_t)new_pos > file_size) {
+             // 若是支持稀疏文件，这里就不报错，直接让写函数去扩容
+             return -EINVAL; 
+        }
+    }
+
+    pf->fd_pos = new_pos;
+    return pf->fd_pos;
+}
+
+static int32_t ext2_file_write(struct inode* inode, struct file* file,char* buf,int32_t count) {
+    ASSERT(inode = file->fd_inode);
+    struct super_block* sb = inode->i_sb;
+    struct partition* part = get_part_by_rdev(inode->i_dev);
+    uint32_t block_size = sb->s_block_size;
+
+    // 准备缓冲区 (处理跨块的读-改-写)
+    uint8_t* io_buf = kmalloc(block_size);
+    ASSERT(io_buf!=NULL);
+    if (!io_buf) return -ENOMEM;
+
+    uint32_t bytes_written = 0;
+    uint32_t size_left = count;
+    const uint8_t* src = (const uint8_t*)buf;
+
+    // 循环写入
+    while (size_left > 0) {
+        // 文件读写时统一用fd_pos作为参考系
+        uint32_t logical_idx = file->fd_pos / block_size;
+        uint32_t offset_in_block = file->fd_pos % block_size;
+        uint32_t space_in_block = block_size - offset_in_block;
+        uint32_t chunk_size = (size_left < space_in_block) ? size_left : space_in_block;
+
+        // 获取该逻辑块对应的物理块
+        uint32_t phys_block = inode->i_op->bmap(inode, logical_idx);
+
+        // 如果物理块不存在，说明需要分配（扩容）
+        if (phys_block == 0) {
+            phys_block = ext2_resource_alloc(sb, 0, EXT2_BLOCK_BITMAP);
+            ASSERT((int)phys_block!=-1);
+            if ((int)phys_block == -1) {
+                // 磁盘满了
+                break; 
+            }
+            // 使用 append 函数将相应的块挂载到三级间址树上
+            // append_block 内部会更新 i_size 和 i_blocks，
+            if (ext2_append_block_to_inode(inode, phys_block) < 0) {
+                // 回滚逻辑
+                PANIC("fail to ext2_append_block_to_inode");
+                break;
+            }
+            memset(io_buf, 0, block_size);
+        } else {
+            // 只有当不是完整覆盖这一整块时，才需要读-改-写
+            // 完整覆盖的条件是：从 0 开始写，且写够 block_size
+            if (!(offset_in_block == 0 && chunk_size == block_size)) {
+                partition_read(part, BLOCK_TO_SECTOR(sb, phys_block), io_buf, block_size / SECTOR_SIZE);
+            }
+        }
+
+        PUTS("write at: ",phys_block);
+        // 读-改-写逻辑
+
+        memcpy(io_buf + offset_in_block, src, chunk_size);
+        partition_write(part, BLOCK_TO_SECTOR(sb, phys_block), io_buf, block_size / SECTOR_SIZE);
+
+        // 更新位置和大小
+        // 如果 fd_pos + chunk_size 超过了当前的 i_size，才更新i_size
+        // 也就是说只有当“当前写入的位置”超过了“原有的文件大小”时，才推着 i_size 往前走
+        file->fd_pos += chunk_size; // 先移动指针
+        if (file->fd_pos > inode->i_size) {
+            inode->i_size = file->fd_pos; // 只有写过了末尾才更新大小
+        }
+
+        // 更新计数
+        src += chunk_size;
+        bytes_written += chunk_size;
+        size_left -= chunk_size;
+
+    }
+
+    // 持久化 Inode
+    // 由于 sb 和 块组描述符里面都维护了很多实时信息，所以都要更新
+    // 目前我们先这么写，按理说我们并不需要每一次写文件都要去动他们
+    // 后期如果速度太慢了再来优化它
+    sb->s_op->write_inode(inode);
+    ext2_sync_gdt(sb);
+    sb->s_op->write_super(sb);
+
+    kfree(io_buf);
+    return bytes_written;
+}
+
 struct file_operations ext2_file_operations = {
-	.lseek 		= NULL,
+	.lseek 		= ext2_generic_lseek,
 	.read 		= ext2_file_read,
-	.write 		= NULL,
+	.write 		= ext2_file_write,
 	.readdir 	= ext2_readdir,
 	.ioctl 		= NULL,
 	.open 		= NULL,

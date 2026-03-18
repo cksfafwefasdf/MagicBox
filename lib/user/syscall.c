@@ -285,3 +285,20 @@ int32_t mkfifo(const char* pathname){
 int32_t umount(const char* _mount_path){
 	return _syscall1(SYS_UMOUNT,_mount_path);
 }
+
+int32_t rename(const char* _old_path, const char* _new_path){
+	return _syscall2(SYS_RENAME,_old_path,_new_path);
+}	
+
+int32_t statfs(const char* path, struct statfs* buf){
+	return _syscall2(SYS_STATFS,path,buf);
+}
+
+void* calloc(uint32_t nmemb, uint32_t size) {
+    uint32_t total_size = nmemb * size;
+    void* p = malloc(total_size);
+    if (p != NULL) {
+        memset(p, 0, total_size); // 把拿到的脏内存洗干净
+    }
+    return p;
+}

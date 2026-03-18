@@ -10,18 +10,7 @@
 #include <sifs_sb.h>
 #include <sifs_fs.h>
 #include <inode.h>
-
-void open_root_dir(struct partition* part) {
-    root_dir_inode = inode_open(part, part->sb->s_root_ino);
-}
-
-void close_root_dir() {
-    // 确保根目录确实存在且被打开了
-    if (root_dir_inode != NULL) {
-        // 调用 inode_close，它会处理引用计数和磁盘同步
-        inode_close(root_dir_inode);
-    }
-}
+#include <fs_types.h> 
 
 bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, const char* name,int len, struct sifs_dir_entry* de) {
     // 计算所有可能的块地址（包括一级间接块）

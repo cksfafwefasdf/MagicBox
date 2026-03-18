@@ -19,7 +19,7 @@ bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, cons
 // 因为在 search_file 的过程中，其实我们并不需要 fd_pos 这个游标，本质上其实也就是在操作他的inode，因此我们直接改成对inode的操作
 // 而对于 open 操作，我们才使用 file_open 来进行统一控制
 // extern struct dir* dir_open(struct partition* part,uint32_t inode_no);
-extern void open_root_dir(struct partition* part);
+// extern void open_root_dir(struct partition* part);
 extern void sifs_create_dir_entry(char* filename, uint32_t len, uint32_t inode_no, enum file_types file_type, struct sifs_dir_entry* p_de);
 extern bool sifs_sync_dir_entry(struct inode* parent_inode, struct sifs_dir_entry* p_de, void* io_buf);
 extern bool sifs_delete_dir_entry(struct partition* part, struct inode* parent_inode, uint32_t inode_no, void* io_buf);

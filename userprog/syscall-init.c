@@ -75,6 +75,8 @@ void syscall_init(void){
 	syscall_table[SYS_SIGPROCMASK] = sys_sigprocmask;
 	syscall_table[SYS_MKFIFO] = sys_mkfifo;
 	syscall_table[SYS_UMOUNT] = sys_umount;
+	syscall_table[SYS_RENAME] = sys_rename;
+	syscall_table[SYS_STATFS] = sys_statfs;
 	
 	put_str("syscall_init done\n");
 }

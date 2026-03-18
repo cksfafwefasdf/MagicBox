@@ -9,7 +9,7 @@
 #include <fs.h>
 #include <debug.h>
 #include <sifs_inode.h>
-
+#include <ext2_inode.h>
 
 #define MAX_INODE_CACHE_SIZE 64
 #define BUCKET_NR 32
@@ -263,6 +263,8 @@ struct inode* make_anonymous_inode() {
 int32_t inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_t count) {
     if(inode->i_sb->s_magic == SIFS_FS_MAGIC_NUMBER){
         return sifs_inode_read_data(inode,offset,buf,count);
+    }else if(inode->i_sb->s_magic == EXT2_MAGIC_NUMBER){
+        return ext2_inode_read_data(inode,offset,buf,count);
     }else{
         PANIC("unkonwn fs type!");
     }

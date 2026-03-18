@@ -8,7 +8,7 @@
 #include <sifs_fs.h>
 #include <syscall.h>
 
-// 根据内核定义确保这些常量一致
+// 根据内核定义以便于确保这些常量一致
 #define SECTOR_SIZE 512
 #define BITS_PER_SECTOR (SECTOR_SIZE * 8)
 #define DIV_ROUND_UP(X, STEP) (((X) + (STEP) - 1) / (STEP))

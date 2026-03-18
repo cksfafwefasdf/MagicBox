@@ -88,17 +88,6 @@ struct path_search_record{
     uint32_t i_dev; // 所在设备号
 };
 
-struct statfs {
-    long f_type; // 文件系统类型（比如 SIFS 的魔数）
-    long f_bsize; // 最优传输块大小（通常等于扇区大小，如 512 或 4096）
-    long f_blocks; // 分区总共有多少个块（总容量）
-    long f_bfree; // 剩余空闲块数
-    long f_bavail; // 普通用户可用的空闲块（单用户系统中，通常 f_bavail = f_bfree）
-    long f_files; // 分区总共有多少个 Inode 节点（总文件数上限）
-    long f_ffree; // 剩余可用的 Inode 节点数
-    long f_namelen; // 最大文件名长度
-};
-
 // 用于 vfs，抽象文件操作
 // 不同的文件类型（例如块设备文件、字符设备文件、普通文件、目录文件、pipe文件、fifo文件）会对应不同的操作集
 struct file_operations {
@@ -160,7 +149,7 @@ struct inode_operations {
 	int (*bmap) (struct inode *,int);
 	// 截断文件（比如 open 时带了 O_TRUNC）。
 	// 它负责释放文件占用的磁盘块，并把 i_size 置为 0。
-	// void (*truncate) (struct inode *);
+	void (*truncate) (struct inode *);
 	// 检查当前进程是否有权对该 inode 执行特定的操作（读、写、执行）
 	// int (*permission) (struct inode *, int);
 };

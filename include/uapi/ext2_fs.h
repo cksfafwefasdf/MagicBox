@@ -8,6 +8,15 @@
 #define EXT2_BLOCK_SIZE(sb) ((sb)->s_block_size)
 #define BLOCK_TO_SECTOR(sb, n) ((n) * ((sb)->s_block_size / SECTOR_SIZE))
 #define EXT2_MAGIC_NUMBER 0xEF53
+#define EXT2_MAX_FILE_NAME_LEN 255
+// 此宏可以确保每一个目录项的起始地址都是 4 字节对齐的
+// 并且为目录项结构体预留足够的空间。
+// 8 是 struct ext2_dir_entry 的大小
+// name_len，顾名思义，是元数据后的名称部分
+// +3 然后 &~3用于四字节对齐
+// 假设 name_len 加上头部后不是 4 的倍数，加上 3 可以确保它跨入下一个 4 字节的边界
+// & ~3 就是将低3位1置为0，自然就是对齐操作
+#define EXT2_DIR_REC_LEN(name_len) (((8 + (name_len)) + 3) & ~3)
 
 // 文件类型掩码 (i_mode Bit 12-15)
 #define S_IFMT   0xF000
@@ -85,11 +94,38 @@ struct ext2_super_block {
     uint32_t s_lastcheck;
     uint32_t s_checkinterval;
 
-    // [72-1023字节] 保留填充
-    uint32_t s_reserved[238]; 
+    // 为了兼容 version 1，添加这些字段
+
+    // 插入这两个字段来填补 4 字节的坑，一遍将后面的字段挤到磁盘正确的位置上
+    uint16_t s_creator_os;     // 填 0 (Linux)
+    uint16_t s_minor_rev_level;// 填 0
+
+    uint32_t s_rev_level; // 填 1，用于指明ext2的版本号为1
+    uint16_t s_def_resuid; // 80: Default uid for reserved blocks
+    uint16_t s_def_resgid; // 82: Default gid for reserved blocks 
+    
+    uint32_t s_first_ino; // 顾名思义，第一个inode号，默认填 11
+    uint16_t s_inode_size; // 填 128
+    uint16_t s_block_group_nr;  // 偏移 84: 当前超级块所在的块组号，填 0
+    uint32_t s_feature_compat;  // 偏移 88: 填 0
+    // 这是不兼容特性位
+    // 我们填 0x02 (FILETYPE)，这样目录项会存 file_type
+    uint32_t s_feature_incompat;
+    uint32_t s_feature_ro_compat;// 偏移 96: 填 0
+    
+    uint8_t  s_uuid[16];        // 偏移 100
+    char     s_volume_name[16]; // 偏移 116
+    char     s_last_mounted[64]; // 偏移 132
+    uint32_t s_algo_bitmap;     // 偏移 196
+
+    // 填充剩余空间，使结构体达到 1024 字节
+    uint8_t  s_prealloc_blocks;
+    uint8_t  s_prealloc_dir_blocks;
+    uint16_t s_padding_1;
+    uint32_t s_reserved[204];
 } __attribute__((packed));
 
-// inode 的磁盘镜像
+// inode 的磁盘镜像，不出意外的话，它的大小应该是128字节
 struct ext2_inode {
     uint16_t i_mode; // 文件类型和访问权限
     uint16_t i_uid; // 用户 ID
@@ -99,7 +135,9 @@ struct ext2_inode {
     uint32_t i_mtime; // 修改时间
     uint32_t i_dtime; // 删除时间 
     uint16_t i_gid; // 组 ID 
-    uint16_t i_links_count; // 硬链接计数 
+    // 硬链接计数，硬链接本质就是有多少个不同的目录项指向同一个inode
+    // 初值通常为2，自己目录下的 . 和父目录下的相应条目，这两个条目记了两次 
+    uint16_t i_links_count; 
     uint32_t i_blocks; // 占用扇区数（Ext2 这里通常存 512B 扇区数）
     uint32_t i_flags; // 文件标志 
     uint32_t i_reserved1; // 保留 
@@ -119,10 +157,15 @@ struct ext2_inode {
 
 struct ext2_dir_entry {
     uint32_t i_no; // Inode 编号
-    uint16_t rec_len; // 目录项长度 
+    uint16_t rec_len; // 目录项长度, 它是 ext2_dir_entry 这个结构体以及其后存储的 name 的总长度
     uint8_t name_len; // 文件名长度 (0-255) 
     uint8_t  file_type; // 文件类型，使用 version 2 版本的目录项，他会存储文件类型，版本1不会
-    char     name[255]; // 文件名 
+    // 这个 name 字段不会被分配地址空间
+    // 它的作用就只是一个标记符，用于标记 ext2_dir_entry 结构体的末尾地址
+    // ext2_dir_entry 作用就有点像 arena 里面的描述符，真正的文件名数据不是存在ext2_dir_entry中的
+    // ext2_dir_entry 只存储元信息，真正的 name 信息是紧跟着 ext2_dir_entry 结构体存在其后面的
+    // 这样就能实现真正意义上的变长目录项
+    char name[0]; // 文件名 
 } __attribute__((packed));
 
 #endif

@@ -7,7 +7,7 @@
 
 #define PRINT_BUF_SIZE 1024 
 
-#define MAX_FILE_NAME_LEN 16
+#define MAX_FILE_NAME_LEN 64
 
 #define UNUSED __attribute__((unused))
 
@@ -40,6 +40,8 @@ enum oflags{ // operation flags
 	O_WRONLY=2, // write only
 	O_RDWR=4, // read and write
 	O_CREATE=8, // only create
+	O_TRUNC = 16, // 从头开始读写文件
+	O_APPEND = 32, // 从文件的末尾开始读写 
 };
 
 enum whence{
@@ -47,7 +49,6 @@ enum whence{
 	SEEK_CUR, // SEEK_CUR = 2
 	SEEK_END // SEEK_END = 3
 };
-
 
 // 这是一个用户和内核之间的abi接口，这是VFS真正操纵的目录项结构体
 // 我们现在取消了 dir 结构体，我们将 dir 结构体并入到 file 结构体中
@@ -58,6 +59,17 @@ struct dirent {
     uint16_t d_reclen; // 当前 dirent 的长度
     uint8_t  d_type; // 文件类型
     char d_name[MAX_FILE_NAME_LEN]; // 文件名字符串
+};
+
+struct statfs {
+    uint32_t f_type; // 文件系统类型（比如 SIFS 的魔数）
+    uint32_t f_bsize; // 最优传输块大小（通常等于扇区大小，如 512 或 4096）
+    uint32_t f_blocks; // 分区总共有多少个块（总容量）
+    uint32_t f_bfree; // 剩余空闲块数
+    uint32_t f_bavail; // 普通用户可用的空闲块（单用户系统中，通常 f_bavail = f_bfree）
+    uint32_t f_files; // 分区总共有多少个 Inode 节点（总文件数上限）
+    uint32_t f_ffree; // 剩余可用的 Inode 节点数
+    uint32_t f_namelen; // 最大文件名长度
 };
 
 struct sigaction {

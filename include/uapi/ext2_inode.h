@@ -2,8 +2,11 @@
 #define __INCLUDE_UAPI_EXT2_INODE_H
 
 #include <stdint.h>
+#include <ext2_sb.h>
 
 struct partition;
+struct inode;
+struct super_block;
 
 struct ext2_inode_info {
     /* 核心指针：12直接, 1一级间接, 1二级间接, 1三级间接 */
@@ -27,7 +30,9 @@ struct ext2_inode_info {
     // 而不是去分配一个新的数据块。这叫 fast symlink。
 };
 
-extern void ext2_lookup_test(struct partition* part);
+extern int32_t ext2_append_block_to_inode(struct inode* inode, uint32_t phys_block);
+extern int32_t ext2_resource_alloc(struct super_block *sb, uint32_t start_group, enum ext2_bitmap_type type);
+extern int32_t ext2_inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_t count);
 
 extern struct inode_operations ext2_inode_operations;
 
