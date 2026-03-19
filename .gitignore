@@ -1,0 +1,5 @@
+experiment/*
+build/*
+tool/*
+command/build/*
+disk_env/*
