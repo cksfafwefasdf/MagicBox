@@ -31,7 +31,17 @@
     - **Dynamic Management:** Supports VMA splitting, merging, and gap searching, providing the necessary infrastructure for `sys_brk` heap scaling and Copy-On-Write (COW) during `fork()` and `execv()`.
   - **Small Object Allocation:** An **Arena allocator** remains integrated on top of the Buddy System to handle micro-allocations (2B–1024B) efficiently, reducing internal fragmentation for small data structures.
 
-- **Unified FS & "Everything is a File"**: Features an **Inode-based** hierarchical file system. Following the "Everything is a File" philosophy, `sys_read` and `sys_write` perform logical dispatching by identifying file types—including regular files, **Linux-style anonymous pipes**, **persistent FIFOs**, and **TTY devices**. This allows IPC and hardware access to be managed through a unified file descriptor (FD) interface.
+- **VFS Implementation & "Everything is a File" Philosophy**
+
+  This project implements a **Virtual File System (VFS)** layer, which attempts to provide a unified interface for hardware access, inter-process communication, and disk storage.
+
+  - **Multi-Filesystem Support**: Uses a function-pointer dispatch design. By implementing `struct super_operations`, `inode_operations`, and `file_operations`, the VFS isolates specific filesystem logic. Currently, it supports both a custom **SIFS** (Simple Index FS) and the **Ext2** specification, allowing different partitions to run different filesystems concurrently.
+  - **Mount Mechanism (Mount/Umount)**: Provides basic mounting functionality. By introducing "tunneling" pointers (`i_mount` / `i_mount_at`) within the `struct inode`, the path resolution logic can traverse partition boundaries, supporting nested mount points.
+  - **Dynamic I/O Dispatching**: System calls (such as `read`, `write`, and `ioctl`) bind to specific operation sets during the file-opening phase based on the Inode type, reducing the need for hardcoded type-checking:
+    - **Files & Directories**: Data block addressing and metadata I/O are handled by the specific Ext2 or SIFS drivers.
+    - **Inter-Process Communication (IPC)**: Anonymous pipes and named pipes (FIFOs) are integrated into the standard file descriptor (FD) management logic.
+    - **Device Management**: Character devices (TTY/UART) and block devices (IDE disks) are mapped as file nodes, accessible via the unified FD interface.
+  - **Metadata Management**: Maintains a global **Inode Hash Table** as a memory cache to ensure the uniqueness of Inode instances. This supports basic features like path backtracking (`getcwd`) and file renaming (`rename`), while ensuring cache consistency during deletion operations like `unlink`.
 
 - **Task Scheduling**: Implements a **Round-Robin** scheduling algorithm. In a design reminiscent of Linux 0.12, a task's `priority` directly determines its allocated clock **ticks**. The system decrements the current task's remaining time slice during timer interrupts, triggering a reschedule only when ticks are exhausted. This non-preemptive approach maintains simplicity while distributing CPU time based on task priority.
 
@@ -93,7 +103,9 @@ The project follows a modular design, separating kernel core logic, hardware dri
 ├── boot/               # MBR & Kernel Loader (System bootup and entry to protected mode)
 ├── device/             # Hardware Drivers (Keyboard, IDE, Disk Buffer, TTY, and IOCTL)
 ├── fs/                 # File System Layer (VFS, File Table, Pipes, and SIFS implementation)
-│   └── sifs/           # SIFS Specific (Disk layout for Superblock, Inode, and Directory)
+│   ├── ext2/           # Ext2 Specific Operations (Super, Inode and File operations)
+│   ├── sifs/           # SIFS Specific Operations (Super, Inode and File operations)
+│   └── *.c           	# Operations for VFS
 ├── include/            # Header Files (Organized by subsystem and access level)
 │   ├── arch/           # Architecture-related (Hardware I/O and low-level print)
 │   ├── magicbox/       # Kernel Private Headers (Memory, Threads, FS, and Sync)
@@ -103,7 +115,7 @@ The project follows a modular design, separating kernel core logic, hardware dri
 ├── lib/                # Library routines
 │   ├── kernel/         # Kernel-mode libraries (Bitmap, DList, Hashtable)
 │   └── user/           # User-mode system call wrappers
-├── mm/                 # Memory Management (Buddy System, VMA, and Page tables)
+├── mm/                 # Memory Management (Buddy System, VMA, Arena Allocator and Page tables)
 ├── prog/               # User-land applications
 │   ├── shell/          # Interactive Shell implementation
 │   └── prog/           # Core utilities (cat, echo, hexdump, and pipe tests)
@@ -134,14 +146,30 @@ Ensure you have the following tools installed on your Linux system:
 
 Follow these steps in the project root directory:
 
-```shell
-# Step 1: Initialize the virtual disk environment (create images and partitions)
-sh init_disk.sh
+(1) **Initialize the virtual disk environment** (create images and partitions in the `./disk_env` directory)
 
-# Step 2: Build the kernel and bootloader
+```shell
+sh init_disk.sh
+```
+
+(2) By default, the build process does not format the disk. The kernel will automatically initialize a **SIFS** partition upon the first boot. Alternatively, you can pre-format the disk as **Ext2**:
+
+```shell
+# Option A: Standard build (No host-side formatting)
+# The kernel will detect the missing filesystem at boot and 
+# automatically initialize a SIFS partition.
 make all
 
-# Step 3: Compile user applications and install them into the disk (via Tar)
+# Option B: Pre-format the root partition as Ext2
+# This uses the host's mkfs.ext2 tool to prepare the image.
+make all EXT2=1
+```
+
+*Note: Using `EXT2=1` requires `sudo` privileges on the host for `losetup` and `mkfs.ext2` operations.*
+
+(3) **Install User Applications** Compile and deploy shell utilities into the disk image:
+
+```shell
 sh install_apps.sh
 ```
 
@@ -156,6 +184,16 @@ qemu-system-i386 \
   -m 32 \
   -drive file=hd60M.img,format=raw,index=0,media=disk \
   -drive file=hd80M.img,format=raw,index=1,media=disk
+```
+
+If you want to use the third disk `sdc`, try:
+
+```shell
+qemu-system-i386 \
+  -m 32 \
+  -drive file=hd60M.img,format=raw,index=0,media=disk \
+  -drive file=hd80M.img,format=raw,index=1,media=disk \
+  -drive file=hd20M_share.img,format=raw,index=2,media=disk
 ```
 
 #### **Hardware Simulation Mode**
@@ -174,8 +212,8 @@ qemu-system-i386 \
 
 > **Note**:
 >
-> - `hd60M.img` contains the MBR, Loader, and the Kernel.
-> - `hd80M.img` is the data disk where your file system and Tar-packaged apps reside.
+> - `hd60M.img`: Contains the MBR, Loader, and the Kernel.
+> - `hd80M.img` / `hd20M_share.img` : Secondary data disks. To use the partitions within these disks, they must be initialized (via `mkfs.sifs` or `mkfs.ext2`) and then attached to the VFS tree using the `mount` command.
 
 
 

@@ -84,10 +84,11 @@ $(USER_LIBC_A): $(USER_LIB_OBJS)
 # 默认不初始化 ext2 文件系统
 # make all EXT2=1 使用该命令写入磁盘镜像顺便初始化一个ext2文件系统
 # 使用 make init_ext2 可以单独初始化磁盘文件系统，不写入镜像
-EXT2 ?= 0
+EXT2 ?= 0 # 这是一个弱赋值。如果运行 make，它默认是 0（不格式化）
 EXT2_IMG := $(DISK_DIR)/hd60M.img
 
-define init_ext2_disk
+#这是 Makefile 的宏定义，相当于定义了一个函数，方便在 all 或者 disk 目标里调用
+define init_ext2_disk 
 	@echo "Initializing Ext2 FileSystem on $(EXT2_IMG)..."
 	@LOOP_DEV=$$(sudo losetup -fP --show $(EXT2_IMG)); \
 	if [ -n "$$LOOP_DEV" ]; then \
@@ -104,18 +105,14 @@ define init_ext2_disk
 	fi
 endef
 
-# 修改后的 all 目标
 all: mk_dir boot build hd gdb_symbol disasm
 ifeq ($(EXT2), 1)
 	$(call init_ext2_disk)
 endif
 
-# 也可以单独提供一个命令手动触发
+# 使用 make init_ext2 可以单独初始化磁盘文件系统，不写入镜像
 init_ext2:
 	$(call init_ext2_disk)
-
-
-all: mk_dir boot build hd gdb_symbol disasm
 
 # 链接内核
 $(BUILD_DIR)/kernel.elf: $(OBJS)
