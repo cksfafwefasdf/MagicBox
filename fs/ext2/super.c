@@ -164,14 +164,16 @@ static void ext2_read_inode(struct inode* inode) {
     // 绑定操作集，先默认全部绑定在ext2_inode_operations上，之后再来分
     switch (inode->i_type) {
         case FT_REGULAR:
-            inode->i_op = &ext2_inode_operations;
+            inode->i_op = &ext2_file_inode_operations;
             break;
         case FT_DIRECTORY:
-            inode->i_op = &ext2_inode_operations;
+            inode->i_op = &ext2_dir_inode_operations;
             break;
         case FT_CHAR_SPECIAL:
+            inode->i_op = &ext2_chardev_inode_operations;
+            break;
         case FT_BLOCK_SPECIAL:
-            inode->i_op = &ext2_inode_operations;
+            inode->i_op = &ext2_blkdev_inode_operations;
             break;
         default:
             inode->i_op = NULL;

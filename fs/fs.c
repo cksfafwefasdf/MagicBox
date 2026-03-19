@@ -107,11 +107,11 @@ static bool mount_root_partition(struct dlist_elem* pelem, void* arg) {
 // 检查是否具有文件系统，如果是的话返回对应魔数，否则返回-1
 static int32_t has_fs(struct partition* part) {
     // 申请 1024 字节，因为 Ext2 的超级块在偏移 1024 处
-    void* sb_buf = kmalloc(1024); 
+    void* sb_buf = kmalloc(2048); 
     if (sb_buf == NULL) PANIC("has_fs: kmalloc failed!");
 
     // 读取前 2 个扇区 (LBA 1 是 SIFS 超级块，LBA 2 是 Ext2 超级块的一半)
-    partition_read(part, 1, sb_buf, 2); 
+    partition_read(part, 1, sb_buf, 4); 
 
     int32_t ret = -1;
 
@@ -755,14 +755,9 @@ int32_t sys_readdir(int32_t fd, struct dirent* de) {
         return -EINVAL;
     }
 
-    if (status == 0) {
-        // 成功读取到一个有效条目
-        return 1;
-    } else {
-        // status 为 -1，说明读到了目录末尾或发生错误
-        // 在 sys 调用层面，读完通常返回 0，这是为了配合 while(readdir(...) > 0)
-        return 0;
-    }
+    if (status == 0) return 1; // 有数据
+    if (status == -1) return 0; // 正常结束
+    return -status; // 返回具体的负数错误码
 }
 
 void sys_rewinddir(int32_t fd) {
@@ -1493,7 +1488,7 @@ int32_t sys_rename(const char* _old_path, const char* _new_path) {
     // 解析新路径
     struct path_search_record new_record;
     memset(&new_record, 0, sizeof(struct path_search_record));
-    int new_ino = search_file(new_pathname, &new_record);
+    search_file(new_pathname, &new_record);
     // new_ino == -1 是正常的，说明目标位置尚未被占用
     // 关键修正：确保新路径所在的父目录是存在的
     if (new_record.parent_inode == NULL) {

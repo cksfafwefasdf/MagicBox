@@ -265,7 +265,7 @@ static void select_disk(struct disk* hd){
 static void select_sector(struct disk* hd,uint32_t lba,uint8_t sec_cnt){
 	if (lba > max_lba) {
         struct task_struct* cur = get_running_task_struct();
-        printk("\n[IDE Error] Task:%s, CWD_Inode:%d, LBA:%x\n", 
+        printk("\n[IDE Error] Task:%s, CWD_Inode:0x%x, LBA:0x%x\n", 
                 cur->name, cur->pwd->i_no, lba);
         // 若 CWD_Inode 还是旧的，则 sys_mount 的重置没生效
         ASSERT(lba <= max_lba);
@@ -281,7 +281,6 @@ static void select_sector(struct disk* hd,uint32_t lba,uint8_t sec_cnt){
 	outb(reg_lba_h(channel),lba>>16);
 	// LBA 23~27 bits should be wrote to DEV reg
 	outb(reg_dev(channel),BIT_DEV_MBS|BIT_DEV_LBA|(hd->dev_no==1?BIT_DEV_DEV:0)|lba>>24);
-
 }
 
 static void cmd_out(struct ide_channel* channel,uint8_t cmd){

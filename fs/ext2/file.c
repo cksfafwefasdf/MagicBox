@@ -71,7 +71,7 @@ static int32_t ext2_readdir(struct inode* inode UNUSED, struct file* file, struc
                 
                 // fd_pos 必须按磁盘上的 rec_len 对齐移动
                 file->fd_pos += p_de->rec_len;
-                
+
                 kfree(block_buf);
                 return 0; 
             }
@@ -276,10 +276,20 @@ static int32_t ext2_file_write(struct inode* inode, struct file* file,char* buf,
     return bytes_written;
 }
 
-struct file_operations ext2_file_operations = {
+struct file_operations ext2_file_file_operations = {
 	.lseek 		= ext2_generic_lseek,
 	.read 		= ext2_file_read,
 	.write 		= ext2_file_write,
+	.readdir 	= NULL,
+	.ioctl 		= NULL,
+	.open 		= NULL,
+	.release 	= NULL
+};
+
+struct file_operations ext2_dir_file_operations = {
+	.lseek 		= ext2_generic_lseek,
+	.read 		= NULL,
+	.write 		= NULL,
 	.readdir 	= ext2_readdir,
 	.ioctl 		= NULL,
 	.open 		= NULL,

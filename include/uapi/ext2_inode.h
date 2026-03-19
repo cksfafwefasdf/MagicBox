@@ -34,6 +34,9 @@ extern int32_t ext2_append_block_to_inode(struct inode* inode, uint32_t phys_blo
 extern int32_t ext2_resource_alloc(struct super_block *sb, uint32_t start_group, enum ext2_bitmap_type type);
 extern int32_t ext2_inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_t count);
 
-extern struct inode_operations ext2_inode_operations;
+extern struct inode_operations ext2_file_inode_operations;
+extern struct inode_operations ext2_dir_inode_operations;
+extern struct inode_operations ext2_chardev_inode_operations;
+extern struct inode_operations ext2_blkdev_inode_operations;
 
 #endif

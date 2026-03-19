@@ -80,6 +80,41 @@ $(USER_LIBC_A): $(USER_LIB_OBJS)
 
 .PHONY: all clean mk_dir hd boot build gdb_symbol disasm
 
+# Ext2 初始化配置
+# 默认不初始化 ext2 文件系统
+# make all EXT2=1 使用该命令写入磁盘镜像顺便初始化一个ext2文件系统
+# 使用 make init_ext2 可以单独初始化磁盘文件系统，不写入镜像
+EXT2 ?= 0
+EXT2_IMG := $(DISK_DIR)/hd60M.img
+
+define init_ext2_disk
+	@echo "Initializing Ext2 FileSystem on $(EXT2_IMG)..."
+	@LOOP_DEV=$$(sudo losetup -fP --show $(EXT2_IMG)); \
+	if [ -n "$$LOOP_DEV" ]; then \
+		PART_DEV="$${LOOP_DEV}p1"; \
+		echo "Using device: $$LOOP_DEV, Partition: $$PART_DEV"; \
+		sudo mkfs.ext2 -F -b 1024 -I 128 -r 1 \
+		               -O ^dir_index,^sparse_super,filetype,^resize_inode \
+		               $$PART_DEV; \
+		sudo losetup -d $$LOOP_DEV; \
+		echo "Ext2 Image initialized successfully."; \
+	else \
+		echo "Error: Failed to setup loop device."; \
+		exit 1; \
+	fi
+endef
+
+# 修改后的 all 目标
+all: mk_dir boot build hd gdb_symbol disasm
+ifeq ($(EXT2), 1)
+	$(call init_ext2_disk)
+endif
+
+# 也可以单独提供一个命令手动触发
+init_ext2:
+	$(call init_ext2_disk)
+
+
 all: mk_dir boot build hd gdb_symbol disasm
 
 # 链接内核

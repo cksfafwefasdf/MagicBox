@@ -368,16 +368,16 @@ static void ext2_inode_init(struct partition* part, uint32_t inode_no,struct ino
 
     switch (ft) {
         case FT_REGULAR:
-            new_inode->i_op = &ext2_inode_operations;
+            new_inode->i_op = &ext2_file_inode_operations;
             break;
         case FT_DIRECTORY:
-            new_inode->i_op = &ext2_inode_operations;
+            new_inode->i_op = &ext2_dir_inode_operations;
             break;
         case FT_CHAR_SPECIAL:
-            new_inode->i_op = &ext2_inode_operations;
+            new_inode->i_op = &ext2_chardev_inode_operations;
             break;
         case FT_BLOCK_SPECIAL:
-            new_inode->i_op = &ext2_inode_operations;
+            new_inode->i_op = &ext2_blkdev_inode_operations;
             break;
         default:
             new_inode->i_op = NULL;
@@ -935,11 +935,15 @@ static int32_t ext2_remove_entry(struct inode* parent_dir, uint32_t target_inode
 
 static int32_t ext2_unlink(struct inode* dir, char* name, int len) {
     struct super_block* sb = dir->i_sb;
-
     // 查找目标 Inode
     struct inode* target_inode = NULL;
 
-    if (ext2_lookup(dir, name, len, &target_inode) != 0) {
+    if(dir->i_op->lookup==NULL){
+        printk("ext2_unlink: i_no %x is not a dir!\n",dir->i_no);
+        return -ENOENT;
+    }
+
+    if (dir->i_op->lookup(dir, name, len, &target_inode) != 0) {
         return -ENOENT;
     }
 
@@ -963,8 +967,11 @@ static int32_t ext2_unlink(struct inode* dir, char* name, int len) {
 
     if (target_inode->ext2_i.i_links_count == 0) {
         // 释放所有关联的磁盘块，直接调用truncate就行
-        ext2_truncate(target_inode);
-        
+        // 对于设备文件之类的文件，他们没有磁盘块，因此不需要truncate
+        // 由于他们的truncate都为NULL，因此这个条件可以将他们拦住
+        if(target_inode->i_op!=NULL&&target_inode->i_op->truncate!=NULL){
+            target_inode->i_op->truncate(target_inode);
+        }
         // 释放 Inode 节点，将 Inode Bitmap 相应的位置 0
         ext2_resource_free(sb, target_inode->i_no, EXT2_INODE_BITMAP);
     } else {
@@ -1268,9 +1275,21 @@ out:
     return retval;
 }
 
-struct inode_operations ext2_inode_operations = {
-    .default_file_ops = &ext2_file_operations,
-    // .default_file_ops = NULL,
+struct inode_operations ext2_file_inode_operations = {
+    .default_file_ops = &ext2_file_file_operations,
+    .create     = NULL,
+    .lookup     = NULL,
+    .unlink     = NULL, // unlink 涉及到修改目录项，只能放到dir的inode操作里
+    .mkdir      = NULL,
+    .rmdir      = NULL,
+    .mknod      = NULL,
+    .rename     = NULL, // rename 涉及到修改目录项，只能放到dir的inode操作里
+    .bmap       = ext2_bmap, 
+    .truncate   = ext2_truncate,
+};
+
+struct inode_operations ext2_dir_inode_operations = {
+    .default_file_ops = &ext2_dir_file_operations,
     .create     = ext2_create,
     .lookup     = ext2_lookup,
     .unlink     = ext2_unlink,
@@ -1280,4 +1299,30 @@ struct inode_operations ext2_inode_operations = {
     .rename     = ext2_rename,
     .bmap       = ext2_bmap, 
     .truncate   = ext2_truncate,
+};
+
+struct inode_operations ext2_chardev_inode_operations = {
+    .default_file_ops = NULL,
+    .create     = NULL,
+    .lookup     = NULL,
+    .unlink     = NULL,
+    .mkdir      = NULL,
+    .rmdir      = NULL,
+    .mknod      = NULL,
+    .rename     = NULL,
+    .bmap       = NULL, 
+    .truncate   = NULL,
+};
+
+struct inode_operations ext2_blkdev_inode_operations = {
+    .default_file_ops = NULL,
+    .create     = NULL,
+    .lookup     = NULL,
+    .unlink     = NULL,
+    .mkdir      = NULL,
+    .rmdir      = NULL,
+    .mknod      = NULL,
+    .rename     = NULL,
+    .bmap       = NULL, 
+    .truncate   = NULL,
 };

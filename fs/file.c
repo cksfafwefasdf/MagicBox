@@ -123,7 +123,7 @@ int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
 			if(sb->s_magic==SIFS_FS_MAGIC_NUMBER){
 				file_table[fd_idx].f_op = &sifs_file_file_operations;
 			}else if(sb->s_magic==EXT2_MAGIC_NUMBER){
-				file_table[fd_idx].f_op = &ext2_file_operations;
+				file_table[fd_idx].f_op = &ext2_file_file_operations;
 			}else{
 				PANIC("unknown file type!");
 			}
@@ -134,7 +134,7 @@ int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
 			if(sb->s_magic==SIFS_FS_MAGIC_NUMBER){
 				file_table[fd_idx].f_op = &sifs_dir_file_operations;
 			}else if(sb->s_magic==EXT2_MAGIC_NUMBER){
-				file_table[fd_idx].f_op = &ext2_file_operations;
+				file_table[fd_idx].f_op = &ext2_dir_file_operations;
 			}else{
 				PANIC("unknown file type!");
 			}
