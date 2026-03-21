@@ -64,66 +64,78 @@
 // 如果 block_size > 1024：Block 0 包含了保留区和超级块，Block 1 是 GDT。
 // 目前我们先固定参数 -b 1024，也就是说块大小默认为1024字节，那就锁定 Block 2（LBA 4）即可。
 
+// 直接使用 linux 里面的定义
 struct ext2_super_block {
-    // [0-43字节] 核心计数与大小
-    uint32_t s_inodes_count;
-    uint32_t s_blocks_count;
-    uint32_t s_r_blocks_count;
-    uint32_t s_free_blocks_count;
-    uint32_t s_free_inodes_count;
-    uint32_t s_first_data_block;
-    uint32_t s_log_block_size;
-    int32_t  s_log_frag_size;
-    uint32_t s_blocks_per_group;
-    uint32_t s_frags_per_group;
-    uint32_t s_inodes_per_group;
-
-    // [44-55字节] 时间与挂载信息
-    uint32_t s_mtime;
-    uint32_t s_wtime;
-    uint16_t s_mnt_count;
-    int16_t  s_max_mnt_count;
-
-    // [56-63字节] 魔数与状态
-    uint16_t s_magic;      /* 0xEF53 */
-    uint16_t s_state;
-    uint16_t s_errors;
-    uint16_t s_pad;
-
-    // [64-71字节] 检查信息
-    uint32_t s_lastcheck;
-    uint32_t s_checkinterval;
-
-    // 为了兼容 version 1，添加这些字段
-
-    // 插入这两个字段来填补 4 字节的坑，一遍将后面的字段挤到磁盘正确的位置上
-    uint16_t s_creator_os;     // 填 0 (Linux)
-    uint16_t s_minor_rev_level;// 填 0
-
-    uint32_t s_rev_level; // 填 1，用于指明ext2的版本号为1
-    uint16_t s_def_resuid; // 80: Default uid for reserved blocks
-    uint16_t s_def_resgid; // 82: Default gid for reserved blocks 
-    
-    uint32_t s_first_ino; // 顾名思义，第一个inode号，默认填 11
-    uint16_t s_inode_size; // 填 128
-    uint16_t s_block_group_nr;  // 偏移 84: 当前超级块所在的块组号，填 0
-    uint32_t s_feature_compat;  // 偏移 88: 填 0
-    // 这是不兼容特性位
-    // 我们填 0x02 (FILETYPE)，这样目录项会存 file_type
-    uint32_t s_feature_incompat;
-    uint32_t s_feature_ro_compat;// 偏移 96: 填 0
-    
-    uint8_t  s_uuid[16];        // 偏移 100
-    char     s_volume_name[16]; // 偏移 116
-    char     s_last_mounted[64]; // 偏移 132
-    uint32_t s_algo_bitmap;     // 偏移 196
-
-    // 填充剩余空间，使结构体达到 1024 字节
-    uint8_t  s_prealloc_blocks;
-    uint8_t  s_prealloc_dir_blocks;
-    uint16_t s_padding_1;
-    uint32_t s_reserved[204];
-} __attribute__((packed));
+	uint32_t	s_inodes_count;		/* Inodes count */
+	uint32_t	s_blocks_count;		/* Blocks count */
+	uint32_t	s_r_blocks_count;	/* Reserved blocks count */
+	uint32_t	s_free_blocks_count;	/* Free blocks count */
+	uint32_t	s_free_inodes_count;	/* Free inodes count */
+	uint32_t	s_first_data_block;	/* First Data Block */
+	uint32_t	s_log_block_size;	/* Block size */
+	uint32_t	s_log_frag_size;	/* Fragment size */
+	uint32_t	s_blocks_per_group;	/* # Blocks per group */
+	uint32_t	s_frags_per_group;	/* # Fragments per group */
+	uint32_t	s_inodes_per_group;	/* # Inodes per group */
+	uint32_t	s_mtime;		/* Mount time */
+	uint32_t	s_wtime;		/* Write time */
+	uint16_t	s_mnt_count;		/* Mount count */
+	uint16_t	s_max_mnt_count;	/* Maximal mount count */
+	uint16_t	s_magic;		/* Magic signature */
+	uint16_t	s_state;		/* File system state */
+	uint16_t	s_errors;		/* Behaviour when detecting errors */
+	uint16_t	s_minor_rev_level; 	/* minor revision level */
+	uint32_t	s_lastcheck;		/* time of last check */
+	uint32_t	s_checkinterval;	/* max. time between checks */
+	uint32_t	s_creator_os;		/* OS */
+	uint32_t	s_rev_level;		/* Revision level */
+	uint16_t	s_def_resuid;		/* Default uid for reserved blocks */
+	uint16_t	s_def_resgid;		/* Default gid for reserved blocks */
+	/*
+	 * These fields are for EXT2_DYNAMIC_REV superblocks only.
+	 *
+	 * Note: the difference between the compatible feature set and
+	 * the incompatible feature set is that if there is a bit set
+	 * in the incompatible feature set that the kernel doesn't
+	 * know about, it should refuse to mount the filesystem.
+	 * 
+	 * e2fsck's requirements are more strict; if it doesn't know
+	 * about a feature in either the compatible or incompatible
+	 * feature set, it must abort and not try to meddle with
+	 * things it doesn't understand...
+	 */
+	uint32_t	s_first_ino; 		/* First non-reserved inode */
+	uint16_t   s_inode_size; 		/* size of inode structure */
+	uint16_t	s_block_group_nr; 	/* block group # of this superblock */
+	uint32_t	s_feature_compat; 	/* compatible feature set */
+	uint32_t	s_feature_incompat; 	/* incompatible feature set */
+	uint32_t	s_feature_ro_compat; 	/* readonly-compatible feature set */
+	uint8_t	s_uuid[16];		/* 128-bit uuid for volume */
+	char	s_volume_name[16]; 	/* volume name */
+	char	s_last_mounted[64]; 	/* directory where last mounted */
+	uint32_t	s_algorithm_usage_bitmap; /* For compression */
+	/*
+	 * Performance hints.  Directory preallocation should only
+	 * happen if the EXT2_COMPAT_PREALLOC flag is on.
+	 */
+	uint8_t	s_prealloc_blocks;	/* Nr of blocks to try to preallocate*/
+	uint8_t	s_prealloc_dir_blocks;	/* Nr to preallocate for dirs */
+	uint16_t	s_padding1;
+	/*
+	 * Journaling support valid if EXT3_FEATURE_COMPAT_HAS_JOURNAL set.
+	 */
+	uint8_t	s_journal_uuid[16];	/* uuid of journal superblock */
+	uint32_t	s_journal_inum;		/* inode number of journal file */
+	uint32_t	s_journal_dev;		/* device number of journal file */
+	uint32_t	s_last_orphan;		/* start of list of inodes to delete */
+	uint32_t	s_hash_seed[4];		/* HTREE hash seed */
+	uint8_t	s_def_hash_version;	/* Default hash version to use */
+	uint8_t	s_reserved_char_pad;
+	uint16_t	s_reserved_word_pad;
+	uint32_t	s_default_mount_opts;
+ 	uint32_t	s_first_meta_bg; 	/* First metablock block group */
+	uint32_t	s_reserved[190];	/* Padding to the end of the block */
+} __attribute__((packed)) ;
 
 // inode 的磁盘镜像，不出意外的话，它的大小应该是128字节
 struct ext2_inode {

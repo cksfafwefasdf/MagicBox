@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
         // 如果是普通文件而不是设备，用 lseek 算大小
         sec_cnt = lseek(fd, 0, SEEK_END) / 512;
     }
-    
+
     uint32_t block_count = (sec_cnt * 512) / DEFAULT_EXT2_BLOCK_SIZE;
 
     // 计算动态组数
@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
     sb.s_blocks_count = block_count;
     sb.s_r_blocks_count = block_count / 20;
     sb.s_free_inodes_count = sb.s_inodes_count - 11; 
-    sb.s_free_blocks_count = block_count - 1; 
+    sb.s_free_blocks_count = block_count; 
     sb.s_first_data_block = 1; 
     sb.s_log_block_size = 0;   // 1KB
     sb.s_blocks_per_group = EXT2_BLOCKS_PER_GROUP;
@@ -56,15 +56,19 @@ int main(int argc, char** argv) {
     sb.s_feature_incompat = 0x02;
     sb.s_log_frag_size = 0;
     sb.s_errors = 1; // EXT2_ERRORS_CONTINUE (发现错误继续运行，这是标准值)
+    sb.s_creator_os = 0; // Linux
+    sb.s_max_mnt_count = 20; // 最大挂载次数
+    sb.s_checkinterval = 0; // 不强制定期检查
+    sb.s_wtime = 1710900000; // 随便写一个最近的 Unix 时间戳,防止报错
+    sb.s_frags_per_group = sb.s_blocks_per_group; // 这一句一定要写，不然 e2fsck 会报错！
 
     // 构造组描述符表 (GDT)
     struct ext2_group_desc* gdt = calloc(group_count, sizeof(struct ext2_group_desc));
     uint32_t itable_blocks = (EXT2_INODES_PER_GROUP * EXT2_INODE_SIZE) / DEFAULT_EXT2_BLOCK_SIZE;
-
+    uint32_t total_used_blocks = 0;
     for (uint32_t i = 0; i < group_count; i++) {
         uint32_t group_base = i * EXT2_BLOCKS_PER_GROUP + sb.s_first_data_block;
-        uint32_t offset = (i == 0) ? (1 + gdt_blocks) : 0;
-        
+        uint32_t offset = 1 + gdt_blocks;
         gdt[i].bg_block_bitmap = group_base + offset;
         gdt[i].bg_inode_bitmap = group_base + offset + 1;
         gdt[i].bg_inode_table  = group_base + offset + 2;
@@ -77,18 +81,16 @@ int main(int argc, char** argv) {
             (EXT2_BLOCKS_PER_GROUP - used_meta);
         gdt[i].bg_free_inodes_count = (i == 0) ? (EXT2_INODES_PER_GROUP - 11) : EXT2_INODES_PER_GROUP;
         gdt[i].bg_used_dirs_count = (i == 0) ? 1 : 0;
-        
-        sb.s_free_blocks_count -= used_meta;
+
+        total_used_blocks += used_meta;
     }
+
+    sb.s_free_blocks_count = block_count - total_used_blocks;
 
     // 写入元数据
     lseek(fd, DEFAULT_EXT2_BLOCK_SIZE, SEEK_SET);
     write(fd, &sb, sizeof(sb));
     lseek(fd, 2 * DEFAULT_EXT2_BLOCK_SIZE, SEEK_SET);
-
-    printf("Group 0: BlockBitmap=%x, InodeBitmap=%x, InodeTable=%x\n", 
-        gdt[0].bg_block_bitmap, gdt[0].bg_inode_bitmap, gdt[0].bg_inode_table);
-
     write(fd, gdt, gdt_size_bytes);
 
     // 循环初始化块组
@@ -96,7 +98,7 @@ int main(int argc, char** argv) {
     for (uint32_t i = 0; i < group_count; i++) {
         // 块位图
         memset(buf, 0, DEFAULT_EXT2_BLOCK_SIZE);
-        uint32_t meta_in_group = (i == 0) ? (1 + gdt_blocks + 2 + itable_blocks) : (2 + itable_blocks);
+        uint32_t meta_in_group = (1 + gdt_blocks + 2 + itable_blocks);
         for (uint32_t b = 0; b < meta_in_group; b++) buf[b/8] |= (1 << (b%8));
         if (i == 0) buf[meta_in_group/8] |= (1 << (meta_in_group%8));
         
@@ -154,5 +156,6 @@ int main(int argc, char** argv) {
 
     
     free(gdt); free(buf); close(fd);
+    printf("mkfs.ext2 done!\n");
     return 0;
 }
