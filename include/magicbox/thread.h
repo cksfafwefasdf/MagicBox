@@ -13,6 +13,10 @@
 #define MAX_PID_NUM 1024
 #define MAX_PID_NUM_IN_BYTE MAX_PID_NUM/8
 #define STACK_MAGIC 0x20030000
+#define KERNEL_THREAD_STACK_PAGES 2
+#define KERNEL_THREAD_STACK PG_SIZE*KERNEL_THREAD_STACK_PAGES
+// 用于提取8KB之后的那些页号
+#define KERNEL_THREAD_STACK_MASK 0xffffe000
 
 #define INIT_PID 1
 
@@ -67,7 +71,8 @@ struct thread_stack{
 };
 
 struct task_struct{
-	uint32_t* self_kstack;
+	uint32_t* self_kstack; // 动态栈顶（给 switch_to 用）
+    void* kstack_pages; // 栈的基地址（给 free 用）
 	pid_t pid;
 	enum task_status status;
 	char name[TASK_NAME_LEN];

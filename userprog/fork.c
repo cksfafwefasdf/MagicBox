@@ -13,11 +13,21 @@
 #include <file_table.h>
 #include <inode.h>
 #include <ide.h>
+#include <swap.h>
 
 extern void intr_exit(void); // defined in  kernel.s
 static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,struct task_struct* parent_thread){
 	
-	memcpy(child_thread,parent_thread,PG_SIZE);
+	// memcpy(child_thread,parent_thread,PG_SIZE);
+
+	// 由于我们现在已经把内核栈拆出去了
+	// 因此不要再拷贝一整页了，防止覆盖新 PCB 的结构
+	// 之前内核栈在pcb中时，直接复制一整页可以把父进程的内核栈信息也复制过来
+	// 但现在这么做复制不过来了，因此没必要复制那么多了
+	memcpy(child_thread,parent_thread,sizeof(struct task_struct));
+
+	// 重新分配子进程的独立内核栈
+    child_thread->kstack_pages = get_kernel_pages(KERNEL_THREAD_STACK_PAGES);
 
 	child_thread->pid = fork_pid();
 	child_thread->elapsed_ticks = 0;
@@ -48,22 +58,28 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 	return 0;
 }
 
+static int32_t build_child_stack(struct task_struct* child) {
+    struct task_struct* parent = get_running_task_struct();
 
-static int32_t build_child_stack(struct task_struct* child_thread){
-	struct intr_stack* intr_0_stack = (struct intr_stack*)((uint32_t)child_thread+PG_SIZE-sizeof(struct intr_stack));
-	intr_0_stack->eax = 0;
+    // 定位父进程进入内核时的中断栈位置
+    // 父进程的 self_kstack 此时正处于内核态某个位置，
+    // 但中断栈(intr_stack)始终在它 kstack_pages + 8KB 的顶端
+    struct intr_stack* parent_intr = (struct intr_stack*)((uint32_t)parent->kstack_pages + KERNEL_THREAD_STACK- sizeof(struct intr_stack));
 
-	uint32_t* ret_addr_in_thread_stack = (uint32_t*) intr_0_stack - 1;
-	uint32_t* esi_ptr_in_thread_stack = (uint32_t*) intr_0_stack - 2;
-	uint32_t* edi_ptr_in_thread_stack = (uint32_t*) intr_0_stack - 3;
-	uint32_t* ebx_ptr_in_thread_stack = (uint32_t*) intr_0_stack - 4;
-	uint32_t* ebp_ptr_in_thread_stack = (uint32_t*) intr_0_stack - 5;
-	*ret_addr_in_thread_stack = (uint32_t)intr_exit;
+    // 定位子进程中断栈位置
+    struct intr_stack* child_intr = (struct intr_stack*)((uint32_t)child->kstack_pages + KERNEL_THREAD_STACK - sizeof(struct intr_stack));
 
-	*ebp_ptr_in_thread_stack = *ebx_ptr_in_thread_stack=*edi_ptr_in_thread_stack=*esi_ptr_in_thread_stack=0;
+    // 拷贝中断上下文
+    memcpy(child_intr, parent_intr, sizeof(struct intr_stack));
+    child_intr->eax = 0; // 子进程返回 0
 
-	child_thread->self_kstack = ebp_ptr_in_thread_stack;
-	return 0;
+    // 构建 thread_stack 供 switch_to 使用
+    uint32_t* ret_addr = (uint32_t*)child_intr - 1;
+    *ret_addr = (uint32_t)intr_exit;
+
+    // 最终 self_kstack 指向 thread_stack 的栈顶（即 ret_addr 往下 4 个寄存器）
+    child->self_kstack = (uint32_t*)child_intr - 5; 
+    return 0;
 }
 
 // 原本我们的这个函数是 update_inode_open_cnts，修改的是inode的打开计数

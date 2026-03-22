@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <stdio-kernel.h>
+#include <tss.h>
 
 // max number of pid is 128*8=1024
 // use bitmap to check if the pid is in used
@@ -45,13 +46,17 @@ static pid_t allocate_pid(void);
 extern void switch_to(struct task_struct* cur,struct task_struct* next);
 
 // get the PCB pointer of the currently running thread
-struct task_struct* get_running_task_struct(){
-	// esp points to k_stack now, and both k_stack and PCB are in the same page
-	// therefore,the high 20 bits of esp represent the start address of the page
-	uint32_t esp;
-	asm("mov %%esp,%0":"=g"(esp));
-	// get the start address of the PCB, which is the beginning of the page
-	return (struct task_struct*)(esp&0xfffff000);
+// 由于我们的内核栈和pcb不再同页，因此需要使用其他的方法来获得栈顶
+// 我们必须在栈页的最开头存一个指针指向 task_struct，通过那个指针来找到task_struct
+struct task_struct* get_running_task_struct() {
+    // uint32_t esp;
+    // asm("mov %%esp, %0" : "=g"(esp));
+    // // 假设内核栈是 PG_SIZE * 2 (8KB)，则掩码是 0xffffe000
+    // uint32_t stack_page_start = esp & KERNEL_THREAD_STACK_MASK; 
+    // // 栈页最底部存放着 PCB 指针
+    // return *(struct task_struct**)stack_page_start;
+
+	return tss.cur_task;
 }
 
 // typedef void thread_func(void*)
@@ -80,7 +85,13 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 
 	pthread->pgrp = pthread->pid;
 
-	pthread->self_kstack = (uint32_t*)((uint32_t)pthread+PG_SIZE);
+	// pthread->self_kstack = (uint32_t*)((uint32_t)pthread+PG_SIZE);
+
+	pthread->kstack_pages = get_kernel_pages(KERNEL_THREAD_STACK_PAGES);
+
+	// 设置 self_kstack 指向栈顶（跳过底部的 PCB 指针空间）
+    pthread->self_kstack = (uint32_t*)((uint32_t)pthread->kstack_pages + KERNEL_THREAD_STACK);
+
 	pthread->priority = prio;
 	pthread->ticks = prio;
 	pthread->elapsed_ticks = 0;
@@ -177,7 +188,11 @@ void schedule(){
 	struct task_struct* next = elem2entry(struct task_struct,thread_tag);
 	next->status = TASK_RUNNING;
 	process_activate(next);
-	//put_char('\n');put_str(cur->name);put_str(" switch to ");put_str(next->name);put_char('\n');
+
+#ifdef DEBUG_SWITCH_TO
+	put_str(cur->name);put_str(" switch to ");put_str(next->name);put_char('\n');
+	put_int(cur->pid);put_str(" switch to ");put_int(next->pid);put_char('\n');
+#endif
 	switch_to(cur,next);
 }
 
@@ -366,6 +381,11 @@ void thread_exit(struct task_struct* thread_over,bool need_schedule){
 	// if(thread_over->pgdir){
 	// 	mfree_page(PF_KERNEL,thread_over->pgdir,1);
 	// }
+
+	// 释放内核栈
+    if (thread_over->kstack_pages) {
+		mfree_page(PF_KERNEL,thread_over->kstack_pages,KERNEL_THREAD_STACK_PAGES);
+    }
 
 	dlist_remove(&thread_over->all_list_tag);
 

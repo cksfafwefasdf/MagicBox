@@ -42,10 +42,11 @@ static void cmd_execute(uint32_t argc, char** argv, int32_t pgid_to_set, bool is
     if (!strcmp("rmdir", argv[0])) { buildin_rmdir(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
     if (!strcmp("rm", argv[0])) { buildin_rm(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
     if (!strcmp("help", argv[0])) { buildin_help(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
-    if (!strcmp("free_mem", argv[0])) { buildin_free_mem(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
+    if (!strcmp("fm", argv[0])) { buildin_free_mem(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
     if (!strcmp("df", argv[0])) { buildin_df(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
     if (!strcmp("mount", argv[0])) { buildin_mount(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
     if (!strcmp("umount", argv[0])) { buildin_umount(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
+    if (!strcmp("mv", argv[0])) { buildin_mv(argc, argv); if(pgid_to_set >= 0) exit(0); return; }
 
     // 外部程序逻辑
     if (pgid_to_set >= 0) {

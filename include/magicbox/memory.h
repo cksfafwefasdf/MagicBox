@@ -43,6 +43,14 @@
 // 向下对齐到页边界（顺便提供，方便以后用）
 #define PAGE_ALIGN_DOWN(vaddr) ((vaddr) & ~(PG_SIZE - 1))
 
+#define PDE_IDX(addr) ((addr&0xffc00000)>>22)
+#define PTE_IDX(addr) ((addr&0x003ff000)>>12)
+// find which start vaddr will map to this pte and pde
+#define PTE_TO_VADDR(pde_idx,pte_idx) (((pde_idx)<<22)|((pte_idx)<<12))
+#define PAGE_TABLE_VADDR(pde_idx) (0xffc00000|(pde_idx<<12))
+
+#define K_TEMP_PAGE_VADDR 0xff3ff000  
+
 enum pool_flags{
 	PF_KERNEL = 1,
 	PF_USER = 2
@@ -81,11 +89,10 @@ extern void block_desc_init(struct mem_block_desc* desc_array);
 extern void mfree_page(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt);
 extern void pfree(uint32_t pg_phy_addr);
 extern void sys_free_mem(void);
-extern void copy_page_tables(struct task_struct* from,struct task_struct* to,void* page_buf);
 extern void sys_test(void);
-extern void swap_page(uint32_t err_code,void* err_vaddr);
-extern void write_protect(uint32_t err_code,void* err_vaddr);
 extern void vaddr_remove(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt);
+extern void* palloc(struct buddy_pool* m_pool) ;
+
 
 extern void* kmalloc(uint32_t size);
 extern void* umalloc(uint32_t size);
@@ -102,4 +109,5 @@ extern uint32_t mem_bytes_total;
 extern uint32_t kernel_heap_start;
 extern struct dlist kernel_vma_list;
 extern struct lock kernel_vma_lock;
+extern struct page* global_pages;
 #endif

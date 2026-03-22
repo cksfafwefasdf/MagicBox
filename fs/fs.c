@@ -290,7 +290,7 @@ static int32_t search_file(char* pathname, struct path_search_record* searched_r
         // 调用分层后的 lookup
         struct inode* next_inode = NULL;
         int ret = -1;
-        // 暂时先硬编码，等inode操作全部抽离结束后更改
+
         if(curr_inode->i_op!=NULL&&curr_inode->i_op->lookup!=NULL){
             ret = curr_inode->i_op->lookup(curr_inode, name_start, len, &next_inode);
         }else{
@@ -1482,6 +1482,7 @@ int32_t sys_rename(const char* _old_path, const char* _new_path) {
     int old_ino = search_file(old_pathname, &old_record);
     if (old_ino == -1) {
         // 源文件不存在
+        printk("sys_rename: source file does not exist\n");
         goto fail;
     }
 
@@ -1510,6 +1511,8 @@ int32_t sys_rename(const char* _old_path, const char* _new_path) {
 
     // 调用具体文件系统的 rename 实现
     if (old_record.parent_inode->i_op && old_record.parent_inode->i_op->rename) {
+        // 按理说二者在同一个文件系统上，调用谁的无所谓
+        // 这也是为什么不能跨文件系统的原因，不然的话这里该调谁的rename都成问题
         ret = old_record.parent_inode->i_op->rename(
             old_record.parent_inode, old_name, strlen(old_name),
             new_record.parent_inode, new_name, strlen(new_name)

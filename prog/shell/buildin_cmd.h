@@ -17,6 +17,6 @@ extern void buildin_free_mem(uint32_t argc UNUSED,char** argv UNUSED);
 extern void buildin_df(uint32_t argc UNUSED,char** argv UNUSED);
 extern void buildin_mount(uint32_t argc,char** argv);
 extern void buildin_umount(uint32_t argc,char** argv);
+extern void buildin_mv(uint32_t argc, char** argv);
 extern char* path_parse(char* pathname,char* name_store);
-
 #endif

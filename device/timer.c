@@ -67,7 +67,21 @@ static void intr_handler_timer(void){
     struct task_struct* cur_thread = get_running_task_struct();
     //put_str(cur_thread->name);put_str(" timer!!!\n");put_int(cur_thread->ticks);
     // check if stack overflouw
+
+#ifdef DEBUG_TIMER
+
+    uint32_t esp;
+    asm("mov %%esp, %0":"=g"(esp));
+    if (cur_thread->stack_magic != STACK_MAGIC) {
+        put_str("\n!!!! STACK MAGIC CHECK FAILED !!!!\n");
+        put_str("Current ESP: "); put_int(esp); put_char('\n');
+        put_str("Calculated PCB ptr: "); put_int((uint32_t)cur_thread); put_char('\n');
+        // 打印栈底那个锚点存的值
+        put_str("Value at stack base: "); put_int(*(uint32_t*)(esp & 0xffffe000)); put_char('\n');
+        PANIC("magic check failed");
+    }
     ASSERT(cur_thread->stack_magic == STACK_MAGIC);
+#endif
 
     cur_thread->elapsed_ticks++;
     ticks++;

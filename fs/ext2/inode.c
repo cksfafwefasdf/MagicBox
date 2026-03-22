@@ -763,6 +763,8 @@ static void ext2_resource_free(struct super_block *sb, uint32_t index, enum ext2
         btmp_block = ext2_info->group_desc[group].bg_block_bitmap;
     }
 
+    // printk("Freeing block %d in group %d\n", index, group);
+
     // 读取并修改位图
     uint8_t* io_buf = kmalloc(sb->s_block_size);
     if (!io_buf) {
@@ -831,6 +833,7 @@ static void recursive_free_blocks(struct super_block *sb, uint32_t phys_block, u
 
 static void ext2_truncate(struct inode *inode) {
     struct super_block *sb = inode->i_sb;
+    // printk("truncate i_no 0x%x start...\n",inode->i_no);
 
     // 处理直接块 [0-11]
     for (int i = 0; i < 12; i++) {
@@ -864,9 +867,11 @@ static void ext2_truncate(struct inode *inode) {
     
     // 更新磁盘上的 Inode 结构
     sb->s_op->write_inode(inode);
+
+    // printk("truncate done!\n");
 }
 
-static int32_t ext2_remove_entry(struct inode* parent_dir, uint32_t target_inode_no) {
+static int32_t ext2_remove_entry(struct inode* parent_dir, char* name) {
     struct partition* part = get_part_by_rdev(parent_dir->i_dev);
     struct super_block* sb = parent_dir->i_sb;
     uint32_t block_size = EXT2_BLOCK_UNIT << sb->ext2_info.sb_raw.s_log_block_size;
@@ -896,7 +901,14 @@ static int32_t ext2_remove_entry(struct inode* parent_dir, uint32_t target_inode
 
         // 在块内查找并合并条目
         while (offset < block_size) {
-            if (curr->i_no == target_inode_no) {
+            // 记录当前 rec_len 备用，防止修改 de 后丢失长度
+            uint32_t current_rec_len = curr->rec_len;
+
+            // 防止损坏的文件系统导致死循环
+            if (current_rec_len == 0) break;
+
+            if (curr->i_no != 0 && strlen(name) == curr->name_len && 
+            memcmp(name, curr->name, curr->name_len) == 0) {
                 // 命中目标
                 if (prev) {
                     // 把当前条目的长度并入前一个条目
@@ -920,12 +932,12 @@ static int32_t ext2_remove_entry(struct inode* parent_dir, uint32_t target_inode
             }
 
             // 指针跳跃
-            offset += curr->rec_len;
+            offset += current_rec_len;
+            // 已经到头了，不再计算下一个指针
+            if (offset >= block_size) break; 
+
             prev = curr;
-            curr = (struct ext2_dir_entry*)((uint8_t*)curr + curr->rec_len);
-            
-            // 避免 rec_len 为 0 导致的死循环
-            if (curr->rec_len == 0) break; 
+            curr = (struct ext2_dir_entry*)((uint8_t*)curr + current_rec_len);
         }
     }
 
@@ -956,7 +968,7 @@ static int32_t ext2_unlink(struct inode* dir, char* name, int len) {
 
     // 从父目录删除目录项 (这一步比较复杂，因此给他封装一下)
     // Ext2 的删除需要处理 rec_len 的合并
-    if (ext2_remove_entry(dir, target_inode->i_no) != 0) {
+    if (ext2_remove_entry(dir, name) != 0) {
         inode_close(target_inode);
         return -1;
     }
@@ -1046,7 +1058,7 @@ static int32_t ext2_rmdir(struct inode *dir, char *name, int len) {
 
     // 检查是否为空
     if (!ext2_is_dir_empty(target_inode)) {
-        printk("target dir is not empty!\n");
+        printk("ext2_rmdir: target dir is not empty!\n");
         inode_close(target_inode);
         return -ENOTEMPTY;
     }
@@ -1054,7 +1066,7 @@ static int32_t ext2_rmdir(struct inode *dir, char *name, int len) {
     // 从父目录删除目录项
     // 可以直接复用和 unlink 里面一样的
     // ext2_remove_entry，它会处理 rec_len 合并
-    if (ext2_remove_entry(dir, target_inode->i_no) != 0) {
+    if (ext2_remove_entry(dir, name) != 0) {
         inode_close(target_inode);
         return -EIO;
     }
@@ -1209,6 +1221,7 @@ static int ext2_rename(struct inode *old_dir, char *old_name, int old_len UNUSED
     // 环路检测, 如果是目录移动，确保 new_dir 不是 old_inode 的子目录
     if (old_inode->i_type == FT_DIRECTORY) {
         if (is_ancestor(old_inode, new_dir)) {
+            printk("ext2_rename: err! may create a loop!\n");
             retval = -EINVAL;
             goto out;
         }
@@ -1237,7 +1250,7 @@ static int ext2_rename(struct inode *old_dir, char *old_name, int old_len UNUSED
         inode_close(new_inode);
         new_inode = NULL;
     }
-
+    
     // 在新目录下添加条目
     if (ext2_add_entry(new_dir, old_inode->i_no, new_name, old_inode->i_type) != 0) {
         retval = -EIO;
@@ -1245,7 +1258,7 @@ static int ext2_rename(struct inode *old_dir, char *old_name, int old_len UNUSED
     }
 
     // 从原位置抹除
-    ext2_remove_entry(old_dir, old_inode->i_no);
+    ext2_remove_entry(old_dir, old_name);
 
     // 如果是目录移动，需要修正 ".." 
     // 这些修正操作最好放到 ext2_remove_entry 后面做

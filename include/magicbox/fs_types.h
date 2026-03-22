@@ -105,7 +105,7 @@ struct file_operations {
 };
 
 // 不同文件系统有不同的inode操作集
-// 同意文件系统，根据不同的inode类型，分别填充这个inode操作集合里的不同函数
+// 同一文件系统，根据不同的inode类型，分别填充这个inode操作集合里的不同函数
 // 例如 dir inode 会有 lookup, create, mkdir, rmdir, unlink 等
 // 设备 inode 通常几乎全是 NULL，它只是一个占位符。
 // 当 VFS 看到这个 Inode 时，它知道这不需要文件系统去做什么元数据操作，只需要去调用它的 i_fop（指向 TTY 或磁盘驱动）就可以了。

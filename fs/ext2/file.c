@@ -13,6 +13,8 @@ static int32_t ext2_readdir(struct inode* inode UNUSED, struct file* file, struc
     struct partition* part = get_part_by_rdev(dir_inode->i_dev);
     struct super_block* sb = dir_inode->i_sb;
 
+    // printk("DEBUG_READDIR: fd_pos=%d, i_size=%d\n", file->fd_pos, dir_inode->i_size);
+
     // 确定块大小
     uint32_t log_sz = sb->ext2_info.sb_raw.s_log_block_size;
     if (log_sz > 10) { // Ext2 规范通常 block 不超过 4KB (log=2)，给到 10 已经是极限了

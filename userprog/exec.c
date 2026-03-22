@@ -291,7 +291,9 @@ int32_t sys_execv(const char* path, const char* argv[]) {
     }
 
     // 准备进入用户态的中断栈上下文
-    struct intr_stack* intr_0_stack = (struct intr_stack*)((uint32_t)cur + PG_SIZE - sizeof(struct intr_stack));
+    // struct intr_stack* intr_0_stack = (struct intr_stack*)((uint32_t)cur + PG_SIZE - sizeof(struct intr_stack));
+
+	struct intr_stack* intr_0_stack = (struct intr_stack*)((uint32_t)cur->kstack_pages + KERNEL_THREAD_STACK - sizeof(struct intr_stack));
 
     intr_0_stack->ebx = (int32_t)user_argv_list; // 存入新程序的 argv 指针
     intr_0_stack->ecx = (int32_t)argc;           // 存入 argc

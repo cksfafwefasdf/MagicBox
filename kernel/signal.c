@@ -109,7 +109,10 @@ void sys_sigreturn(void) {
     // 我们在内核栈栈顶预留 sizeof(struct intr_stack) 大小的空间
     // 每一个用户程序陷入内核态时，内核调用的栈空间就是用户PCB中预留的那一块内核栈空间
     // 我们在kernel.s中的syscall_handler处，以及将用户的上下文备份了一份在内核栈中了
-    struct intr_stack* current_stack = (struct intr_stack*)((uint32_t)cur + PG_SIZE - sizeof(struct intr_stack));
+    // struct intr_stack* current_stack = (struct intr_stack*)((uint32_t)cur + PG_SIZE - sizeof(struct intr_stack));
+
+    // 我们将内核栈从pcb中拆出去了，因此得改变获取方式
+    struct intr_stack* current_stack = (struct intr_stack*)((uint32_t)cur->kstack_pages + KERNEL_THREAD_STACK - sizeof(struct intr_stack));
 
 
     // 之前 setup_frame 压入用户栈的是

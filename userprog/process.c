@@ -150,6 +150,9 @@ void process_activate(struct task_struct* pthread){
 		// if it is user proc, then update esp0
 		update_tss_esp(pthread);
 	}
+
+	// 更新全局锚点
+	tss.cur_task = pthread;
 }
 
 uint32_t* create_page_dir(void){

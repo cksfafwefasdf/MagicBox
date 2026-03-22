@@ -132,12 +132,21 @@ static void idle(void *arg UNUSED){
 
 static void make_main_thread(void) {
     main_thread = get_kernel_pages(1);
+    // 这里面会为main线程申请独立于pcb外的栈空间
     init_thread(main_thread, "main", 5);
     
     
     // 准备新栈，：将原本要执行的后续代码after_init手动压入新栈
-    uint32_t* esp = (uint32_t*)((uint32_t)main_thread + PG_SIZE);
-    *(--esp) = (uint32_t)after_init; // 告诉 CPU 以后去哪
+    // uint32_t* esp = (uint32_t*)((uint32_t)main_thread + PG_SIZE);
+    // *(--esp) = (uint32_t)after_init; // 告诉 CPU 以后去哪
+
+    // 这里的 self_kstack 是 init_thread 计算出来的初始栈顶
+    uint32_t* esp = main_thread->self_kstack;
+
+    // 将 after_init 压入独立栈的顶端
+    *(--esp) = (uint32_t)after_init;
+    // 因为压入了一个返回地址, 因此更新 self_kstack 
+    main_thread->self_kstack = esp;
 
     ASSERT(!dlist_find(&thread_all_list,&main_thread->all_list_tag));
 	dlist_push_back(&thread_all_list,&main_thread->all_list_tag);
@@ -154,6 +163,12 @@ static void recyle_idle(){
         if(dlist_find(&thread_ready_list,&idle_thread->general_tag)){
             dlist_remove(&idle_thread->general_tag); 
         }
+
+        // 释放原 idle 线程独立申请的内核栈
+        if (idle_thread->kstack_pages) {
+            mfree_page(PF_KERNEL,idle_thread->kstack_pages,KERNEL_THREAD_STACK_PAGES);
+        }
+
         mfree_page(PF_KERNEL,idle_thread,1); // 释放 PCB 页面
     }
 

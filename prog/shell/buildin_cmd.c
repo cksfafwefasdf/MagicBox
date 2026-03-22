@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include "buildin_cmd.h"
 #include "shell.h"
 
@@ -420,4 +421,169 @@ void buildin_umount(uint32_t argc,char** argv){
 	}
 	
 	umount(argv[1]);
+}
+
+// 简单的文件拷贝，用于跨分区搬运数据
+static int copy_file(const char* src, const char* dest) {
+    int fd_src = open((char*)src, O_RDONLY);
+    if (fd_src < 0) return -1;
+
+    // 创建目标文件，如果已存在则截断
+    int fd_dest = open((char*)dest, O_WRONLY | O_CREATE | O_TRUNC);
+    if (fd_dest < 0) {
+        close(fd_src);
+        return -1;
+    }
+
+	// 用户栈是自带扩容的，最大扩到8MB，所以随便操作没事
+	char* buf = (char*) malloc(4096);
+    int bytes;
+    while ((bytes = read(fd_src, buf, 4096)) > 0) {
+        if (write(fd_dest, buf, bytes) != bytes) break;
+    }
+
+    close(fd_src);
+    close(fd_dest);
+	free(buf);
+    return 0;
+}
+
+static int move_recursive(const char* src, const char* dest) {
+    struct stat st;
+	// 检查每一层中要移动的文件是否存在
+    if (stat(src, &st) < 0) return -1;
+
+	// 如果 src 和 dest 是同一个文件，直接返回，防止自杀
+    if (strcmp(src, dest) == 0) return 0;
+
+    // 尝试原子重命名。
+    // 如果 src 和 dest 在同一分区，这一步直接成功，瞬间完成。
+    // 因为 rename 只移动目录项，不会删除和拷贝文件
+	if (rename(src, dest) == 0) return 0;
+    // 如果 rename 返回 -EXDEV (跨设备错误)，进入手动搬迁逻辑
+    if (st.st_filetype == FT_DIRECTORY) {
+        // 处理目录
+        // 在目标分区创建同名目录
+        // 如果 mkdir 失败，要区分原因
+		if (mkdir(dest) < 0) {
+            // 如果是因为目录已存在，且我们要移动的是目录内容，可以允许继续
+            // 但标准 mv 跨分区移动时，如果目标目录已存在且非空，通常会报错
+            struct stat st_d;
+            if (stat(dest, &st_d) < 0 || st_d.st_filetype != FT_DIRECTORY) {
+                return -1; 
+            }
+        }
+        // 打开源目录开始遍历
+        int fd = open((char*)src, O_RDONLY);
+        if (fd < 0){
+			printf("mv: fail to open %s\n",src);
+			return -1;
+		}
+        struct dirent de;
+		// 用户栈是自带扩容的，最大扩到8MB，所以随便操作没事，借此机会也可以试验下这个扩容的健壮性
+        char src_buf[MAX_PATH_LEN];
+        char dest_buf[MAX_PATH_LEN];
+
+		int move_failed = 0;
+		// 读目录项，然后逐个移动
+		// readdir=0时说明读取结束，小于0时，返回的是错误码，返回1时说明成功读取但是后面还有数据
+        while (readdir(fd, &de) > 0) {
+			// printf("readdir :%s\n",de.d_name);
+            // 过滤 "." 和 ".." 防止死循环
+            if (!strcmp(de.d_name, ".") || !strcmp(de.d_name, "..")) continue;
+
+            // 拼接子路径
+            sprintf(src_buf, "%s/%s", src, de.d_name);
+            sprintf(dest_buf, "%s/%s", dest, de.d_name);
+
+			// printf("src: %s, dst: %s\n",src_buf,dest_buf);
+
+            // 递归移动子项
+            if (move_recursive(src_buf, dest_buf) < 0) {
+				printf("mv: fail to move_recursive!\n");
+				move_failed = 1; // 标记子项移动失败
+            }
+        }
+        close(fd);
+
+		// 只有所有子项都成功了，才删自己。否则报错退出，保留现场。
+        if (move_failed) {
+            printf("mv: sub-items move failed, keeping source directory '%s'\n", src);
+            return -1;
+        }
+        // 整个目录的内容都搬走了，删除旧的空目录
+        return rmdir(src);
+
+    } else {
+        // 处理普通文件 
+        if (copy_file(src, dest) == 0) {
+            return unlink(src); // 拷贝成功后删除源文件
+        }
+    }
+    return -1;
+}
+
+// 在linux的标准下，若一个目录下同时存在 f1 和 f2
+// 我们运行 mv f1 f2，系统的默认的行为是用 f1 将 f2 给覆盖了
+void buildin_mv(uint32_t argc, char** argv) {
+    bool recursive = false;
+    char* src = NULL;
+    char* dest = NULL;
+
+    // 简单的参数解析
+    for (uint32_t i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-r") == 0) {
+            recursive = true;
+        } else if (src == NULL) {
+            src = argv[i];
+        } else if (dest == NULL) {
+            dest = argv[i];
+        }
+    }
+
+    if (src == NULL || dest == NULL) {
+        printf("mv: missing file operand\nUsage: mv [-r] SOURCE DEST\n");
+        return;
+    }
+
+    // 获取源文件状态，进行安全校验
+    struct stat st;
+    if (stat(src, &st) < 0) {
+        printf("mv: cannot stat '%s': No such file or directory\n", src);
+        return;
+    }
+
+    struct stat st_src, st_dest;
+    if (stat(src, &st_src) < 0) { // 校验要移动的源文件是否存在
+        printf("mv: cannot stat '%s'\n", src);
+        return;
+    }
+
+    // 检查目标路径
+    char final_dest[MAX_PATH_LEN];
+    strcpy(final_dest, dest);
+
+    if (stat(dest, &st_dest) == 0) {
+        // 如果目标是一个已存在的目录，则将 src 移动到该目录下
+		// 例如执行 mv -r dir .. 由于 .. 肯定是存在的，所以这个命令的语义是 mv -r dir ../dir
+		// 如果 mv -r dir dir2 如果dir2不存在，那么这其实就是一个重命名操作
+        if (st_dest.st_filetype == FT_DIRECTORY) {
+            char* src_basename = strrchr(src, '/');
+            src_basename = (src_basename == NULL) ? src : (src_basename + 1);
+            
+            sprintf(final_dest, "%s/%s", dest, src_basename);
+        }
+    }
+
+    // 如果是目录且没有 -r 参数，拦截操作，防止误操作，这是模仿cp的逻辑
+	// 因为对于目录的移动太过重量级，需要谨慎
+    if (FT_DIRECTORY == st.st_filetype  && !recursive) {
+        printf("mv: '%s' is a directory (not moved). Use -r to move directories.\n", src);
+        return;
+    }
+
+    // 使用处理后的路径
+    if (move_recursive(src, final_dest) < 0) {
+        printf("mv: failed to move '%s' to '%s'\n", src, final_dest);
+    }
 }

@@ -67,18 +67,26 @@ static bool init_adopt_a_child(struct dlist_elem* pelem,void* arg){
 
 pid_t sys_wait(int32_t* status){
 	struct task_struct* parent_thread = get_running_task_struct();
-
+	ASSERT(parent_thread->stack_magic == STACK_MAGIC);
 	while(1){
 		struct dlist_elem* child_elem = dlist_traversal(&thread_all_list,find_hanging_child,(void*)parent_thread->pid);
 		if(child_elem!=NULL){
 			struct task_struct* child_thread = member_to_entry(struct task_struct,all_list_tag,child_elem);
-			if(status!=NULL)
-				*status = child_thread->exit_status;
+			if(status!=NULL){
+				// *status = child_thread->exit_status;
+				printk("Writing exit_status to vaddr: %x\n", status);
+        		*status = child_thread->exit_status;
+			}
+
+			// 检查此时的栈顶数据是否合法
+    		// struct intr_stack* is = (struct intr_stack*)((uint32_t)get_running_task_struct()->kstack_pages + KERNEL_THREAD_STACK - sizeof(struct intr_stack));
+    		// printk("IRET check: CS=%x, EIP=%x, ESP=%x\n", is->cs, is->eip, is->esp);
 
 			uint16_t child_pid = child_thread->pid;
 			release_pg_table(child_thread);
 			release_pg_dir(child_thread);
 			thread_exit(child_thread,false);
+			put_str("sys_wait is about to return to userland...\n");
 			return child_pid;
 		}
 
@@ -114,8 +122,8 @@ void sys_exit(int32_t status){
 	}
 
 	// 检查是否有已经变成僵尸的孩子交给了 Init
-    // 如果有，唤醒 PID 3
-    struct task_struct* init_proc = pid2thread(INIT_PID); // Init 是 PID 3
+    // 如果有，唤醒 PID 1
+    struct task_struct* init_proc = pid2thread(INIT_PID); // Init 是 PID 1
     if (init_proc) {
         // 扫描全进程表，看看有没有 parent 是 1 且状态是 HANGING 的
         struct dlist_elem* zombie_elem = dlist_traversal(&thread_all_list, find_hanging_child, (void*)3);
