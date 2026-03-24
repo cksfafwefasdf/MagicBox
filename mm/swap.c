@@ -38,7 +38,6 @@ void copy_page_tables(struct task_struct* from, struct task_struct* to, void* pa
     ASSERT(page_buf != NULL);
 	enum intr_status old_status = intr_disable();
     uint32_t* to_pte_buf = (uint32_t*)page_buf;
-    uint32_t* temp_pte_ptr = pte_ptr(K_TEMP_PAGE_VADDR); // 获取中转页的PTE地址
 
     // 遍历用户空间 PDE
 	uint32_t pde_idx = 0;
@@ -49,13 +48,6 @@ void copy_page_tables(struct task_struct* from, struct task_struct* to, void* pa
         // 为子进程分配页表物理页
         uint32_t to_pt_pa = (uint32_t)palloc(&kernel_pool);
         if (!to_pt_pa) PANIC("copy_page_tables: palloc failed");
-
-		// copy_page_tables 函数是父进程调用的，pte_ptr取到的是父进程页表项相应的地址
-        // 将该物理页映射到父进程的中转虚拟地址，以便从父进程直接写入
-		// 这时，如果父进程对 K_TEMP_PAGE_VADDR 进行写操作，其实是对 to_pt_pa 这个物理地址进行写操作
-		// 也就是说让父子进程的两个不同的虚拟地址映射到了同一个物理地址
-        *temp_pte_ptr = to_pt_pa | PG_P_1 | PG_RW_W;
-        asm volatile ("invlpg %0" : : "m" (*(char*)K_TEMP_PAGE_VADDR) : "memory");
 
         // 获取父进程当前页表的虚拟地址 (利用递归分页)
         uint32_t* from_pte_ptr = (uint32_t*)(0xffc00000 | (pde_idx << 12));
@@ -81,18 +73,14 @@ void copy_page_tables(struct task_struct* from, struct task_struct* to, void* pa
             }
         }
 
-        // 直接写入映射好的中转页，即写到了子进程的新页表物理页中
-        memcpy((void*)K_TEMP_PAGE_VADDR, to_pte_buf, PG_SIZE);
+        void* to_pt_kaddr = kmap(to_pt_pa);
+        memcpy(to_pt_kaddr, to_pte_buf, PG_SIZE);
+        kunmap(to_pt_kaddr);
 
         // 将该页表挂载到子进程的页目录中
-		// 相当于子进程直接将to->pgdir[pde_idx]这个虚拟地址映射到了父进程刚刚处理好的to_pt_pa物理地址上
-		// 此时父子进程的两个不同的虚拟地址会指向同一个物理地址，但是没关系，因为下一轮循环中
-		// 父进程会重新将 K_TEMP_PAGE_VADDR 映射到新的物理地址上
         to->pgdir[pde_idx] = to_pt_pa | PG_US_U | PG_RW_W | PG_P_1;
     }
 
-    // 清理中转页映射，刷新父进程 TLB
-    *temp_pte_ptr = 0;
     // 因为修改了大量父进程的 PTE 属性（RW -> RO），必须重载 CR3 彻底刷新
     page_dir_activate(from);
 	intr_set_status(old_status);
@@ -221,27 +209,21 @@ static void do_copy_on_write(uint32_t vaddr, uint32_t* pte, uint32_t old_pa) {
         PANIC("COW: No memory for new physical page.");
     }
 
-    // 建立临时映射以进行拷贝
-    // 使用 pte_ptr 获取中转页的 PTE 指针
-    uint32_t* temp_pte = pte_ptr(K_TEMP_PAGE_VADDR);
-
-	if ((*temp_pte & PG_P_1)) {
-        PANIC("COW: K_TEMP_PAGE_VADDR is already in use! Collision detected.");
-    }
-    
-    // 将新分配的物理页映射到中转虚拟地址，给予内核读写权限
-	// PG_US_U 是用户的读写权限，我们最好不要给用户读写权限
-    *temp_pte = (uint32_t)new_pa | PG_P_1 | PG_RW_W;
-    
-    // 必须刷新中转页的 TLB，否则可能写到旧映射的物理页里去（比如上一次调用do_copy_on_write所映射的物理页）
-    asm volatile ("invlpg %0" : : "m" (*(char*)K_TEMP_PAGE_VADDR) : "memory");
+    // 在原本的实现中，我们是通过一个固定的K_TEMP_PAGE_VADDR来进行数据转运的
+    // 现在我们是通过动态映射的方式来进行转运
+    void* new_page_kaddr = kmap((uint32_t)new_pa);
 
     // 执行物理内存数据的搬运
     // 源地址：故障发生的虚拟页起始地址 (vaddr & 0xfffff000)
-    // 目的地址：中转虚拟地址
-    memcpy((void*)K_TEMP_PAGE_VADDR, (void*)(vaddr & 0xfffff000), PG_SIZE);
+    // 我们将发生写保护错误的那个虚拟地址所对应的数据全部拷贝到我们新映射出的物理页中
+    memcpy(new_page_kaddr, (void*)(vaddr & 0xfffff000), PG_SIZE);
+    // 拷贝完毕后，把临时映射的虚拟地址给释放了
+    kunmap(new_page_kaddr);
 
-    // 更新原虚拟地址的映射关系
+    // 更新原虚拟地址的映射关系，直接更新页表就行
+    // 我们更新的是当前进程的页表，也就是说，谁进行的写操作，谁进行复制
+    // 并且复制完后自己更新自己的页表，和当前进程共享页面的其他进程的页表不变
+    // 谁写的谁自己主动搬出去
     // 现在 PTE 指向新物理页，并开启 PG_RW_W 写权限
     *pte = (uint32_t)new_pa | PG_P_1 | PG_RW_W | PG_US_U;
 
@@ -252,9 +234,6 @@ static void do_copy_on_write(uint32_t vaddr, uint32_t* pte, uint32_t old_pa) {
     // 刷新出错虚拟地址的 TLB
     // 使 CPU 意识到该地址现在已经是新物理页且可写了
     asm volatile ("invlpg %0" : : "m" (*(char*)vaddr) : "memory");
-	// 拷贝完毕后，清理临时映射，一遍下次相同的操作能成功
-	*temp_pte = 0; 
-    asm volatile ("invlpg %0" : : "m" (*(char*)K_TEMP_PAGE_VADDR) : "memory");
 }
 
 // 写时复制（COW）：这是合法的，内核分配新页并映射，然后直接 ret 返回用户态继续执行。

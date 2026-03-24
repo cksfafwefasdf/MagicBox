@@ -34,8 +34,9 @@ struct page* global_pages;
 struct buddy_pool kernel_pool,user_pool;
 
 struct mem_block_desc k_block_descs[DESC_TYPE_CNT];
-
-struct virtual_addr kernel_vaddr;
+static struct lock kmap_lock;
+static uint32_t kmap_slots[KMAP_SLOT_CNT];
+static uint32_t kernel_direct_map_limit = 0;
 
 uint32_t mem_bytes_total = 0;
 uint32_t total_pages = 0;
@@ -44,24 +45,9 @@ uint32_t kernel_heap_start = 0; // 在 mem_pool_init 中动态赋值
 
 int32_t inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_t count);
 static struct vm_area* find_vma_condition(struct task_struct* task, uint32_t flags);
-
-// 这是一个内部辅助函数，用于在 mem_pool_init 这种极早期阶段手动绑定物理地址和虚拟地址的映射
-static void early_map(uint32_t vaddr, uint32_t paddr) {
-    uint32_t* pde = pde_ptr(vaddr);
-    uint32_t* pte = pte_ptr(vaddr);
-
-    // 如果 PDE 不存在，说明这 4MB 范围的页表还没分配
-    if (!(*pde & 0x1)) {
-        // 在这种极早期，我们还没法用 palloc，直接硬点一块物理内存给页表使用
-        PANIC("Early PDE not exist! Please check your Loader setup_page.");
-    }
-
-    // 填写 PTE
-    *pte = paddr | PG_P_1 | PG_RW_W | PG_US_U;
-
-    // 刷新 TLB
-    asm volatile ("invlpg %0" : : "m" (*(char*)vaddr) : "memory");
-}	
+static bool is_kernel_vaddr(uint32_t vaddr);
+static void direct_map_lowmem_range(uint32_t start_paddr, uint32_t end_paddr);
+static void* direct_map_ptr(uint32_t paddr);
 
 static void mem_pool_init(uint32_t all_mem) {
     put_str("mem_pool init start\n");
@@ -79,26 +65,18 @@ static void mem_pool_init(uint32_t all_mem) {
     
     total_pages = all_mem / PG_SIZE;
     uint32_t global_pages_size = total_pages * sizeof(struct page);
+
+    // 下对齐，防止将不存在的物理页也当作是可以映射的
+    // 这么做最多也就浪费4095字节，问题不是太大
+    kernel_direct_map_limit = all_mem < KERNEL_DIRECT_SIZE ? PAGE_ALIGN_DOWN(all_mem) : KERNEL_DIRECT_SIZE;
+    // 先建立低端内存映射
+    direct_map_lowmem_range(0, kernel_direct_map_limit);
     
 	// 按理来说，global_pages 会被放到物理地址的低 2MB 之后
     global_pages = (struct page*)(KERNEL_VADDR_START + base_used_mem);
-
-
-	// 由于我们直接进行了低端内存映射，因此低512MB的内存都是直接被建立好映射的
-	// 不用去额外建立映射了
-
-	// 在 memset 之前手动建立映射
-    uint32_t cur_vaddr = (uint32_t)global_pages;
-    uint32_t cur_paddr = base_used_mem; // 物理地址也从 2MB 开始
-    uint32_t mapped_size = 0;
-
-    while (mapped_size < global_pages_size) {
-        early_map(cur_vaddr, cur_paddr);
-        cur_vaddr += PG_SIZE;
-        cur_paddr += PG_SIZE;
-        mapped_size += PG_SIZE;
-    }
-
+    // 由于我们在 direct_map_lowmem_range 中建立过低端内存映射了
+    // 因为 global_pages 是一个必须要能被内核持久访问的对象 因此 global_pages 百分之百是在低端内存里的
+    // 所以此处 memset 不应该会报错
     memset(global_pages, 0, global_pages_size);
 
     // 计算真正可供伙伴系统使用的物理内存起始点
@@ -106,34 +84,29 @@ static void mem_pool_init(uint32_t all_mem) {
     real_phy_start = (real_phy_start + PG_SIZE - 1) & 0xfffff000; // 对齐
 
     uint32_t total_free_byte = all_mem - real_phy_start;
-    uint32_t kernel_pool_size = total_free_byte / 2;
-    uint32_t user_pool_size = total_free_byte - kernel_pool_size;
+    uint32_t lowmem_free_bytes = 0;
+    if (kernel_direct_map_limit > real_phy_start) {
+        lowmem_free_bytes = kernel_direct_map_limit - real_phy_start;
+    }
+
+    // 为了简单起见，我们先把空闲低端内存的一半给内核，然后剩下的所有空间都给用户
+    // 我们现在的双内存池设计是有很多缺陷的，他在物理上将内存进行了隔离，虽然安全但是非常不灵活
+    // 后期我们可以参考 Linux 的设计，不再区分用户内存池和内核内存池，而是统一用一套内存池来管理
+    // 然后通过权限，用途之类的字段来对每个页进行区分
+    uint32_t kernel_pool_size = PAGE_ALIGN_DOWN(lowmem_free_bytes / 2);
+    uint32_t user_pool_size = PAGE_ALIGN_DOWN(total_free_byte - kernel_pool_size);
+
+    if (kernel_pool_size == 0) {
+        PANIC("mem_pool_init: no lowmem left for kernel_pool");
+    }
 
     // 初始化物理伙伴池
     buddy_init(&kernel_pool, real_phy_start, kernel_pool_size, global_pages);
     buddy_init(&user_pool, real_phy_start + kernel_pool_size, user_pool_size, global_pages);
+    lock_init(&kmap_lock);
+    memset(kmap_slots, 0, sizeof(kmap_slots));
 
-    // 初始化内核虚拟地址池 (必须保留)，因为我们的虚拟地址目前还是基于位图产生的
-	// 后期要改进成基于brk
-    // 此时 MEM_BITMAP_BASE 只需要存放一个位图了（内核虚拟地址位图，这样的话我们支持的内存空间也就能大很多了）
-    kernel_vaddr.vaddr_bitmap.bits = (void*)MEM_BITMAP_BASE;
-    // 这里的长度代表内核虚拟地址空间的覆盖范围，给个 32MB 的范围对应的位图也就 1KB
-	// 即使我们的物理内存有 4GB，那么它所占用的位图大小为 4GB / (4096 B/page) / (8 page/byte) = 32 页
-	// 我们在 make_main_thread 中改进了内核PCB的位置，我们先前的实现中将内核PCB放到了内存低端的1MB中
-	// 并在loader中将内核栈硬编码成了 0xc009f000，且在之后的操作中一直继承了这个栈
-	// 现在我们改进了这个分配方法，将内核的PCB动态分配到了内核堆空间中，使它和其他的内核线程对等
-	// 这样就更灵活了，这样一来0xc009a000 ~ 0xc0100000 的这部分空间就完全空闲下来了
-
-    kernel_vaddr.vaddr_bitmap.btmp_bytes_len = (kernel_pool_size / PG_SIZE) / 8; 
-    bitmap_init(&kernel_vaddr.vaddr_bitmap);
-
-    // 内核堆起始位置，紧跟在 global_pages 之后
-	// 动态计算堆起始地址
-    // 堆必须在 global_pages 数组结束之后开始，以防虚拟地址冲突
-    kernel_heap_start = (uint32_t)global_pages + global_pages_size;
-    kernel_heap_start = (kernel_heap_start + PG_SIZE - 1) & 0xfffff000; // 对齐到页
-
-    kernel_vaddr.vaddr_start = kernel_heap_start;
+    kernel_heap_start = KERNEL_PAGE_OFFSET + real_phy_start;
 
 	put_str("Kernel pool range: "); put_int(kernel_pool.phy_addr_start);
 	put_str(" - "); put_int(kernel_pool.phy_addr_start + kernel_pool_size);
@@ -160,20 +133,9 @@ static void* vaddr_alloc(enum pool_flags pf, uint32_t pg_cnt, bool force_mmap) {
     uint32_t vaddr_start = 0;
 
     if (pf == PF_KERNEL) {
-        // 内核态，维持原状，继续使用全局位图
-        int bit_idx_start = bitmap_scan(&kernel_vaddr.vaddr_bitmap, pg_cnt);
-        if (bit_idx_start == -1) {
-            intr_set_status(old);
-            return NULL;
-        }
-        uint32_t cnt = 0;
-        while (cnt < pg_cnt) {
-            bitmap_set(&kernel_vaddr.vaddr_bitmap, bit_idx_start + cnt, 1);
-            cnt++;
-        }
-        vaddr_start = kernel_vaddr.vaddr_start + bit_idx_start * PG_SIZE;
-		intr_set_status(old);
-		return (void*)vaddr_start;
+        intr_set_status(old);
+        PANIC("vaddr_alloc: PF_KERNEL should use direct mapping instead");
+        return NULL;
 
     } else {
         struct task_struct* cur = get_running_task_struct();
@@ -252,6 +214,7 @@ static void page_table_add(void* _vaddr,void* _page_phyaddr){
 	uint32_t vaddr = (uint32_t)_vaddr,page_phyaddr = (uint32_t)_page_phyaddr;
 	uint32_t* pde = pde_ptr(vaddr);
 	uint32_t* pte = pte_ptr(vaddr);
+    uint32_t page_flags = PG_P_1 | PG_RW_W | (is_kernel_vaddr(vaddr) ? PG_US_S : PG_US_U);
 	// the lowest bit is P bit
 	// check if the page exists in the mem
 	if(*pde&0x00000001){
@@ -260,18 +223,18 @@ static void page_table_add(void* _vaddr,void* _page_phyaddr){
 		}
 		ASSERT(!(*pte & 0x00000001));
 		if(!(*pte&0x00000001)){
-			*pte = (page_phyaddr|PG_US_U|PG_RW_W|PG_P_1);
+			*pte = page_phyaddr | page_flags;
 		}else{
 			PANIC("Duplicate PTE");
-			*pte = (page_phyaddr|PG_US_U|PG_RW_W|PG_P_1);
+			*pte = page_phyaddr | page_flags;
 		}
 	}else{
 		uint32_t pde_phyaddr = (uint32_t)palloc(&kernel_pool);
-		*pde = (pde_phyaddr|PG_US_U|PG_RW_W|PG_P_1);
+		*pde = pde_phyaddr | page_flags;
 		memset((void*)((int)pte&0xfffff000),0,PG_SIZE);
 
 		ASSERT(!(*pte&0x00000001));
-		*pte = (page_phyaddr|PG_US_U|PG_RW_W|PG_P_1);
+		*pte = page_phyaddr | page_flags;
 	}	
 
 	// 强制刷新 TLB：重新加载 CR3
@@ -324,10 +287,33 @@ static struct page* palloc_pages_exact(struct buddy_pool* bpool, uint32_t pg_cnt
 // 分配物理上连续的若干页，虚拟地址也连续
 void* malloc_page(enum pool_flags pf, uint32_t pg_cnt) {
     ASSERT(pg_cnt > 0);
+
+    // 我们现在的设计中，内核空间的大小等于直接映射区大小的一半
+    // 因此内核池中申请的内存一定要在直接映射区
+    // 这么做还有一个原因就是，通常来说，调用这个函数的目的都是为PCB之类的数据结构进行内存分配
+    // 这类结构必须要在一个能被内核随时都能访问到的区域中
+    if (pf == PF_KERNEL) {
+        struct page* first_pg = palloc_pages_exact(&kernel_pool, pg_cnt);
+        if (first_pg == NULL) {
+            PANIC("malloc_page: kernel lowmem exhausted");
+        }
+
+        uint32_t paddr = PAGE_TO_ADDR(&kernel_pool, first_pg);
+        if (!paddr_is_lowmem(paddr) || !paddr_is_lowmem(paddr + (pg_cnt - 1) * PG_SIZE)) {
+            PANIC("malloc_page: kernel allocation escaped direct-mapped lowmem");
+        }
+
+        for (uint32_t i = 0; i < pg_cnt; i++) {
+            (first_pg + i)->ref_count = 1;
+        }
+
+        // 由于低端内存区的映射我们在init阶段就直接建立好了，因此我们现在不需要额外插入页表项了
+
+        // direct_map_lowmem_range(paddr, paddr + pg_cnt * PG_SIZE);
+        return direct_map_ptr(paddr);
+    }
     
     // 统一申请虚拟地址 (申请多少给多少)
-    // 内核态是不管 force_mmap 标志的，他还是用位图来分配
-    // 因此这个标志主要还是给用户态用，我们沿用用户态的标准，大于128KB将其置为true
     bool force_mmap = pg_cnt>=32?true:false;
     void* vaddr_start = vaddr_alloc(pf, pg_cnt, force_mmap);
     if (vaddr_start == NULL) return NULL;
@@ -365,20 +351,15 @@ void* malloc_page(enum pool_flags pf, uint32_t pg_cnt) {
 
 // 分配虚拟地址连续，但是物理地址不连续的若干页
 static void* vmalloc_page(enum pool_flags pf, uint32_t pg_cnt,bool force_mmap) {
+    if (pf == PF_KERNEL) {
+        return malloc_page(PF_KERNEL, pg_cnt);
+    }
+
     // 获取虚拟地址（内核走位图/固定堆，用户走 VMA Gap）
     void* vaddr_start = vaddr_alloc(pf, pg_cnt,force_mmap);
     if (vaddr_start == NULL) return NULL;
 
-    if (pf == PF_KERNEL) { // 内核态，必须立即分配物理页，内核不容许 Page Fault（除非是置换逻辑）
-        uint32_t vaddr = (uint32_t)vaddr_start;
-        uint32_t cnt = pg_cnt;
-        while (cnt-- > 0) {
-            void* page_phyaddr = palloc(&kernel_pool);
-            if (page_phyaddr == NULL) return NULL; // 实际中内核分配失败通常是致命的
-            page_table_add((void*)vaddr, page_phyaddr);
-            vaddr += PG_SIZE;
-        }
-    } else {
+    {
         // 用户态，既然 vaddr_alloc 已经 add_vma 了，我们直接返回
         // 物理页？不存在的。等用户写数据时，swap_page 会来补齐。
     }
@@ -415,16 +396,10 @@ void* get_user_pages(uint32_t pg_cnt){
 void* mapping_v2p(enum pool_flags pf,uint32_t vaddr){
 	struct buddy_pool* mem_pool = pf&PF_KERNEL?&kernel_pool:&user_pool;
 	lock_acquire(&mem_pool->lock);
-	struct task_struct* cur = get_running_task_struct();
-	int32_t bit_idx = -1;
-
-	// 内核态下，我们仍然先保留位图来管理虚拟地址空间
-	// 用户态下我们使用vma来管理
-	if(cur->pgdir==NULL&&pf==PF_KERNEL){
-		// if cur is a kernel thread
-		bit_idx = (vaddr-kernel_vaddr.vaddr_start)/PG_SIZE;
-		ASSERT(bit_idx>0);
-		bitmap_set(&kernel_vaddr.vaddr_bitmap,bit_idx,1);
+    // 内核空间目前我们全用直接映射，所以不需要在此处进一步操作了
+	if (pf == PF_KERNEL) {
+		lock_release(&mem_pool->lock);
+		PANIC("mapping_v2p: PF_KERNEL no longer manages arbitrary virtual addresses");
 	}
 	// 由于我们在 add_vma 时已经确认了这块地的合法性
 	// 因此此处不用再去操作相关的东西了，只用绑定物理地址和虚拟地址就行
@@ -439,14 +414,86 @@ void* mapping_v2p(enum pool_flags pf,uint32_t vaddr){
 
 	return (void*)vaddr;
 }
+
 // use vaddr to get paddr
 uint32_t addr_v2p(uint32_t vaddr){
+    // 直接映射区的内容的话直接减去3GB后返回
+    if (vaddr_is_directmap(vaddr)) {
+        uint32_t paddr = vaddr - KERNEL_PAGE_OFFSET;
+        if (paddr < kernel_direct_map_limit) {
+            return paddr;
+        }
+    }
+    // 不是低端内存的话要查页表
 	// all of the ptrs is vaddr
 	// so pte is vaddr
 	uint32_t* pte = pte_ptr(vaddr);
 	// *pte is paddr
 	// vaddr&0x00000fff to get offset in low 12bits
 	return ((*pte&0xfffff000)+(vaddr&0x00000fff));
+}
+
+bool paddr_is_lowmem(uint32_t paddr) {
+    return paddr < kernel_direct_map_limit;
+}
+
+bool vaddr_is_directmap(uint32_t vaddr) {
+    return vaddr >= KERNEL_PAGE_OFFSET && vaddr < KERNEL_DIRECT_END;
+}
+
+bool vaddr_is_kmap(uint32_t vaddr) {
+    return vaddr >= KERNEL_KMAP_START && vaddr < KERNEL_KMAP_END;
+}
+
+// 给一个物理页，返回一个当前内核可访问的虚拟地址，无论是高端还是低端的
+void* kmap(uint32_t paddr) {
+    // 如果物理地址位于低地址区，那么直接加上3GB偏移量后返回
+    if (paddr_is_lowmem(paddr)) {
+        return direct_map_ptr(paddr);
+    }
+
+    lock_acquire(&kmap_lock);
+    // 如果位于高地址区，那么需要从高端的128MB（实际上是124MB可用虚拟地址）中，寻找空闲的一个页来给他做映射
+    for (uint32_t idx = 0; idx < KMAP_SLOT_CNT; idx++) {
+        if (kmap_slots[idx] != 0) {
+            continue;
+        }
+        // 根据找到的空位计算虚拟地址，然后填充页表项，之后返回
+        uint32_t vaddr = KERNEL_KMAP_START + idx * PG_SIZE;
+        uint32_t* pte = pte_ptr(vaddr);
+        if (*pte & PG_P_1) {
+            continue;
+        }
+        *pte = paddr | PG_P_1 | PG_RW_W | PG_US_S;
+        asm volatile ("invlpg %0" : : "m" (*(char*)vaddr) : "memory");
+        kmap_slots[idx] = paddr;
+        lock_release(&kmap_lock);
+        return (void*)vaddr;
+    }
+    lock_release(&kmap_lock);
+    PANIC("kmap: no free highmem slots");
+    return NULL;
+}
+
+// 该函数主要是用来卸载一个高端地址映射的
+// 如果一个虚拟地址对应的物理内存在低端地址，那么它直接返回，不做其他处理
+void kunmap(void* _vaddr) {
+    uint32_t vaddr = (uint32_t)_vaddr;
+    // 如果不是高端地址映射范围的地址，直接返回
+    if (!vaddr_is_kmap(vaddr)) {
+        return;
+    }
+
+    // 就是kmap的反向逻辑，情况一下页表项和slot啥的
+    uint32_t idx = (vaddr - KERNEL_KMAP_START) / PG_SIZE;
+    lock_acquire(&kmap_lock);
+    ASSERT(idx < KMAP_SLOT_CNT);
+    ASSERT(kmap_slots[idx] != 0);
+
+    kmap_slots[idx] = 0;
+    *pte_ptr(vaddr) = 0;
+    asm volatile ("invlpg %0" : : "m" (*(char*)vaddr) : "memory");
+    lock_release(&kmap_lock);
 }
 
 void block_desc_init(struct mem_block_desc* desc_array){
@@ -627,12 +674,9 @@ static void page_table_pte_remove(uint32_t vaddr){
 // remove [pg_cnt] virtual pages, the beginning of v-page is _vaddr
 void vaddr_remove(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt){
 	enum intr_status old = intr_disable();
-	uint32_t bit_idx_start = 0,vaddr = (uint32_t)_vaddr,cnt=0;
 	if(pf==PF_KERNEL){
-		bit_idx_start = (vaddr-kernel_vaddr.vaddr_start)/PG_SIZE;
-		while(cnt<pg_cnt){
-			bitmap_set(&kernel_vaddr.vaddr_bitmap,bit_idx_start+cnt++,0);
-		}
+        intr_set_status(old);
+        return;
 	}else{
 		// 用户态, 使用 VMA 逻辑
         struct task_struct* cur = get_running_task_struct();
@@ -677,6 +721,11 @@ static void mfree_physical_pages(void* _vaddr, uint32_t pg_cnt) {
     
     for (uint32_t i = 0; i < pg_cnt; i++) {
         uint32_t cur_vaddr = vaddr + i * PG_SIZE;
+        // 直接映射区不需要释放页表项
+        if (vaddr_is_directmap(cur_vaddr)) { 
+            pfree(cur_vaddr - KERNEL_PAGE_OFFSET);
+            continue;
+        }
         
         // 检查页表
         uint32_t* pte = pte_ptr(cur_vaddr);
@@ -699,7 +748,11 @@ static void mfree_physical_pages(void* _vaddr, uint32_t pg_cnt) {
 void mfree_page(enum pool_flags pf, void* _vaddr, uint32_t pg_cnt) {
     // 先回收物理部分
     mfree_physical_pages(_vaddr, pg_cnt);
-    
+
+    if (pf == PF_KERNEL) { // 内核内存池处于直接映射区，不需要额外操作 
+        return;
+    }
+
     // 再回收虚拟部分（位图或 VMA）
     vaddr_remove(pf, _vaddr, pg_cnt);
 }
@@ -840,6 +893,40 @@ static struct vm_area* find_vma_condition(struct task_struct* task, uint32_t fla
         e = e->next;
     }
     return heap_vma;
+}
+
+static bool is_kernel_vaddr(uint32_t vaddr) {
+    return vaddr >= KERNEL_PAGE_OFFSET;
+}
+
+static void* direct_map_ptr(uint32_t paddr) {
+    ASSERT(paddr_is_lowmem(paddr));
+    return (void*)(KERNEL_PAGE_OFFSET + paddr);
+}
+
+// 手动填写低端内存映射
+static void direct_map_lowmem_range(uint32_t start_paddr, uint32_t end_paddr) {
+    uint32_t paddr = PAGE_ALIGN_DOWN(start_paddr);
+    uint32_t limit = PAGE_ALIGN_UP(end_paddr);
+    uint32_t page_flags = PG_P_1 | PG_RW_W | PG_US_S;
+
+    while (paddr < limit) {
+        uint32_t vaddr = KERNEL_PAGE_OFFSET + paddr;
+        uint32_t* pde = pde_ptr(vaddr);
+        uint32_t* pte = pte_ptr(vaddr);
+        
+        if (!(*pde & PG_P_1)) {
+            // 按理说我们已经在loader里面预留了这些页目录项和页表空间，不会报这个错
+            PANIC("direct_map_lowmem_range: missing PDE, please extend loader page tables");
+        }
+        if (!(*pte & PG_P_1)) {
+            *pte = paddr | page_flags;
+            asm volatile ("invlpg %0" : : "m" (*(char*)vaddr) : "memory");
+        } else if ((*pte & 0xfffff000) != paddr) {
+            PANIC("direct_map_lowmem_range: conflicting direct map entry");
+        }
+        paddr += PG_SIZE;
+    }
 }
 
 // 修改进程的堆顶边界 (brk) 

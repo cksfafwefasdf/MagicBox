@@ -1,6 +1,7 @@
 #ifndef __INCLUDE_MAGICBOX_MEMORY_H
 #define __INCLUDE_MAGICBOX_MEMORY_H
 #include <stdint.h>
+#include <stdbool.h>
 #include <bitmap.h>
 #include <dlist.h>
 
@@ -21,15 +22,6 @@
 // #define K_HEAP_START 0xc0100000
 
 
-// the base-addr of stack used by kernel is 0xc009f000
-// we are trying to organize 512MB phy-mem,which needs 512MB/4KB -> 2^17bit=128Kb=16KB for bitmap
-// 16KB/[4KB/page] = 4 pages
-// so we need 4 pages to store the bitmap,these page need to place into the low 1MB kernel space
-// PCB of kernel use 1page(0x9e000~0x9efff,stack-base is 0x9efff+1=0x9f000)
-// pages for phy-mem need place into the addr: 0x9e000-(0x1000*4)=0xc009a000`
-// so bitmap-base is 0xc009a000
-#define MEM_BITMAP_BASE 0xc009a000
-
 #define USER_PDE_NR 768
 #define USER_PTE_NR 1024
 // the size of the item in page table or page directory table
@@ -49,17 +41,41 @@
 #define PTE_TO_VADDR(pde_idx,pte_idx) (((pde_idx)<<22)|((pte_idx)<<12))
 #define PAGE_TABLE_VADDR(pde_idx) (0xffc00000|(pde_idx<<12))
 
-#define K_TEMP_PAGE_VADDR 0xff3ff000  
+#define KERNEL_PAGE_OFFSET 0xC0000000UL
+// 需要注意的是，像是PCB，页表这一类及其重要的数据结构
+// 都必须放到低端内存中，因为这些内容必须要能持久且快速被内核直接访问到
+#define KERNEL_DIRECT_SIZE  0x38000000UL // 896MB
+#define KERNEL_DIRECT_END   (KERNEL_PAGE_OFFSET + KERNEL_DIRECT_SIZE)
+#define KERNEL_KMAP_START   KERNEL_DIRECT_END // KMAP 地址区域用于映射高端地址， 0xF8000000
+// 这里只是124MB，不是128MB，这是因为我们在页目录表的最后一项（1023项）做了一个自映射
+// 也就是说最后的那4MB本来就被页表系统占用了，因此这部分地址我们得留出来
+// 这4MB的空间我们是用来访问页目录表自身的，所以不能用来做直接映射
+// 因为页目录表不一定就在相应地址直接映射的物理页那个地方是
+// 并且我们把之前的 K_TEMP_PAGE_VADDR 逻辑给删除了
+// 在copy_page_tables函数里接入了kmap逻辑进行高端地址映射从而实现中转
+
+/*
+	引入高端地址和低端地址后容易出现困惑的几个地方：
+	(1)	用户进程天然可以正常使用映射到 highmem 的物理页，
+		因为用户态始终是通过“用户虚拟地址 -> 页表 -> 物理页”来访问内存的。
+		用户并不直接感知底层物理页属于 lowmem 还是 highmem。
+		真正受 highmem 限制的是内核直接根据物理页来访问页内容的场景，
+		这时如果该物理页不在 lowmem，就需要借助 kmap()。
+	(2) 假如系统调用时，假如系统调用时，用户传给内核的 buf 所对应的物理页位于 highmem，
+		此时内核依然可以直接通过这个用户虚拟地址直接访问它，而不需要 kmap。
+		这是因为在陷入内核时，cpu 所作的只是改变当前 cpu 的特权级（比如 CS 寄存器的那几个标志位）
+		他不会去改变当前 cr3 所指向的页目录表，因此内核依然可以通过用户传入的虚拟地址直接访问到用户所提供的 buf
+		不需要借助 kmap，而由于在我们的设计中，在切换进程时，我们只会拷贝页表的低 768 项
+		高 256 项的内核区域自始至终没变过，因此所有用户进程在陷入内核态后能看到的内核区域都是一致的
+		因此也可以正常访问到相应的内核区域
+*/
+
+#define KERNEL_KMAP_END     0xFFC00000UL // 横跨了 124MB
+#define KMAP_SLOT_CNT       ((KERNEL_KMAP_END - KERNEL_KMAP_START) / PG_SIZE)
 
 enum pool_flags{
 	PF_KERNEL = 1,
 	PF_USER = 2
-};
-
-// virtual mem-pool, the size is 4GB
-struct virtual_addr{
-	struct bitmap vaddr_bitmap; // virtual mem pool
-	uint32_t vaddr_start;
 };
 
 struct mem_block{
@@ -85,6 +101,11 @@ extern void* get_kernel_pages(uint32_t pg_cnt);
 extern void* get_user_pages(uint32_t pg_cnt);
 extern void* mapping_v2p(enum pool_flags pf,uint32_t vaddr);
 extern uint32_t addr_v2p(uint32_t vaddr);
+extern void* kmap(uint32_t paddr);
+extern void kunmap(void* vaddr);
+extern bool paddr_is_lowmem(uint32_t paddr);
+extern bool vaddr_is_directmap(uint32_t vaddr);
+extern bool vaddr_is_kmap(uint32_t vaddr);
 extern void block_desc_init(struct mem_block_desc* desc_array);
 extern void mfree_page(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt);
 extern void pfree(uint32_t pg_phy_addr);
@@ -107,7 +128,5 @@ extern uint32_t sys_brk(uint32_t new_brk);
 
 extern uint32_t mem_bytes_total;
 extern uint32_t kernel_heap_start;
-extern struct dlist kernel_vma_list;
-extern struct lock kernel_vma_lock;
 extern struct page* global_pages;
 #endif

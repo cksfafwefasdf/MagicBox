@@ -174,15 +174,6 @@ uint32_t* create_page_dir(void){
 	return page_dir_vaddr;
 }
 
-// void create_user_vaddr_bitmap(struct task_struct* user_prog){
-// 	user_prog->userprog_vaddr.vaddr_start = USER_VADDR_START;
-// 	// 除以8是因为8位1字节
-// 	uint32_t bitmap_pg_cnt = DIV_ROUND_UP((0xc0000000-USER_VADDR_START)/PG_SIZE/8,PG_SIZE);
-// 	user_prog->userprog_vaddr.vaddr_bitmap.bits = get_kernel_pages(bitmap_pg_cnt);
-// 	user_prog->userprog_vaddr.vaddr_bitmap.btmp_bytes_len = (0xc0000000-USER_VADDR_START)/PG_SIZE/8;
-// 	bitmap_init(&user_prog->userprog_vaddr.vaddr_bitmap);
-// }
-
 // 主要是用来给main线程起用户进程
 // 当一切准备就绪后，起用户进程都是通过 fork + execv 来起的
 // 就不再使用此函数了

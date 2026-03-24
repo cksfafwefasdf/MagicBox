@@ -1158,6 +1158,11 @@ static bool is_ancestor(struct inode *old_inode, struct inode *new_dir) {
     while (current_ino != root_ino) {
         // 打开当前的 ".." 目录
         temp_inode = inode_open(get_part_by_rdev(new_dir->i_dev), current_ino);
+
+        if (!temp_inode) {
+            printk("is_ancestor: fail to open inode %d\n", current_ino);
+            return false; 
+        }
         
         // 在当前目录中查找 ".." 的 Inode 编号
         uint32_t parent_ino = 0;
@@ -1285,6 +1290,8 @@ out_new:
     if (new_inode) inode_close(new_inode);
 out:
     inode_close(old_inode);
+    old_inode = NULL; 
+    new_inode = NULL;
     return retval;
 }
 
