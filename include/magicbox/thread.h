@@ -138,7 +138,6 @@ struct task_struct{
 	struct dlist vma_list;
 
 	// struct virtual_addr userprog_vaddr;
-	struct mem_block_desc u_block_desc[DESC_TYPE_CNT];
 	struct inode* pwd; // 进程的当前工作目录
 	int16_t parent_pid;
 	int8_t exit_status;

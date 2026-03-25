@@ -10,6 +10,7 @@
 #include <vma.h>
 #include <file_table.h>
 #include <inode.h>
+#include <stdio-kernel.h>
 
 struct wait_opts {
     pid_t target_pid;

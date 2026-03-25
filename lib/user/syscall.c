@@ -97,14 +97,6 @@ uint32_t write(int32_t fd,const void* buf,uint32_t count){
 	return _syscall3(SYS_WRITE,fd,buf,count);
 }
 
-void* malloc(uint32_t size){
-	return (void*)_syscall1(SYS_MALLOC,size);
-}
-
-void free(void *ptr){
-	_syscall1(SYS_FREE,ptr);
-}
-
 pid_t fork(void){
 	return _syscall0(SYS_FORK);
 }
@@ -294,11 +286,6 @@ int32_t statfs(const char* path, struct statfs* buf){
 	return _syscall2(SYS_STATFS,path,buf);
 }
 
-void* calloc(uint32_t nmemb, uint32_t size) {
-    uint32_t total_size = nmemb * size;
-    void* p = malloc(total_size);
-    if (p != NULL) {
-        memset(p, 0, total_size); // 把拿到的脏内存洗干净
-    }
-    return p;
+void* brk(void* addr){
+	return (void*)_syscall1(SYS_BRK, addr);
 }

@@ -65,7 +65,8 @@ USER_LIB_SRCS := lib/string.c \
                  lib/stdio.c \
                  lib/assert.c \
                  lib/tar.c \
-                 lib/user/syscall.c
+                 lib/user/syscall.c \
+                 lib/user/malloc.c
 
 # 转换为对应的 .o 路径
 USER_LIB_OBJS := $(patsubst %.c, $(BUILD_DIR)/%.o, $(USER_LIB_SRCS))

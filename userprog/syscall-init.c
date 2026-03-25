@@ -29,8 +29,6 @@ void syscall_init(void){
 	put_str("syscall_init start\n");
 	syscall_table[SYS_GETPID] = sys_getpid;
 	syscall_table[SYS_WRITE] = sys_write;
-	syscall_table[SYS_MALLOC] = umalloc;
-	syscall_table[SYS_FREE] = ufree;
 	syscall_table[SYS_FORK] = sys_fork;
 	syscall_table[SYS_READ] = sys_read;
 	syscall_table[SYS_PUTCHAR] = console_put_char;
@@ -77,7 +75,7 @@ void syscall_init(void){
 	syscall_table[SYS_UMOUNT] = sys_umount;
 	syscall_table[SYS_RENAME] = sys_rename;
 	syscall_table[SYS_STATFS] = sys_statfs;
+	syscall_table[SYS_BRK] = sys_brk;
 	
 	put_str("syscall_init done\n");
 }
-

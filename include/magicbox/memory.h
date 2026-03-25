@@ -116,11 +116,7 @@ extern void* palloc(struct buddy_pool* m_pool) ;
 
 
 extern void* kmalloc(uint32_t size);
-extern void* umalloc(uint32_t size);
-extern void* do_alloc(uint32_t size, enum pool_flags PF);
-extern void ufree(void* ptr);
 extern void kfree(void* ptr);
-extern void do_free(void* ptr,enum pool_flags PF);
 
 
 extern uint32_t sys_brk(uint32_t new_brk);

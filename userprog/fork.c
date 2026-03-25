@@ -46,8 +46,6 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 
 	dlist_init(&child_thread->vma_list);
 
-	block_desc_init(child_thread->u_block_desc);
-
 	// 我们现在使用vma链表来管理用户进程的虚拟地址空间，因此位图可以取消了 
 	// uint32_t bitmap_pg_cnt = DIV_ROUND_UP((USER_STACK_BASE-USER_VADDR_START)/PG_SIZE/8,PG_SIZE);
 
@@ -175,4 +173,3 @@ pid_t sys_fork(){
 	dlist_push_back(&thread_all_list,&child_thread->all_list_tag);
 	return child_thread->pid;
 }
-

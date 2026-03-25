@@ -6,6 +6,8 @@
 #include <sync.h>
 #include <stdbool.h>
 
+struct mem_block_desc;
+
 // 给定物理地址，获取对应的 struct page
 #define ADDR_TO_PAGE(page_base,addr) (&page_base[(uint32_t)(addr) >> 12])
 // 给定 struct page，获取其物理地址
@@ -30,6 +32,16 @@ struct page {
     uint32_t ref_count; // 引用计数，专门负责 COW 和物理页生命周期
 
     int32_t order; // 如果是块的头页，记录该块的 order
+    // kmalloc arena / large allocation 的元信息，只有头页会使用这些字段。
+    // 如果我们 kmalloc 申请的是一个超过 4KB 的块的话，只有第一个页会记录这些属性，其他的不记录
+    // 这几个属性就是原本 arena 的属性，我们现在完全把他搬到 page 结构体来了
+    struct mem_block_desc* slab_desc; // 指向对应的块描述符
+    // when large is true, cnt is the number of page frames
+	// for example, when malloc 5000KB, the cnt is 2
+	// otherwise it is the number of the free mem_block
+    uint32_t slab_cnt;
+    bool slab_large; // when malloc above 1024Bytes, large is true
+    uint8_t slab_pad[3];
     struct dlist_elem free_list_tag; // 挂载到对应 order 的空闲链表上
 };
 

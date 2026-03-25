@@ -7,8 +7,11 @@
 
 #define	SYS_GETPID 0
 #define	SYS_WRITE 1
-#define	SYS_MALLOC 2
-#define	SYS_FREE 3
+// 2/3 号槽位曾用于旧的用户态直接经内核分配的 malloc/free。
+// 现在用户态内存分配已经改为 libc malloc/free + brk/sbrk，
+// 这两个编号仅保留为历史兼容槽位，避免整体 syscall ABI 重排。
+#define	SYS_RESERVED_2 2
+#define	SYS_RESERVED_3 3
 #define	SYS_FORK 4
 #define	SYS_READ 5
 #define	SYS_PUTCHAR 6
@@ -55,12 +58,15 @@
 #define SYS_UMOUNT 47
 #define SYS_RENAME 48
 #define SYS_STATFS 49
+#define SYS_BRK 50
 
 // user interface
 extern uint32_t getpid(void);
 extern uint32_t write(int32_t fd,const void* buf,uint32_t count);
+// libc heap allocator entry points (no longer direct syscalls)
 extern void* malloc(uint32_t size);
 extern void free(void *ptr);
+extern void* realloc(void* ptr, uint32_t size);
 extern pid_t fork(void);
 extern void clear(void);
 extern int32_t read(int32_t fd,void* buf,uint32_t count);
@@ -107,5 +113,7 @@ extern int32_t umount(const char* _mount_path);
 extern int32_t rename(const char* _old_path, const char* _new_path);
 extern int32_t statfs(const char* path, struct statfs* buf);
 extern void* calloc(uint32_t nmemb, uint32_t size); 
+extern void* brk(void* addr);
+extern void* sbrk(int32_t increment);
 
 #endif

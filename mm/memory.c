@@ -14,17 +14,6 @@
 #include <vma.h>
 #include <buddy.h>
 
-struct arena{
-	// point to the mem_block which is related to this arena
-	struct mem_block_desc* desc;
-	// when large is true, cnt is the number of page frames
-	// for example, when malloc 5000KB, the cnt is 2
-	// otherwise it is the number of the free mem_block
-	uint32_t cnt;
-	bool large; // when malloc above 1024Bytes, large is true
-    uint8_t pad[3]; // 凑够12字节
-}__attribute__((packed));;
-
 // uint8_t* mem_map = NULL;
 
 // 替换原本实现中的 uint8_t* mem_map
@@ -44,10 +33,12 @@ uint32_t total_pages = 0;
 uint32_t kernel_heap_start = 0; // 在 mem_pool_init 中动态赋值
 
 int32_t inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_t count);
-static struct vm_area* find_vma_condition(struct task_struct* task, uint32_t flags);
+static struct vm_area* find_heap_vma(struct task_struct* task);
 static bool is_kernel_vaddr(uint32_t vaddr);
 static void direct_map_lowmem_range(uint32_t start_paddr, uint32_t end_paddr);
 static void* direct_map_ptr(uint32_t paddr);
+static void* do_alloc(uint32_t size);
+static void do_free(void* ptr);
 
 static void mem_pool_init(uint32_t all_mem) {
     put_str("mem_pool init start\n");
@@ -500,8 +491,8 @@ void block_desc_init(struct mem_block_desc* desc_array){
 	uint16_t desc_idx,block_size = 16;
 	for(desc_idx=0;desc_idx<DESC_TYPE_CNT;desc_idx++){
 		desc_array[desc_idx].block_size = block_size;
-		// sizeof(struct arena) is the meta info, in struct arena
-		desc_array[desc_idx].block_per_arena = (PG_SIZE-sizeof(struct arena))/block_size;
+		// arena 元信息已经外置到 struct page 中，因此 payload 现在是一整页。
+		desc_array[desc_idx].block_per_arena = PG_SIZE / block_size;
 
 		dlist_init(&desc_array[desc_idx].free_list);
 		block_size*=2;
@@ -509,73 +500,62 @@ void block_desc_init(struct mem_block_desc* desc_array){
 }
 
 // return the addr of the [idx]th block in the arena
-static struct mem_block* arena2block(struct arena* a,uint32_t idx){
-	return (struct mem_block*) \
-	((uint32_t)a + sizeof(struct arena) + idx*a->desc->block_size);
+// 该函数的原理就是：
+// 我们系统中的每一个物理页都对应一个 page 结构体，我们的 arena 元信息就存在这个 page 结构体中
+// 通过 PAGE_TO_ADDR 我们获取 page 所对应的物理页的物理地址
+// 然后我们将这个物理地址映射成虚拟地址，再加上偏移量返回
+// PAGE_TO_ADDR 操作可以直接得到 page 结构体所映射到的那个物理页
+static struct mem_block* arena2block(struct page* a,uint32_t idx){
+    ASSERT(a->slab_desc != NULL);
+    uint32_t arena_paddr = PAGE_TO_ADDR(&kernel_pool, a);
+    // 我们的kmalloc通常申请的都是需要能稳定存在的对象
+    // 因此一般都是从直接映射的低端内存取
+    uint32_t arena_vaddr = (uint32_t)direct_map_ptr(arena_paddr);
+	return (struct mem_block*)(arena_vaddr + idx * a->slab_desc->block_size);
 }
 
-static struct arena* block2arena(struct mem_block* b){
-	return (struct arena*)((uint32_t)b&0xfffff000);
+// 由于我们现在将 arena 元信息放到 page 里面了
+// 因此对于一个 mem_block 直接取页号，就可以得到对应的页
+// 然后通过得到其物理地址，以这个物理地址为索引
+// 到 global_pages 数组里就可以找到对应的 page 结构体
+static struct page* block2arena(struct mem_block* b){
+    uint32_t arena_vaddr = ((uint32_t)b & 0xfffff000);
+    uint32_t arena_paddr = addr_v2p(arena_vaddr);
+	return ADDR_TO_PAGE(global_pages, arena_paddr);
 }
 
 // 专门给内核模块使用 (如文件系统、驱动)
 void* kmalloc(uint32_t size) {
-    return do_alloc(size, PF_KERNEL);
+    return do_alloc(size);
 }
-
-// 专门给用户进程请求内存使用
-void* umalloc(uint32_t size) {
-    void* vaddr = do_alloc(size, PF_USER);
-    return vaddr;
-}
-
 
 // the granularity of size is 1byte 
-void* do_alloc(uint32_t size, enum pool_flags PF){
-	struct buddy_pool* mem_pool;
-	struct mem_block_desc* descs;
-	struct task_struct* cur_thread = get_running_task_struct();
-    // 阈值128KB。Linux 常用这个值作为 brk 和 mmap 的分界线
-    const uint32_t MMAP_THRESHOLD = 128 * 1024;
-
-	// which pool will we use
-	if(PF == PF_KERNEL){
-		// kernel pool
-		mem_pool = &kernel_pool;
-		descs = k_block_descs;
-	}else{
-		mem_pool = &user_pool;
-		descs = cur_thread->u_block_desc;
-	}
+// do_malloc 和 do_free 现在专门给内核使用，用户态的malloc逻辑我们已经提取出去了
+static void* do_alloc(uint32_t size){
+	struct buddy_pool* mem_pool = &kernel_pool;
+	struct mem_block_desc* descs = k_block_descs;
 	// if mem allocated above the pool
 	if(!(size>0&&size<mem_pool->pool_size)){
 		return NULL;
 	}
 	
-
-	struct arena* a;
+	struct page* a;
 	struct mem_block* b;
 	lock_acquire(&mem_pool->lock);
-	
 
 	// if size above 1024Bytes, allocate 1 page directly
 	if(size>1024){
-		uint32_t page_cnt = DIV_ROUND_UP(size+sizeof(struct arena),PG_SIZE);
-
-        bool force_mmap = (PF == PF_USER && size > MMAP_THRESHOLD);
-
-		a = vmalloc_page(PF,page_cnt,force_mmap);
+		uint32_t page_cnt = DIV_ROUND_UP(size,PG_SIZE);
+		a = vmalloc_page(PF_KERNEL,page_cnt,false);
 
 		if(a!=NULL){
 			memset(a,0,page_cnt*PG_SIZE);
-			a->desc = NULL;
-			a->cnt = page_cnt;
-			a->large = true;
+            a = ADDR_TO_PAGE(global_pages, addr_v2p((uint32_t)a));
+			a->slab_desc = NULL;
+			a->slab_cnt = page_cnt;
+			a->slab_large = true;
 			lock_release(&mem_pool->lock);
-			// skip the meta info in arena, return the mem pool
-			// because [a] is a pointer whose type is arena
-			// so a+1 means a+(sizeof(arena)bytes)
-			return (void*)(a+1); 
+			return direct_map_ptr(PAGE_TO_ADDR(&kernel_pool, a)); 
 		}else{
 			lock_release(&mem_pool->lock);
 			return NULL;
@@ -591,33 +571,32 @@ void* do_alloc(uint32_t size, enum pool_flags PF){
 		}
 		
 		// if free list is empty, then allocate an arena
-		if(dlist_empty(&descs[desc_idx].free_list)){
-			
-            // 小空间默认走brk逻辑
-			a = vmalloc_page(PF,1,false);
-			
-			if(a==NULL){
+			if(dlist_empty(&descs[desc_idx].free_list)){
+				
+				a = vmalloc_page(PF_KERNEL,1,false);
+				
+				if(a==NULL){
 				lock_release(&mem_pool->lock);
 				return NULL;
-			}
-			
-			memset(a,0,PG_SIZE);
-			
+				}
+				
+				memset(a,0,PG_SIZE);
+                a = ADDR_TO_PAGE(global_pages, addr_v2p((uint32_t)a));
 
-			a->desc = &descs[desc_idx];
-			a->large = false;
-			a->cnt = descs[desc_idx].block_per_arena;
-			uint32_t block_idx;
-			enum intr_status old_status = intr_disable();
-			
-			// append the mem_block to the free_list one by one
-			for(block_idx=0;block_idx<descs[desc_idx].block_per_arena;block_idx++){
-				b = arena2block(a,block_idx);
-				ASSERT(!dlist_find(&a->desc->free_list,&b->free_elem));
-				dlist_push_back(&a->desc->free_list,&b->free_elem);
+				a->slab_desc = &descs[desc_idx];
+				a->slab_large = false;
+				a->slab_cnt = descs[desc_idx].block_per_arena;
+				uint32_t block_idx;
+				enum intr_status old_status = intr_disable();
+				
+				// append the mem_block to the free_list one by one
+				for(block_idx=0;block_idx<descs[desc_idx].block_per_arena;block_idx++){
+					b = arena2block(a,block_idx);
+					ASSERT(!dlist_find(&a->slab_desc->free_list,&b->free_elem));
+					dlist_push_back(&a->slab_desc->free_list,&b->free_elem);
+				}
+				intr_set_status(old_status);
 			}
-			intr_set_status(old_status);
-		}
 		
 		// dlist_pop_front returns  dlist_elem *
 		// mem_block has member dlist_elem
@@ -627,7 +606,7 @@ void* do_alloc(uint32_t size, enum pool_flags PF){
 		memset(b,0,descs[desc_idx].block_size);
 
 		a= block2arena(b);
-		a->cnt--;
+		a->slab_cnt--;
 		lock_release(&mem_pool->lock);
 		
 		
@@ -759,48 +738,25 @@ void mfree_page(enum pool_flags pf, void* _vaddr, uint32_t pg_cnt) {
 
 void kfree(void* ptr) {
     if (ptr == NULL) return;
-    do_free(ptr, PF_KERNEL);
-}
-
-void ufree(void* ptr) {
-    if (ptr == NULL) return;
-    do_free(ptr, PF_USER);
+    do_free(ptr);
 }
 
 // 核心的内存释放引擎
 // 用户通常的malloc和free操作是不会将堆的vma挖出洞来的，只是会回收物理内存而已
 // 除非用户手动调用munmap等操作，不然的话即使释放到堆vma中间的部分，他也只是物理清空
 // 虚拟不收缩，直到重新访问时触发页错误来分配
-void do_free(void* ptr,enum pool_flags PF){
+static void do_free(void* ptr){
     // put_str("ptr: ");put_int(ptr);put_str("\n");
 	
     ASSERT(ptr!=NULL);
 	if(ptr==NULL) return;
 
-    struct buddy_pool* mem_pool = (PF == PF_KERNEL) ? &kernel_pool : &user_pool;
+    struct buddy_pool* mem_pool = &kernel_pool;
 
-    lock_acquire(&mem_pool->lock);
+	lock_acquire(&mem_pool->lock);
     
     struct mem_block* b = ptr;
-    struct arena* a = block2arena(b);
-
-    // 找到进程唯一的堆 VMA
-    // 它是通过 execv 初始化，且由 sys_brk 负责伸缩的那个区域
-    // 它是第一个被创建的，具有VM_READ|VM_WRITE|VM_GROWSUP|VM_ANON属性的区域
-    struct task_struct* cur = get_running_task_struct();
-    struct vm_area* heap_vma = find_vma_condition(cur, VM_READ|VM_WRITE|VM_GROWSUP|VM_ANON);
-
-    if(heap_vma==NULL&&PF == PF_USER){
-        PANIC("do_free fail to find heap_vma!\n");
-    }
-
-    bool is_in_heap = false;
-    // 判定当前释放的 Arena 是否落在堆范围内
-    // 只要起始地址落入即可，因为 Arena 是连续分配的
-    uint32_t addr = (uint32_t)a;
-    if(PF!=PF_KERNEL){
-        is_in_heap = (addr >= heap_vma->vma_start && addr < heap_vma->vma_end);
-    }
+    struct page* a = block2arena(b);
     
 
     uint32_t vaddr = (uint32_t)ptr;
@@ -827,40 +783,34 @@ void do_free(void* ptr,enum pool_flags PF){
         }
     }
 
-    ASSERT(a->large==0||a->large==1);
+    ASSERT(a->slab_large==0||a->slab_large==1);
 
-    if(a->desc==NULL&&a->large==true){
-        if (is_in_heap) {
-            // 堆内大对象。只回收物理内存，保留虚拟占位，防止堆穿孔。
-            mfree_physical_pages(a, a->cnt);
-        } else {
-            // 独立映射区对象。物理和虚拟记录（VMA）一并销毁。
-            mfree_page(PF, a, a->cnt);
-        }
+    if(a->slab_desc==NULL&&a->slab_large==true){
+        uint32_t page_cnt = a->slab_cnt;
+        void* arena_vaddr = direct_map_ptr(PAGE_TO_ADDR(&kernel_pool, a));
+        a->slab_cnt = 0;
+        a->slab_large = false;
+        mfree_page(PF_KERNEL, arena_vaddr, page_cnt);
     }else{
 
-        dlist_push_back(&a->desc->free_list,&b->free_elem);
+        dlist_push_back(&a->slab_desc->free_list,&b->free_elem);
         // check if all mem_block in the arena is empty
         // if so, then release the whole arena 
-        if(++(a->cnt)==a->desc->block_per_arena){
+        if(++(a->slab_cnt)==a->slab_desc->block_per_arena){
             uint32_t block_idx;
             // remove free_elem in the mem_block from the free_list one by one 
-            for(block_idx=0;block_idx<a->desc->block_per_arena;block_idx++){
+            for(block_idx=0;block_idx<a->slab_desc->block_per_arena;block_idx++){
                 struct mem_block* b = arena2block(a,block_idx);
-                ASSERT(dlist_find(&a->desc->free_list,&b->free_elem));
+                ASSERT(dlist_find(&a->slab_desc->free_list,&b->free_elem));
                 dlist_remove(&b->free_elem);
             }
             
-            if(PF==PF_KERNEL){
-                // 对于内核来说，我们仍然使用位图来管理空间，因此还是沿用原本的 mfree_page
-                // 不要制造缺页
-                mfree_page(PF,a,1);
-            }else{
-                // 物理回收，节省物理内存
-                // 虚拟内存保留，维持堆的连续性，不调用 vaddr_remove
-                // 后续如果再被分配到，可以通过缺页中断来重新进行物理页的分配
-                mfree_physical_pages(a,1);
-            }
+            // 对于内核来说，我们仍然使用位图来管理空间，因此还是沿用原本的 mfree_page
+            // 不要制造缺页
+            a->slab_desc = NULL;
+            a->slab_cnt = 0;
+            a->slab_large = false;
+            mfree_page(PF_KERNEL, direct_map_ptr(PAGE_TO_ADDR(&kernel_pool, a)),1);
         }
     }
     lock_release(&mem_pool->lock);
@@ -874,25 +824,60 @@ void sys_free_mem(){
 	printk("user_total: %d\n",kernel_total);
 }
 
+// 用来测试kmalloc和kfree的稳定性
+// 为了减少侵入性，我们只是使用ASSERT来对错误进行拦截，不打印额外信息
 void sys_test(){
+    printk("sys_test: kmalloc/kfree test start\n");
 
+    void* small = kmalloc(32);
+    ASSERT(small != NULL);
+    ASSERT(((uint32_t)small & 0x7) == 0);
+    memset(small, 0x5a, 32);
+    struct page* small_pg = ADDR_TO_PAGE(global_pages, addr_v2p((uint32_t)small));
+    ASSERT(small_pg->slab_desc != NULL);
+    ASSERT(!small_pg->slab_large);
+    ASSERT(small_pg->slab_cnt < small_pg->slab_desc->block_per_arena);
+
+    void* medium = kmalloc(1000);
+    ASSERT(medium != NULL);
+    memset(medium, 0xa5, 1000);
+    struct page* medium_pg = ADDR_TO_PAGE(global_pages, addr_v2p((uint32_t)medium));
+    ASSERT(medium_pg->slab_desc != NULL);
+    ASSERT(!medium_pg->slab_large);
+
+    void* large = kmalloc(5000);
+    ASSERT(large != NULL);
+    memset(large, 0x3c, 5000);
+    struct page* large_pg = ADDR_TO_PAGE(global_pages, addr_v2p((uint32_t)large));
+    ASSERT(large_pg->slab_desc == NULL);
+    ASSERT(large_pg->slab_large);
+    ASSERT(large_pg->slab_cnt == 2);
+
+    kfree(large);
+    kfree(medium);
+    kfree(small);
+
+    printk("sys_test: kmalloc/kfree test done\n");
 }
 
-// 查找带有特定权限的vma，若有多个，返回第一个
-static struct vm_area* find_vma_condition(struct task_struct* task, uint32_t flags){
-    struct vm_area* heap_vma = NULL;
+// 查找进程唯一的 brk heap VMA。
+// 不能只靠 flags 匹配，因为匿名 mmap 区和 heap 可能具有完全相同的属性位。
+// 对当前实现来说，真正的 heap 具有稳定特征：
+// (1) 匿名、可读写、向上增长；
+// (2) 起始地址固定等于进程的 end_data（即初始 start_brk）。
+// 尤其是第二点，第一点的话，用mmap映射出的内存块也符合但他不一定是堆
+static struct vm_area* find_heap_vma(struct task_struct* task) {
     struct dlist_elem* e = task->vma_list.head.next;
     while (e != &task->vma_list.tail) {
         struct vm_area* v = member_to_entry(struct vm_area, vma_tag, e);
-        // 堆的特征：起始地址对齐，且没有关联文件 inode
-        // 最好不要用find_vma来找，因为
-        if (v->vma_flags == (flags)) {
-            heap_vma = v;
-            break;
+        if (v->vma_start == task->end_data &&
+            v->vma_inode == NULL &&
+            v->vma_flags == (VM_READ | VM_WRITE | VM_GROWSUP | VM_ANON)) {
+            return v;
         }
         e = e->next;
     }
-    return heap_vma;
+    return NULL;
 }
 
 static bool is_kernel_vaddr(uint32_t vaddr) {
@@ -939,23 +924,38 @@ uint32_t sys_brk(uint32_t new_brk) {
     struct task_struct* cur = get_running_task_struct();
     if (new_brk == 0) return cur->brk;
     if (new_brk < cur->end_data) return cur->brk;
+    // brk只能扩用户栈，不能碰内核区域
+    if (new_brk >= USER_STACK_BASE) return cur->brk; 
 
-    struct vm_area* heap_vma = find_vma_condition(cur, VM_READ|VM_WRITE|VM_GROWSUP|VM_ANON);
+    struct vm_area* heap_vma = find_heap_vma(cur);
     ASSERT(heap_vma != NULL);
 
     uint32_t old_brk_aligned = PAGE_ALIGN_UP(cur->brk);
     uint32_t new_brk_aligned = PAGE_ALIGN_UP(new_brk);
 
+    // 超过用户空间上界，或 PAGE_ALIGN_UP 发生回绕，都视为非法请求。
+    // new_brk_aligned < new_brk 说明上对齐后的空间比用户请求的还低，那么说明发生了溢出回绕
+    if (new_brk_aligned < new_brk || new_brk_aligned >= USER_STACK_BASE) {
+        return cur->brk;
+    }
+
     //  缩小堆
     if (new_brk < cur->brk) {
         // 只有当对齐后的边界发生回退，才需要真正“收地”
         if (new_brk_aligned < old_brk_aligned) {
-            // 释放不再需要的物理页，并清理页表映射
-            // 释放范围是 [new_brk_aligned, old_brk_aligned]
+            // 堆收缩时只回收物理页和页表映射，不销毁 heap VMA 本身。
+            // heap VMA 需要长期保留，由 sys_brk 负责维护其页级边界；
+            // 即使堆缩回起点，也应该表现为一个空的 [start_brk, start_brk) 区间。
             uint32_t release_pg_cnt = (old_brk_aligned - new_brk_aligned) / PG_SIZE;
-            mfree_page(PF_USER, (void*)new_brk_aligned, release_pg_cnt);
+            
+            // 调用 mfree_physical_pages 而不是 mfree_pages
+            // 因为 mfree_pages 会把虚拟地址一并给释放了！从而导致堆的 VMA 没了
+            mfree_physical_pages((void*)new_brk_aligned, release_pg_cnt);
             
             // 更新 VMA 边界
+            // 我们的堆VMA与物理页的释放保持一致
+            // 只有发生页级别的回收时我们再更改 VMA 
+            // 这么做最主要是为了简单，这么做页级懒分配也比较简单
             heap_vma->vma_end = new_brk_aligned;
         }
         cur->brk = new_brk; // 记录用户的精确 brk
@@ -977,8 +977,6 @@ uint32_t sys_brk(uint32_t new_brk) {
             return cur->brk; // 空间不足
         }
     }
-
-    if (new_brk_aligned >= USER_STACK_BASE) return cur->brk;
 
     // 更新 VMA 边界（画饼，不实际分配内容，直到发生页错误，让swap_page来分配）
     heap_vma->vma_end = new_brk_aligned;
