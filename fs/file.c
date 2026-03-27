@@ -12,6 +12,7 @@
 #include <device.h>
 #include <debug.h>
 #include <ext2_file.h>
+#include <errno.h>
 
 /*
     该文件中对file的操作与具体的文件系统无关
@@ -146,4 +147,11 @@ int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
     }
 
 	return pcb_fd_install(fd_idx);
+}
+
+int32_t file_mmap(struct file* file, uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags, uint32_t offset) {
+    if (file == NULL || file->fd_inode == NULL || file->f_op == NULL || file->f_op->mmap == NULL) {
+        return -ENODEV;
+    }
+    return file->f_op->mmap(file->fd_inode, file, addr, len, prot, flags, offset);
 }

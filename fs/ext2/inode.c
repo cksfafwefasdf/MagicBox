@@ -347,6 +347,7 @@ static void ext2_inode_init(struct partition* part, uint32_t inode_no,struct ino
 	new_inode->i_type = ft;
 	new_inode->i_dev = part->i_rdev;
     new_inode->i_sb = part->sb; // 建立归属超级块，以后读写数据块要用到他
+    new_inode->write_deny = false;
 
 	// 初始化ext2专用字段
     new_inode->ext2_i.i_mode = ext2_encode_type(ft,mode);

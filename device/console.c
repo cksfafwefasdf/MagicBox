@@ -58,5 +58,6 @@ struct file_operations console_file_operations = {
 	.readdir 	= NULL,
 	.ioctl 		= NULL,
 	.open 		= NULL,
-	.release 	= NULL
+	.release 	= NULL,
+	.mmap		= NULL
 };

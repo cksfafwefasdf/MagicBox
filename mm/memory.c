@@ -13,6 +13,8 @@
 #include <stdint.h>
 #include <vma.h>
 #include <buddy.h>
+#include <file.h>
+#include <file_table.h>
 
 // uint8_t* mem_map = NULL;
 
@@ -39,6 +41,8 @@ static void direct_map_lowmem_range(uint32_t start_paddr, uint32_t end_paddr);
 static void* direct_map_ptr(uint32_t paddr);
 static void* do_alloc(uint32_t size);
 static void do_free(void* ptr);
+static uint32_t prot_to_vm_flags(uint32_t prot, bool anon);
+static struct vm_area* find_covering_or_next_vma(struct task_struct* task, uint32_t vaddr);
 
 static void mem_pool_init(uint32_t all_mem) {
     put_str("mem_pool init start\n");
@@ -709,6 +713,7 @@ static void mfree_physical_pages(void* _vaddr, uint32_t pg_cnt) {
         // 检查页表
         uint32_t* pte = pte_ptr(cur_vaddr);
         // 如果 P 位为 1，说明已经建立了物理映射，需要回收
+        // 否则的话可能还是处于待分配的状态，没必要回收物理页
         if (pte && (*pte & PG_P_1)) { 
             uint32_t pg_phy_addr = addr_v2p(cur_vaddr);
             
@@ -884,6 +889,47 @@ static bool is_kernel_vaddr(uint32_t vaddr) {
     return vaddr >= KERNEL_PAGE_OFFSET;
 }
 
+static uint32_t prot_to_vm_flags(uint32_t prot, bool anon) {
+    uint32_t vma_flags = 0;
+    if (prot & PROT_READ) {
+        vma_flags |= VM_READ;
+    }
+    if (prot & PROT_WRITE) {
+        vma_flags |= VM_WRITE;
+    }
+    if (prot & PROT_EXEC) {
+        vma_flags |= VM_EXEC;
+    }
+    if (anon) {
+        vma_flags |= VM_ANON;
+    }
+    return vma_flags;
+}
+
+// 给一个地址 vaddr 要么返回覆盖它的那个 VMA
+// 要么返回起始地址在它后面的第一个 VMA
+// 用于 munmap 这类区间操作，既能处理命中的 VMA，也能跳过中间的空洞。
+// 我们不能用原来的那个 find_vma，因为那个函数只会返回 vaddr 所在的 vma
+// 要是 vaddr 在空洞里面的话就什么都不会返回了
+// munmap(addr, len) 处理的是一个区间，这个区间里可能是：
+// [VMA][空洞][VMA][VMA]
+// 如果只是用 find_vma, 一旦 cursor 落到空洞，就拿不到后面的 VMA 了
+// 那就没法继续处理这个区间后半段
+// 这也是我们为什么要拿起始地址在 vaddr 后面的第一个 VMA
+// 因为这个 VMA 很可能会在 vaddr + size 区间所覆盖的范围内，此时需要释放它或者切分它
+static struct vm_area* find_covering_or_next_vma(struct task_struct* task, uint32_t vaddr) {
+    struct dlist_elem* e = task->vma_list.head.next;
+    while (e != &task->vma_list.tail) {
+        struct vm_area* v = member_to_entry(struct vm_area, vma_tag, e);
+        // 返回的这个 VMA 要么就直接命中了，要么就是起始地址在这个 vaddr 之后的 VMA
+        if (vaddr < v->vma_end) {
+            return v;
+        }
+        e = e->next;
+    }
+    return NULL;
+}
+
 static void* direct_map_ptr(uint32_t paddr) {
     ASSERT(paddr_is_lowmem(paddr));
     return (void*)(KERNEL_PAGE_OFFSET + paddr);
@@ -983,4 +1029,165 @@ uint32_t sys_brk(uint32_t new_brk) {
     cur->brk = new_brk;
 
     return cur->brk;
+}
+
+// 该函数最核心的功能就是找空隙，然后建立vma
+// 具体的内存分配操作交给缺页中断来做
+uint32_t sys_mmap(uint32_t user_mmap_args) {
+    struct task_struct* cur = get_running_task_struct();
+    struct mmap_args* user_args = (struct mmap_args*)user_mmap_args;
+    uint32_t addr;
+    uint32_t len;
+    uint32_t prot;
+    uint32_t flags;
+    int32_t fd;
+    uint32_t offset;
+
+    // sys_mmap 只能被用户进程调用
+    if (cur->pgdir == NULL) {
+        return (uint32_t)MAP_FAILED;
+    }
+    if (user_args == NULL) {
+        return (uint32_t)MAP_FAILED;
+    }
+    // 校验传入的参数包是否是在用户空间中
+    if (user_mmap_args < USER_VADDR_START ||
+        user_mmap_args + sizeof(struct mmap_args) <= user_mmap_args || // 校验溢出
+        user_mmap_args + sizeof(struct mmap_args) > USER_STACK_BASE) {
+        return (uint32_t)MAP_FAILED;
+    }
+
+    addr = user_args->addr;
+    len = user_args->len;
+    prot = user_args->prot;
+    flags = user_args->flags;
+    fd = user_args->fd;
+    offset = user_args->offset;
+
+    if (len == 0) {
+        return (uint32_t)MAP_FAILED;
+    }
+    if (addr != 0) {
+        return (uint32_t)MAP_FAILED;
+    }
+    // 目前仅支持 MAP_PRIVATE，匿名映射和文件私有映射都走这一条。
+    if ((flags & MAP_PRIVATE) == 0) {
+        return (uint32_t)MAP_FAILED;
+    }
+    if (flags & ~(MAP_PRIVATE | MAP_ANON)) {
+        return (uint32_t)MAP_FAILED;
+    }
+    if (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) {
+        return (uint32_t)MAP_FAILED;
+    }
+
+    uint32_t size = PAGE_ALIGN_UP(len); // 我们按页为单位来进行映射
+    if (size == 0) {
+        return (uint32_t)MAP_FAILED;
+    }
+    uint32_t pg_cnt = size / PG_SIZE;
+    // 从高到底找空隙插入vma，防止和heap打架
+    uint32_t vaddr = vma_find_gap_reverse(cur, pg_cnt);
+    if (vaddr == 0) {
+        return (uint32_t)MAP_FAILED;
+    }
+
+    // vaddr + size <= vaddr 是在校验溢出
+    // vaddr + size > (USER_STACK_BASE - USER_STACK_SIZE) 防止装上用户栈
+    // 我们默认预留了8MB的用户栈
+    if (vaddr < USER_VADDR_START || vaddr + size <= vaddr || vaddr + size > (USER_STACK_BASE - USER_STACK_SIZE)) {
+        return (uint32_t)MAP_FAILED;
+    }
+
+    // 如果是匿名映射，只分配vma，然后等待缺页惰性分配
+    if (flags & MAP_ANON) {
+        if (fd != -1 || offset != 0) {
+            return (uint32_t)MAP_FAILED;
+        }
+        add_vma(cur, vaddr, vaddr + size, 0, NULL, prot_to_vm_flags(prot, true), 0);
+        return vaddr;
+    }
+
+    // 只支持映射起始文件偏移为页对齐的 mmap 请求。
+    // 按理说非页对齐也能做，但是太复杂了我们暂时先不做
+    if ((offset & (PG_SIZE - 1)) != 0) {
+        return (uint32_t)MAP_FAILED;
+    }
+    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC || cur->fd_table[fd] == -1) {
+        return (uint32_t)MAP_FAILED;
+    }
+
+    uint32_t global_fd = fd_local2global(cur, (uint32_t)fd);
+    struct file* mmap_file = &file_table[global_fd];
+    if (file_mmap(mmap_file, vaddr, size, prot, flags, offset) < 0) {
+        return (uint32_t)MAP_FAILED;
+    }
+    return vaddr;
+}
+
+int32_t sys_munmap(uint32_t addr, uint32_t len) {
+    struct task_struct* cur = get_running_task_struct();
+    if (cur->pgdir == NULL) {
+        return -1;
+    }
+    if (len == 0 || (addr & (PG_SIZE - 1)) != 0) {
+        return -1;
+    }
+
+    uint32_t size = PAGE_ALIGN_UP(len);
+    if (size == 0) {
+        return -1;
+    }
+    uint32_t end = addr + size;
+    if (addr < USER_VADDR_START || end <= addr || end > USER_STACK_BASE) {
+        return -1;
+    }
+
+    // 第一遍只做校验，避免解除映射进行到一半才发现范围里混入了 heap/stack。
+    uint32_t cursor = addr;
+    while (cursor < end) {
+        // 获取当前vaddr所在的vma或者其实地址在这个vaddr之后的第一个vma
+        struct vm_area* vma = find_covering_or_next_vma(cur, cursor);
+        // 假如获取到的第一个vma的vma_start以及在我们想要释放的区间之外了
+        // 那么就不用释放了
+        if (vma == NULL || vma->vma_start >= end) {
+            break; // 剩余区间里已经没有映射了，等价于 no-op
+        }
+
+        // 如果 vaddr 在空洞的话，跳过空洞
+        if (cursor < vma->vma_start) {
+            cursor = vma->vma_start; // 跳过空洞
+        }
+
+        // VM_GROWSUP 和 VM_GROWSDOWN 就是 heap/stack，这个区间是不能被 munmap 释放的
+        if ((vma->vma_flags & (VM_GROWSUP | VM_GROWSDOWN)) != 0) {
+            return -1;
+        }
+
+        // 移动游标，检查下一个 vma
+        uint32_t seg_end = end < vma->vma_end ? end : vma->vma_end;
+        cursor = seg_end;
+    }
+
+    // 第二遍真正执行解除映射，支持一个区间跨多个普通 mmap VMA。
+    cursor = addr;
+    while (cursor < end) {
+        struct vm_area* vma = find_covering_or_next_vma(cur, cursor);
+        if (vma == NULL || vma->vma_start >= end) {
+            break;
+        }
+
+        // 跳过空洞
+        if (cursor < vma->vma_start) {
+            cursor = vma->vma_start;
+        }
+
+        uint32_t seg_end = end < vma->vma_end ? end : vma->vma_end;
+        // 由于除以了一个PG_SIZE，因此如果一个区间段小于一个页的话可能不会被释放到
+        // 因此我们才强制在 mmap 里面要求以页为单位进行映射，才调用了一个 PAGE_ALIGN_UP
+        // 这是一个局限，需要注意
+        mfree_page(PF_USER, (void*)cursor, (seg_end - cursor) / PG_SIZE);
+        cursor = seg_end;
+    }
+    return 0;
 }

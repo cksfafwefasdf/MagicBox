@@ -193,5 +193,6 @@ struct file_operations tty_file_operations = {
 	.readdir 	= NULL,
 	.ioctl 		= tty_ioctl,
 	.open 		= NULL,
-	.release 	= NULL
+	.release 	= NULL,
+    .mmap		= NULL
 };

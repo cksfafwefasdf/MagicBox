@@ -813,5 +813,6 @@ struct file_operations ide_file_operations = {
 	.readdir 	= NULL,
 	.ioctl 		= ide_ioctl,
 	.open 		= NULL,
-	.release 	= NULL
+	.release 	= NULL,
+	.mmap		= NULL
 };

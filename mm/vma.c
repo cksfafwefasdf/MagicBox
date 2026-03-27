@@ -248,6 +248,45 @@ uint32_t vma_find_gap(struct task_struct* task ,uint32_t pg_cnt) {
     return 0; // 没空间了
 }
 
+// 从高地址往低地址搜索空洞。
+// 该函数主要给匿名 mmap 使用，避免它和 brk/heap 在低地址区域互相争抢空间。
+uint32_t vma_find_gap_reverse(struct task_struct* task, uint32_t pg_cnt) {
+    uint32_t size = pg_cnt * PG_SIZE;
+    uint32_t lower_limit = USER_VADDR_START;
+    uint32_t search_end = USER_MMAP_SEARCH_TOP;
+    struct dlist* plist = &task->vma_list;
+
+    if (search_end <= lower_limit || search_end - lower_limit < size) {
+        return 0;
+    }
+
+    // 如果链表是空的，直接返回结果，没什么可遍历的
+    if (dlist_empty(plist)) {
+        return search_end - size;
+    }
+
+    struct dlist_elem* elem = plist->tail.prev;
+    while (elem != &plist->head) {
+        struct vm_area* vma = member_to_entry(struct vm_area, vma_tag, elem);
+
+        // 检查当前 vma 结束地址到 search_end 之间的高地址空洞。
+        if (search_end > vma->vma_end && (search_end - vma->vma_end) >= size) {
+            return search_end - size;
+        }
+
+        if (vma->vma_start < search_end) {
+            search_end = vma->vma_start;
+        }
+        elem = elem->prev;
+    }
+
+    if (search_end > lower_limit && (search_end - lower_limit) >= size) {
+        return search_end - size;
+    }
+
+    return 0;
+}
+
 // 将一个 VMA 从 addr 处切断，分裂成两个
 // 这个函数会在 vaddr_remove 这种挖洞的场景下被调用
 struct vm_area* vma_split(struct vm_area* vma, uint32_t addr) {

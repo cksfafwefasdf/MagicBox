@@ -9,9 +9,16 @@
 #define KERNEL_RESERVED_SPACE 0x100000UL
 #define USER_VADDR_START 0x8048000UL
 #define KERNEL_VADDR_START 0xC0000000UL
+// 默认情况下，我们让用户栈的最大大小为8MB，再大就没法惰性分配了，直接报错
+// 这其实和大多数linux发行版的限制值保持一致，我们可以用ulimit -s在liunx上进行查看
 #define USER_STACK_SIZE 0x800000UL
 // #define USER_STACK_BASE KERNEL_VADDR_START
 #define USER_STACK_BASE 0xC0000000UL
+// heap 从低往高长
+// mmap 从高往低找
+// stack 固定占最高 8MB
+// mmap的查找起点就是 stack 减去其占用的 8MB 大小
+#define USER_MMAP_SEARCH_TOP (USER_STACK_BASE - USER_STACK_SIZE)
 
 #define VM_READ       0x0001
 #define VM_WRITE      0x0002
@@ -42,5 +49,6 @@ extern void add_vma_sorted(struct dlist* plist, uint32_t start, uint32_t end,
 extern struct vm_area* find_vma(struct task_struct* task, uint32_t vaddr);
 extern void clear_vma_list(struct task_struct* task);
 extern uint32_t vma_find_gap(struct task_struct* task ,uint32_t pg_cnt);
+extern uint32_t vma_find_gap_reverse(struct task_struct* task, uint32_t pg_cnt);
 extern struct vm_area* vma_split(struct vm_area* vma, uint32_t addr);
 #endif

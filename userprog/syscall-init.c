@@ -76,6 +76,8 @@ void syscall_init(void){
 	syscall_table[SYS_RENAME] = sys_rename;
 	syscall_table[SYS_STATFS] = sys_statfs;
 	syscall_table[SYS_BRK] = sys_brk;
+	syscall_table[SYS_MMAP] = sys_mmap;
+	syscall_table[SYS_MUNMAP] = sys_munmap;
 	
 	put_str("syscall_init done\n");
 }

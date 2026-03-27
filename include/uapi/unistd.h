@@ -16,6 +16,27 @@
 #define WUNTRACED  2    // 0010
 #define WCONTINUED 4    // 0100
 
+// mmap/munmap 相关协议常量，内核需要解析这些常量，用户需要传入这些常量
+#define PROT_READ  0x1
+#define PROT_WRITE 0x2
+#define PROT_EXEC  0x4
+
+#define MAP_PRIVATE   0x02
+#define MAP_ANON      0x20
+#define MAP_ANONYMOUS MAP_ANON
+
+#define MAP_FAILED ((void*)-1)
+
+// mmap 函数的参数包
+struct mmap_args {
+    uint32_t addr;
+    uint32_t len;
+    uint32_t prot;
+    uint32_t flags;
+    int32_t fd;
+    uint32_t offset;
+};
+
 // 和 shell 有关的宏
 #define CMD_LEN 128
 #define MAX_ARG_NR 16

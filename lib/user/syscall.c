@@ -289,3 +289,23 @@ int32_t statfs(const char* path, struct statfs* buf){
 void* brk(void* addr){
 	return (void*)_syscall1(SYS_BRK, addr);
 }
+
+// 我们目前的系统调用中，最多只支持5个参数
+// 但是比较标准的实现中，mmap需要6个参数
+// 因此我们可以将这些参数进行打包
+// 然后直接将整个数据包作为一个单独的参数，调用_syscall1来传入sys_mmap中
+// 这样改动比较小
+void* mmap(void* addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset){
+	struct mmap_args args;
+	args.addr = (uint32_t)addr;
+	args.len = len;
+	args.prot = prot;
+	args.flags = flags;
+	args.fd = fd;
+	args.offset = offset;
+	return (void*)_syscall1(SYS_MMAP, &args);
+}
+
+int32_t munmap(void* addr, uint32_t len){
+	return _syscall2(SYS_MUNMAP, addr, len);
+}

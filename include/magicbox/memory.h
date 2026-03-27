@@ -2,6 +2,7 @@
 #define __INCLUDE_MAGICBOX_MEMORY_H
 #include <stdint.h>
 #include <stdbool.h>
+#include <unistd.h>
 #include <bitmap.h>
 #include <dlist.h>
 
@@ -15,12 +16,10 @@
 // 7 types in total
 #define DESC_TYPE_CNT 7
 
-
 // low 1MB is 0xc000000000～0xc00fffff
 // heap is close to the low 1MB
 // 现在我们的 K_HEAP_START 改用动态计算，其为全局变量 kernel_heap_start
 // #define K_HEAP_START 0xc0100000
-
 
 #define USER_PDE_NR 768
 #define USER_PTE_NR 1024
@@ -120,6 +119,8 @@ extern void kfree(void* ptr);
 
 
 extern uint32_t sys_brk(uint32_t new_brk);
+extern uint32_t sys_mmap(uint32_t user_mmap_args);
+extern int32_t sys_munmap(uint32_t addr, uint32_t len);
 
 
 extern uint32_t mem_bytes_total;

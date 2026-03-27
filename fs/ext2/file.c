@@ -7,6 +7,50 @@
 #include <stdio-kernel.h>
 #include <debug.h>
 #include <ext2_inode.h>
+#include <thread.h>
+#include <vma.h>
+
+static uint32_t ext2_mmap_prot_to_vm_flags(uint32_t prot) {
+    uint32_t vma_flags = 0;
+    if (prot & PROT_READ) {
+        vma_flags |= VM_READ;
+    }
+    if (prot & PROT_WRITE) {
+        vma_flags |= VM_WRITE;
+    }
+    if (prot & PROT_EXEC) {
+        vma_flags |= VM_EXEC;
+    }
+    return vma_flags;
+}
+
+// Linux 的 mmap 的主线也就只是挂载一个 VMA，然后等待惰性分配
+// 除此之外，他还会挂载一个 VMA 的 VM 操作集，但是我们这没做 VM 操作集所以这一步就省略了
+static int32_t ext2_file_mmap(struct inode* inode, struct file* file UNUSED,
+                              uint32_t addr, uint32_t len, uint32_t prot,
+                              uint32_t flags, uint32_t offset) {
+    if (inode == NULL || inode->i_type != FT_REGULAR) {
+        return -EINVAL;
+    }
+    if ((flags & MAP_PRIVATE) != MAP_PRIVATE || (flags & MAP_ANON) != 0) {
+        return -EINVAL;
+    }
+    if ((offset & (PG_SIZE - 1)) != 0) {
+        return -EINVAL;
+    }
+
+    uint32_t file_visible_bytes = 0;
+    if (offset < inode->i_size) {
+        file_visible_bytes = inode->i_size - offset;
+        if (file_visible_bytes > len) {
+            file_visible_bytes = len;
+        }
+    }
+
+    add_vma(get_running_task_struct(), addr, addr + len, offset, inode,
+            ext2_mmap_prot_to_vm_flags(prot), file_visible_bytes);
+    return 0;
+}
 
 static int32_t ext2_readdir(struct inode* inode UNUSED, struct file* file, struct dirent* de, int count UNUSED) {
     struct inode* dir_inode = file->fd_inode;
@@ -285,7 +329,8 @@ struct file_operations ext2_file_file_operations = {
 	.readdir 	= NULL,
 	.ioctl 		= NULL,
 	.open 		= NULL,
-	.release 	= NULL
+	.release 	= NULL,
+    .mmap		= ext2_file_mmap
 };
 
 struct file_operations ext2_dir_file_operations = {
@@ -295,5 +340,6 @@ struct file_operations ext2_dir_file_operations = {
 	.readdir 	= ext2_readdir,
 	.ioctl 		= NULL,
 	.open 		= NULL,
-	.release 	= NULL
+	.release 	= NULL,
+    .mmap		= NULL
 };

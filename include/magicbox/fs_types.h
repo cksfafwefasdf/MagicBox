@@ -97,7 +97,7 @@ struct file_operations {
 	int (*readdir) (struct inode *, struct file *, struct dirent *, int);
 	// int (*select) (struct inode *, struct file *, int, select_table *);
 	int (*ioctl) (struct inode *, struct file *, uint32_t, uint32_t);
-	// int (*mmap) (struct inode *, struct file *, unsigned long, size_t, int, unsigned long);
+	int (*mmap) (struct inode *, struct file *, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 	int (*open) (struct inode *, struct file *);
 	// 由 close 操作中，打开计数为0时调用
 	int32_t (*release) (struct inode *, struct file *);

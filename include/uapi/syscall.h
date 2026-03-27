@@ -59,6 +59,8 @@
 #define SYS_RENAME 48
 #define SYS_STATFS 49
 #define SYS_BRK 50
+#define SYS_MMAP 51
+#define SYS_MUNMAP 52
 
 // user interface
 extern uint32_t getpid(void);
@@ -115,5 +117,7 @@ extern int32_t statfs(const char* path, struct statfs* buf);
 extern void* calloc(uint32_t nmemb, uint32_t size); 
 extern void* brk(void* addr);
 extern void* sbrk(int32_t increment);
+extern void* mmap(void* addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset);
+extern int32_t munmap(void* addr, uint32_t len);
 
 #endif
