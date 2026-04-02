@@ -2,7 +2,7 @@
 #define __INCLUDE_UAPI_SIFS_DIR_H
 #include <stdint.h>
 #include <stdbool.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <fs_types.h>
 
 struct partition;

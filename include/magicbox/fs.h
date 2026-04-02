@@ -2,7 +2,7 @@
 #define __INCLUDE_MAGICBOX_FS_H
 
 #include <stdint.h>
-#include <unistd.h>
+#include <unitype.h>
 
 extern void filesys_init(void);
 extern int32_t sys_open(const char* pathname,uint8_t flags);

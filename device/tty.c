@@ -146,7 +146,7 @@ static int32_t tty_ioctl(struct inode* inode, struct file* file, uint32_t cmd, u
             tty->pgrp = *(pid_t*)arg;
             return 0;
         default:
-            return -EINVAL;
+            return -ENOTTY;
     }
 }
 

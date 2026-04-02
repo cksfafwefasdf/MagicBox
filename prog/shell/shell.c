@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <assert.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <signal.h>
 #include <ioctl.h>
 #include "shell.h"

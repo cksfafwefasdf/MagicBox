@@ -3,7 +3,7 @@
 #include <wait_exit.h>
 #include <interrupt.h>
 #include <thread.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <errno.h>
 #include <debug.h>
 #include <stdio-kernel.h>
@@ -75,13 +75,13 @@ static void setup_frame(int sig, struct sigaction* sa, struct intr_stack* stack,
 // 这虽然是一个系统调用，但是和一般的read和write调用不太一样
 // 这个调用是一个“协议”系统调用，它是不会直接开放给用户态程序的
 // 它虽然不开给用户程序，但是还是被称为系统调用
-// 原因是因为这个函数依然需要通过 int 0x80 中断来调用
-// 我们要使用 int 0x80 的原因是因为我们需要进行特权级的切换
+// 原因是因为这个函数依然需要通过 int 0x77 中断来调用
+// 我们要使用 int 0x77 的原因是因为我们需要进行特权级的切换
 // 一般的系统调用业务逻辑都是在内核层中，用户层只接受结果就行
 // 但是这个调用特殊在它的业务逻辑是由用户程序提供的，它的业务逻辑工作在用户态
 // 因此我们的调用过程不再是 U->K->U 而是 
 // U (用户程序原本正常运行) -> K (内核对信号量进行拦截) -> 
-// U (内核跳到用户提供的例程中进行业务逻辑) -> K (int 0x80，进入sys_sigreturn恢复用户程序原本的上下文，这个操作用户态下没法进行) ->
+// U (内核跳到用户提供的例程中进行业务逻辑) -> K (int 0x77，进入sys_sigreturn恢复用户程序原本的上下文，这个操作用户态下没法进行) ->
 // U (回到用户态继续进行后续操作)
 // 因此 sys_sigreturn 才这么特殊
 
@@ -90,11 +90,11 @@ static void setup_frame(int sig, struct sigaction* sa, struct intr_stack* stack,
 // 我们首先需要明确的一点是 UA 和 UB 共享同一个进程的上下文，也就是说它们属于同一个进程，拥有相同的页表、PID 和内存空间。
 // 并且共用同一个用户栈, 它们都使用那个从 0xc0000000 向下增长的虚拟内存区域。
 // 当 UA 被 K 拦截下来时，K调用 setup_frame 将 UA 的上下文保存在 UA 的用户栈中，并且栈顶指向 sa_restorer
-// sa_restorer 的本质就是指向一段代码，这段代码会通过 int 0x80 来调用 sys_sigreturn 进行上下文的恢复
+// sa_restorer 的本质就是指向一段代码，这段代码会通过 int 0x77 来调用 sys_sigreturn 进行上下文的恢复
 // 当 K 通过 setup_frame 将 UA 的上下文备份完毕，并且将 stack->eip 设置为 (void (*)(void))sa->sa_handler后
 // K 会通过 iret 跳转到用户提供的信号处理程序 UB 中（stack->eip 中原本存放的应该是被拦截的用户程序 UA 的返回地址，它是由中断时cpu自动压入的，我们现在将他魔改成用户信号处理函数 UB 了，因此iret会直接回到UB）
 // 我们知道，UB和UA共享一个用户栈，因此当UB执行完毕后，由于栈平衡，此时的栈顶指向的是我们刚刚备份的UA的栈顶（x86架构下，esp指向的是栈顶有效数据而不是待插位置）
-// 而UA栈顶被我们在setup_frame魔改成sa_restorer了，因此UB执行完毕返回后会直接进入sa_restorer调用 int 0x80 重新陷入内核，进入 sys_sigreturn 函数
+// 而UA栈顶被我们在setup_frame魔改成sa_restorer了，因此UB执行完毕返回后会直接进入sa_restorer调用 int 0x77 重新陷入内核，进入 sys_sigreturn 函数
 // 由于x86下的特权级切换机制中，当 CPU 从 Ring 3（用户态）进入 Ring 0（内核态）时，CPU会自动执行一套硬件级原子操作，将用户态esp和eip等压入到内核栈中
 // 因此刚刚UB上下文（准确来说是sa_restorer上下文，sa_restorer和UB也在同一个上下文）中的esp也被压到内核栈了
 // 我们在 sys_sigreturn 中只需要将相应的UB的esp取出来，然后稍微进行一点点指针位移操作，就能很快找到之前在setup_frame中备份的UA的上下文环境intr_stack了
@@ -209,6 +209,10 @@ void do_signal(struct intr_stack* stack) {
     if (sa->sa_handler == SIG_IGN) {
         goto end; 
     }
+
+#ifdef DEBUG_SIG
+    printk("do_signal: sig:0x%x detected!\n",sig);
+#endif
 
     if (sa->sa_handler == SIG_DFL) {
         switch (sig) {

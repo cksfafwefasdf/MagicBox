@@ -1,7 +1,7 @@
 #include <syscall.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
+#include <unitype.h>
 
 #define LINE_SIZE 16
 #define SCREEN_LINES 16  // 每显示 16 行暂停一次

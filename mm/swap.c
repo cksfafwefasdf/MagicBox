@@ -90,6 +90,19 @@ void copy_page_tables(struct task_struct* from, struct task_struct* to, void* pa
 // 懒加载/交换：内核分配物理页。
 // 非法访问：访问了完全没有映射、或者不属于用户空间（如访问内核空间地址）的内存
 void swap_page(uint32_t err_code,void* err_vaddr){
+
+#ifdef DEBUG_SWAP_INFO
+    // Error Code 在栈上，EIP 紧随其后（高地址方向）
+    uint32_t* p_stack = &err_code;
+    uint32_t fault_eip = p_stack[1]; // eip 就在 error_code 的上方
+    uint32_t fault_esp = p_stack[4]; // esp 在更上方 (如果是从用户态进来的)
+
+    printk("\n--- PAGE FAULT DEBUG ---\n");
+    printk("Faulting VADDR: 0x%x\n", err_vaddr);
+    printk("Faulting EIP:   0x%x\n", fault_eip);
+    printk("Error Code:     0x%x (%s)\n", err_code, 
+           (err_code & 1) ? "Page Present" : "Page Not Present");
+#endif
 	enum intr_status _old =  intr_disable();
 #ifdef DEBUG_SWAP
 	printk("swap_page:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
@@ -190,9 +203,22 @@ void swap_page(uint32_t err_code,void* err_vaddr){
     return;
 
 segmentation_fault:
-    if (cur->pgdir != NULL) {
-        printk("PID %d (%s) Segmentation Fault at %x\n", cur->pid, cur->name, vaddr);
-        send_signal(cur, SIGSEGV);
+        if (cur->pgdir != NULL) {
+            printk("PID %d (%s) Segmentation Fault at %x\n", cur->pid, cur->name, vaddr);
+        
+        // 检查用户是否自定义了 SIGSEGV 的处理函数
+        struct sigaction* sa = &cur->sigactions[SIGSEGV - 1];
+        
+        if (sa->sa_handler == SIG_DFL) {
+            // 用户没管这个信号。直接杀掉，这是最稳妥的，防止产生死循环。
+            sys_exit(-SIGSEGV); 
+        } else {
+            // 用户想自己处理。
+            // 这时发信号，并允许 iret 回去。
+            // 但是如果用户处理函数里又访问了 0 地址，还是会死循环，
+            // 这时需要靠 sa_mask 屏蔽位或者内核的递归深度检查来防御。
+            send_signal(cur, SIGSEGV);
+        }
     } else {
 		// 内核进程不存在懒加载，直接报错
 		printk("Kernel Page Fault at %x\n", vaddr);

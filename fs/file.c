@@ -1,6 +1,6 @@
 #include <file.h>
 #include <fs_types.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <file_table.h>
 #include <interrupt.h>
 #include <inode.h>

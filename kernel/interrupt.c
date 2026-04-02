@@ -8,6 +8,7 @@
 #include <thread.h>
 #include <debug.h>
 #include <stdio-kernel.h>
+#include <syscall_intrcpt.h>
 
 #define IDT_DESC_CNT 0x81
 
@@ -37,6 +38,7 @@ intr_handler_addr idt_ISR[IDT_DESC_CNT];
 
 extern intr_handler_addr intr_entry_table[IDT_DESC_CNT];
 extern uint32_t syscall_handler(void);
+extern musl_syscall_handler(void);
 
 static void make_idt_desc(struct intr_gate_desc* p_gdesc,uint8_t attr,intr_handler_addr addr){
     p_gdesc->attribute=attr;
@@ -56,7 +58,10 @@ static void idt_item_init(void){
     // process 0x80 specially 
     // because syscall is called by user
     // so DPL is 3
-    make_idt_desc(&idt[lastindex],IDT_DESC_ATTR_DPL3,syscall_handler);
+    // 这是和posix兼容的0x80中断处理程序，他会把流程转到拦截器以便实现翻译和转发
+    make_idt_desc(&idt[lastindex],IDT_DESC_ATTR_DPL3,musl_syscall_handler);
+    // 这是我们自己默认的系统调用的中断处理程序，中断号为0x77
+    make_idt_desc(&idt[NATIVE_SYSCALL_NR],IDT_DESC_ATTR_DPL3,syscall_handler);
     put_str("idt_item_init done\n");
 }
 

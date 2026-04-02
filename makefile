@@ -15,7 +15,7 @@ OBJDUMP := objdump
 # 自动化目录管理
 # 定义参与内核编译的子目录（白名单）
 # 这里不包含用户程序目录 prog/，因为那里的 main 函数会与内核 main 冲突
-KERNEL_SUBDIRS := kernel device thread userprog fs lib mm lib/kernel lib/user lib/common fs/sifs fs/ext2
+KERNEL_SUBDIRS := kernel device thread userprog fs lib mm lib/kernel lib/user lib/common fs/sifs fs/ext2 glue 
 
 # 自动获取所有 C 和 ASM 源文件
 # 使用 wildcard 查找
@@ -43,7 +43,7 @@ empty :=
 space := $(empty) $(empty)
 
 # 编译选项 
-LIB := -I include/arch -I include/magicbox -I include/sys -I include/uapi
+LIB := -I include/arch -I include/magicbox -I include/sys -I include/uapi -I include/linux
 
 ASFLAGS := -f elf
 
@@ -56,7 +56,7 @@ ASFLAGS := -f elf
 # 我们不想搜当前目录，而是只想搜-I目录，因此使用<>配合 -nostdinc 和 -I 效果更好
 CFLAGS  := -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes \
            -Wmissing-prototypes -m32 -fno-stack-protector -fcommon \
-           -Wno-error=implicit-function-declaration -MMD -nostdinc -D DEBUG_TIMER
+           -Wno-error=implicit-function-declaration -MMD -nostdinc -D DEBUG_TIMER -D DEBUG_SYSCALL_INTRCPT
 
 LDFLAGS := -Ttext $(ENTRY_POINT) -e main -Map $(BUILD_DIR)/kernel.map -m elf_i386
 

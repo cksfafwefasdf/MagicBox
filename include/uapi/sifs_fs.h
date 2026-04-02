@@ -2,7 +2,7 @@
 #define __INCLUDE_UAPI_SIFS_FS_H
 
 #include <stdint.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <sifs_inode.h>
 
 /*

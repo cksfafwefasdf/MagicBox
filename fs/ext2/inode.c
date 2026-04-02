@@ -9,7 +9,7 @@
 #include <inode.h>
 #include <debug.h>
 #include <fs_types.h>
-#include <unistd.h>
+#include <unitype.h>
 
 static int32_t ext2_bmap(struct inode* inode, int32_t _index);
 

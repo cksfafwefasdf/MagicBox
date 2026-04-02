@@ -2,7 +2,7 @@
 #define __INCLUDE_MAGICBOX_MEMORY_H
 #include <stdint.h>
 #include <stdbool.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <bitmap.h>
 #include <dlist.h>
 
@@ -120,6 +120,7 @@ extern void kfree(void* ptr);
 
 extern uint32_t sys_brk(uint32_t new_brk);
 extern uint32_t sys_mmap(uint32_t user_mmap_args);
+extern uint32_t sys_mmap_direct(uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset);
 extern int32_t sys_munmap(uint32_t addr, uint32_t len);
 
 

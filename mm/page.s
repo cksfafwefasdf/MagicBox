@@ -32,4 +32,6 @@ intr_handler_page_fault:
 	call swap_page
 .done: 
 	add esp,8 ; clean the stack
+	; 该函数在kernel.s中被中断入口程序调用，
+	; 因此此处写ret是对的，中断入口程序最终会调iret退出
 	ret

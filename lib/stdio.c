@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <syscall.h>
-#include <unistd.h>
+#include <unitype.h>
 
 int itoa(uint32_t value,char* buf_ptr,uint8_t base){
 	if(value==0){

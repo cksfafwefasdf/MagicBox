@@ -5,6 +5,9 @@
 
 #define SCREEN_POS(row,col) (row*NUM_FULL_LINE_CH+col) 
 
+// 此中断号除了 syscall.c 会用外，start.s 里面的 sigreturn 也会用
+#define NATIVE_SYSCALL_NR 0x77
+
 typedef void* intr_handler_addr;
 
 enum intr_status{

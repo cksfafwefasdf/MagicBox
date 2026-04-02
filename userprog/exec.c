@@ -54,7 +54,7 @@ static int32_t load(const char* pathname){
 	ASSERT(global_fd!=-1);
 
 	uint32_t prog_idx = 0;
-    uint32_t max_vaddr = 0; // 用于追踪最高虚拟地址边界
+    uint32_t max_vaddr = 0; 
 	// execv 的进程通常直接就是我们现在正在运行的程序所在的进程了
     struct task_struct* cur = get_running_task_struct();
 
@@ -76,27 +76,34 @@ static int32_t load(const char* pathname){
 		// printf("prog_header.p_type:%x\n",prog_header.p_type);
 		// 所有的代码段和数据段都必须是可加载段（PT_LOAD）
 		if(PT_LOAD == prog_header.p_type){
-			// 加载段
-			// if(!segment_load(fd,prog_header.p_offset,prog_header.p_filesz,prog_header.p_vaddr)){
-			// 	ret = -1;
-			// 	goto done;
-			// }
 
 			// VMA_READ 的flag的定义和 PF_R 的定义不一样，所以得翻译一下
 			uint32_t vma_flags = 0;
 
-			// 2. 翻译权限 (从 ELF 转换到你的 VM_ 标志)
+			uint32_t vaddr_start = prog_header.p_vaddr;
+    		uint32_t vaddr_end = vaddr_start + prog_header.p_memsz;
+
+			// 按照elf的标准，
+			// 把起始地址向下对齐起始地址 (例如 0x0804bff8 -> 0x0804b000)
+			uint32_t aligned_vaddr_start = vaddr_start & 0xfffff000;
+			// 把结束地址向上对齐结束地址
+			uint32_t aligned_vaddr_end = (vaddr_end + 0xfff) & 0xfffff000;
+
+			// 翻译权限 (从 ELF 转换到 VM_ 标志)
 			if (prog_header.p_flags & PF_R) vma_flags |= VM_READ;
 			if (prog_header.p_flags & PF_W) vma_flags |= VM_WRITE;
 			if (prog_header.p_flags & PF_X) vma_flags |= VM_EXEC;
 
+			uint32_t offset = vaddr_start - aligned_vaddr_start;
 			add_vma(cur, 
-                    prog_header.p_vaddr, // start
-                    prog_header.p_vaddr + prog_header.p_memsz, // end (含BSS)
-                    prog_header.p_offset, // 文件偏移
+                    aligned_vaddr_start, // start
+                    aligned_vaddr_end, // end (含BSS)
+                    prog_header.p_offset - offset, // 文件偏移
                     file_inode, // 关联 inode
                     vma_flags, // 权限
-					prog_header.p_filesz); // 大小
+					prog_header.p_filesz + offset);// 大小
+
+			// printk("Segment %d: vaddr 0x%x, filesz 0x%x, memsz 0x%x\n", prog_idx, prog_header.p_vaddr, prog_header.p_filesz, prog_header.p_memsz);
 
 			// 在写汇编或 C 代码时，我们可以定义无数个 .section .data1、.section .data2
 			// 甚至在代码中间穿插数据。但当我们把它们交给链接器（Linker，如 ld）时，魔法就发生了
@@ -113,7 +120,7 @@ static int32_t load(const char* pathname){
 			// end_code 最终指向的是最后一个代码类段的结束。
 			// end_data 最终指向的是最后一个数据类段的结束（即 BSS 结束处）。
 			// brk 从这个 end_data 开始起跑。因此依然正确
-			uint32_t vaddr_end = prog_header.p_vaddr + prog_header.p_memsz;
+			// uint32_t vaddr_end = prog_header.p_vaddr + prog_header.p_memsz;
 			if (!(prog_header.p_flags & PF_W)) { // PF_W (写) = 2,
 				// 如果没有写权限，那么就是代码段
 				// 实际上这不太严谨，只读数据段 .rodata 也没有写权限
@@ -173,156 +180,151 @@ done:
 	return ret;
 }
 
+// 在 Linux 的实现中，只有带环境变量的 execve ，execv 是库函数封装的
+int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
+    if (argv == NULL) return -1;
+
+    struct task_struct* cur = get_running_task_struct();
+    uint32_t argc = 0;
+    uint32_t envc = 0;
+	
+    // 准备内核中转页，用于备份参数
+    // 必须在 user_vaddr_space_clear 之前完成，因为我们需要读取用户态的 path 和 argv
+    char* k_arg_page = get_kernel_pages(1);
+    if (!k_arg_page) return -1;
+    char* path_bk = kmalloc(strlen(path) + 1); // +1 是加上一个 '\0'
+    if (!path_bk) { mfree_page(PF_KERNEL, k_arg_page, 1); return -1; }
+    strcpy(path_bk, path); // 备份路径
+
+    char* k_ptr = k_arg_page;
+    uint32_t arg_offsets[MAX_ARG_NR], arg_lens[MAX_ARG_NR];
+    uint32_t env_offsets[MAX_ARG_NR], env_lens[MAX_ARG_NR];
+
+    
+	// 备份参数，第一个参数是文件名
+	// 由于我们是以 argv[i] != NULL 作为边界条件的，因此 argv 必须以 NULL 结尾
+	// 拷贝 argv 字符串
+    while (argv[argc] && argc < MAX_ARG_NR) {
+        arg_lens[argc] = strlen(argv[argc]) + 1;
+        arg_offsets[argc] = (uint32_t)(k_ptr - k_arg_page);
+        strcpy(k_ptr, argv[argc]);
+        k_ptr += arg_lens[argc];
+        argc++;
+    }
+
+    // 拷贝 envp 字符串 (如果 envp 为 NULL 则 envc 为 0)
+    while (envp && envp[envc] && (argc + envc) < MAX_ARG_NR) {
+        env_lens[envc] = strlen(envp[envc]) + 1;
+        env_offsets[envc] = (uint32_t)(k_ptr - k_arg_page);
+        strcpy(k_ptr, envp[envc]);
+        k_ptr += env_lens[envc];
+        envc++;
+    }
+
+    // 加载 ELF 文件并清理旧进程空间
+	// 加载新程序时，先清空旧的 vma 链表
+    clear_vma_list(cur);
+	// 清理旧的用户空间映射 (0 ~ 3GB)
+    // 此时用户栈被销毁，用户态指针 path 和 argv 彻底失效
+    user_vaddr_space_clear(cur);
+	
+	// 预留 8MB 空间给栈 (0xc0000000 - 8MB 到 0xc0000000)
+    // 这样接下来的参数拷贝触发缺页时，find_vma 就能找到它
+	// 堆栈是非文件区域，filesz要设为0
+    add_vma(cur, USER_STACK_BASE - USER_STACK_SIZE, USER_STACK_BASE, 0, NULL, VM_READ | VM_WRITE | VM_GROWSDOWN | VM_ANON, 0);
+
+	// 加载新程序，传入内核空间的 path 副本
+    // 此时读取 path 访问的是内核地址 (0xC0000000以上)，绝对不会触发用户空间缺页
+    int32_t entry_point = load(path_bk);
+    if (entry_point == -1) {
+        kfree(path_bk); mfree_page(PF_KERNEL, k_arg_page, 1);
+		// 必须走 sys_exit。
+		// 既然已经 user_vaddr_space_clear 了，这个进程已经无法生存，
+		// 必须通过正规渠道“宣布死亡”，让父进程收尸。
+        sys_exit(-1);
+    }
+
+    // 准备用户栈 (从高向低压入)
+    // 栈底设为 0xc0000000
+    uint32_t user_stack_top = USER_STACK_BASE;
+    uint32_t k_envp_ps[MAX_ARG_NR], k_argv_ps[MAX_ARG_NR];
+
+    // 先压入所有字符串内容
+	// 将内核备份的参数拷贝到新栈顶
+    // 第一次 memcpy 写入 0xbffffxxx 时，CPU 会自动触发 swap_page 进行扩容
+    for (int i = (int)envc - 1; i >= 0; i--) {
+        user_stack_top -= env_lens[i];
+		// 这一步会通过缺页中断自动建立物理映射
+        memcpy((void*)user_stack_top, k_arg_page + env_offsets[i], env_lens[i]);
+        k_envp_ps[i] = user_stack_top;
+    }
+
+    for (int i = (int)argc - 1; i >= 0; i--) {
+        user_stack_top -= arg_lens[i];
+        memcpy((void*)user_stack_top, k_arg_page + arg_offsets[i], arg_lens[i]);
+        k_argv_ps[i] = user_stack_top;
+    }
+
+    // 压入指针数组 (必须 4 字节对齐)
+    uint32_t* sp = (uint32_t*)(user_stack_top & ~3);
+
+    // 压入辅助向量结束标志 (Auxv)  musl 启动需要用到
+    sp--; *sp = 0; 
+
+    // 压入 envp 指针数组 (以 NULL 结尾)
+    sp--; *sp = 0; 
+    for (int i = (int)envc - 1; i >= 0; i--) {
+        sp--; *sp = k_envp_ps[i];
+    }
+    uint32_t user_envp_tab = (uint32_t)sp;
+
+    // 压入 argv 指针数组 (以 NULL 结尾)
+    sp--; *sp = 0; 
+    for (int i = (int)argc - 1; i >= 0; i--) {
+        sp--; *sp = k_argv_ps[i];
+    }
+
+    // 压入 argc。musl 的 _start 默认 *esp 是 argc
+    sp--; *sp = argc;
+
+    // 更新进程元数据
+	// 更新进程名
+    memcpy(cur->name, path_bk, TASK_NAME_LEN);
+    cur->name[TASK_NAME_LEN - 1] = 0;
+
+    // 准备中断栈，进入用户态
+    struct intr_stack* intr_0_stack = (struct intr_stack*)((uint32_t)cur->kstack_pages + KERNEL_THREAD_STACK - sizeof(struct intr_stack));
+    intr_0_stack->eip = (void*)entry_point;
+    intr_0_stack->esp = (void*)sp;  // ESP 指向 argc
+    
+    // 按照 Linux ABI，EDX 存放 envp 地址，EBX 清零
+    intr_0_stack->edx = user_envp_tab; 
+    intr_0_stack->ebx = 0;
+    intr_0_stack->ecx = 0;
+
+    // 信号处理重置 (按照posix标准，要保留父进程的 SIG_IGN，其余的全部置为默认)
+    for (int i=0; i < SIG_NR; i++) {
+        if (cur->sigactions[i].sa_handler != SIG_IGN) {
+            cur->sigactions[i].sa_handler = SIG_DFL;
+        }
+    }
+
+	// 释放中转内存
+    mfree_page(PF_KERNEL, k_arg_page, 1);
+    kfree(path_bk);
+
+    // 跳转执行
+	// 切换栈并跳转到 intr_exit 执行 iret 进入用户态
+    asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (intr_0_stack) : "memory");
+    return 0;
+}
+
 // sys_execv 必须要有参数！至少要有第一个参数，即文件名！
 // argv[0] 和 path 不总是一样，因为 argv[0] 可能是 ls ，而 path 是 /bin/ls
 // 并且 argv 必须以 NULL 结尾
 int32_t sys_execv(const char* path, const char* argv[]) {
-
-	if(argv==NULL){
-		printk("sys_execv dose not allow argv to be NULL !\n");
-		return -1;
-	}
-
-    uint32_t argc = 0;
-    struct task_struct* cur = get_running_task_struct();
-
-    // 准备内核中转页，用于备份参数
-    // 必须在 user_vaddr_space_clear 之前完成，因为我们需要读取用户态的 path 和 argv
-    char* k_arg_page = get_kernel_pages(1); 
-    
-	if (k_arg_page == NULL){
-		goto fail1;
-	}
-
-	char* path_bk =  kmalloc(strlen(path) + 1); // +1 是加上一个 '\0'
-	
-	if (path_bk == NULL){
-		goto fail2;
-	}
-
-	memset(k_arg_page,0,PG_SIZE);
-	strcpy(path_bk,path); // 备份路径
-
-    char* k_ptr = k_arg_page;
-    uint32_t arg_offsets[MAX_ARG_NR] = {0};
-    uint32_t arg_lens[MAX_ARG_NR] = {0};
-
-    // 备份参数，第一个参数是文件名
-	int i = 0; 
-	// 由于我们是以 argv[i] != NULL 作为边界条件的，因此 argv 必须以 NULL 结尾
-	while (argv[i] != NULL && argc < MAX_ARG_NR) {
-		uint32_t cur_len = strlen(argv[i]) + 1;
-		
-		// 检查内核页是否溢出
-		if ((k_ptr - k_arg_page) + cur_len > PG_SIZE) goto fail3;
-
-		arg_offsets[argc] = (uint32_t)(k_ptr - k_arg_page);
-		arg_lens[argc] = cur_len;
-		strcpy(k_ptr, argv[i]);
-		
-		k_ptr += cur_len;
-		argc++;
-		i++;
-	}
-
-	// 加载新程序时，先清空旧的 vma 链表
-	clear_vma_list(cur);
-
-    // 清理旧的用户空间映射 (0 ~ 3GB)
-    // 此时用户栈被销毁，用户态指针 path 和 argv 彻底失效
-    user_vaddr_space_clear(cur);
-
-	// 预留 8MB 空间给栈 (0xc0000000 - 8MB 到 0xc0000000)
-    // 这样接下来的参数拷贝触发缺页时，find_vma 就能找到它
-	// 堆栈是非文件区域，filesz要设为0
-
-	// 目前，我们的malloc和free直接绕过了堆的vma进行操作
-	// 因此目前堆的vma只是一个占位，等待后期完善
-    add_vma(cur, USER_STACK_BASE - USER_STACK_SIZE, USER_STACK_BASE, 0, NULL, VM_READ | VM_WRITE | VM_GROWSDOWN | VM_ANON,0);
-
-	// printk("argv[0]:%s \n",k_arg_page + arg_offsets[0]);
-    // 加载新程序，传入内核空间的 path 副本
-    // 此时读取 path 访问的是内核地址 (0xC0000000以上)，绝对不会触发用户空间缺页
-
-    int32_t entry_point = load(path_bk); 
-
-    if (entry_point == -1) {
-		printk("execv: load failed! killing process %d\n", cur->pid);
-		kfree(path_bk);
-		mfree_page(PF_KERNEL, k_arg_page, 1);
-		
-		// 必须走 sys_exit。
-		// 既然已经 user_vaddr_space_clear 了，这个进程已经无法生存，
-		// 必须通过正规渠道“宣布死亡”，让父进程收尸。
-		sys_exit(-1); 
-	}
-
-    // 更新进程名
-    memcpy(cur->name, path_bk, TASK_NAME_LEN);
-    cur->name[TASK_NAME_LEN - 1] = 0;
-	
-
-    // 准备新程序的用户栈
-    // 栈底设为 0xc0000000
-    uint32_t user_stack_top = (uint32_t)USER_STACK_BASE;
-    uint32_t new_argv_pointers[MAX_ARG_NR] = {0};
-
-    // 将内核备份的参数拷贝到新栈顶
-    // 第一次 memcpy 写入 0xbffffxxx 时，CPU 会自动触发 swap_page 进行扩容
-    for (i = (int)argc - 1; i >= 0; i--) {
-        uint32_t cur_len = arg_lens[i];
-        user_stack_top -= cur_len;
-        
-        // 这一步会通过缺页中断自动建立物理映射
-        memcpy((void*)user_stack_top, k_arg_page + arg_offsets[i], cur_len);
-        new_argv_pointers[i] = user_stack_top; 
-    }
-	
-
-    // 拷贝指针数组到栈顶 (argv 列表) 
-    uint32_t argv_table_size = sizeof(char*) * (argc + 1);
-    user_stack_top -= argv_table_size;
-    
-    char** user_argv_list = (char**)user_stack_top;
-    // 如果跨页了也会触发 swap_page，但可以自动修复，不要紧
-    user_argv_list[argc] = NULL; // 最后一个参数置为 NULL
-    for (uint32_t i = 0; i < argc; i++) {
-        user_argv_list[i] = (char*)new_argv_pointers[i];
-    }
-
-    // 准备进入用户态的中断栈上下文
-    // struct intr_stack* intr_0_stack = (struct intr_stack*)((uint32_t)cur + PG_SIZE - sizeof(struct intr_stack));
-
-	struct intr_stack* intr_0_stack = (struct intr_stack*)((uint32_t)cur->kstack_pages + KERNEL_THREAD_STACK - sizeof(struct intr_stack));
-
-    intr_0_stack->ebx = (int32_t)user_argv_list; // 存入新程序的 argv 指针
-    intr_0_stack->ecx = (int32_t)argc;           // 存入 argc
-    intr_0_stack->eip = (void*)entry_point;      // 新程序入口
-    intr_0_stack->esp = (void*)user_stack_top;   // 新程序栈顶
-
-    // 信号处理重置 (按照posix标准，要保留父进程的 SIG_IGN，其余的全部置为默认)
-    for (i=0 ; i < SIG_NR; i++) {
-        if (cur->sigactions[i].sa_handler != SIG_IGN) {
-            cur->sigactions[i].sa_handler = SIG_DFL;
-            cur->sigactions[i].sa_mask = 0;
-            cur->sigactions[i].sa_flags = 0;
-            cur->sigactions[i].sa_restorer = NULL;
-        }
-    }
-
-    // 释放中转内存
-    mfree_page(PF_KERNEL, k_arg_page, 1);
-	kfree(path_bk);
-
-    // 切换栈并跳转到 intr_exit 执行 iret 进入用户态
-    asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (intr_0_stack) : "memory");
-
-    return 0; // 不会执行到这里
-
-fail3:
-	kfree(path_bk);
-fail2:
-    mfree_page(PF_KERNEL, k_arg_page, 1);
-fail1:
-	return -1;
+    // 按照约定，不带 'e' 的版本使用当前进程的环境变量
+    // 在这里我们暂时简单传一个空的 envp 数组
+    const char* default_envp[] = { NULL };
+    return sys_execve(path, argv, default_envp);
 }

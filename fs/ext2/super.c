@@ -6,7 +6,7 @@
 #include <debug.h>
 #include <fs_types.h>
 #include <inode.h>
-#include <unistd.h>
+#include <unitype.h>
 
 // 将 ext2 的 i_mode 字段转换成我们系统的 i_type 字段 
 enum file_types ext2_decode_type(uint16_t mode) {

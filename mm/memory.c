@@ -43,6 +43,7 @@ static void* do_alloc(uint32_t size);
 static void do_free(void* ptr);
 static uint32_t prot_to_vm_flags(uint32_t prot, bool anon);
 static struct vm_area* find_covering_or_next_vma(struct task_struct* task, uint32_t vaddr);
+static uint32_t do_mmap_common(struct task_struct* cur, uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset);
 
 static void mem_pool_init(uint32_t all_mem) {
     put_str("mem_pool init start\n");
@@ -1033,37 +1034,7 @@ uint32_t sys_brk(uint32_t new_brk) {
 
 // 该函数最核心的功能就是找空隙，然后建立vma
 // 具体的内存分配操作交给缺页中断来做
-uint32_t sys_mmap(uint32_t user_mmap_args) {
-    struct task_struct* cur = get_running_task_struct();
-    struct mmap_args* user_args = (struct mmap_args*)user_mmap_args;
-    uint32_t addr;
-    uint32_t len;
-    uint32_t prot;
-    uint32_t flags;
-    int32_t fd;
-    uint32_t offset;
-
-    // sys_mmap 只能被用户进程调用
-    if (cur->pgdir == NULL) {
-        return (uint32_t)MAP_FAILED;
-    }
-    if (user_args == NULL) {
-        return (uint32_t)MAP_FAILED;
-    }
-    // 校验传入的参数包是否是在用户空间中
-    if (user_mmap_args < USER_VADDR_START ||
-        user_mmap_args + sizeof(struct mmap_args) <= user_mmap_args || // 校验溢出
-        user_mmap_args + sizeof(struct mmap_args) > USER_STACK_BASE) {
-        return (uint32_t)MAP_FAILED;
-    }
-
-    addr = user_args->addr;
-    len = user_args->len;
-    prot = user_args->prot;
-    flags = user_args->flags;
-    fd = user_args->fd;
-    offset = user_args->offset;
-
+static uint32_t do_mmap(struct task_struct* cur, uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset) {
     if (len == 0) {
         return (uint32_t)MAP_FAILED;
     }
@@ -1123,6 +1094,47 @@ uint32_t sys_mmap(uint32_t user_mmap_args) {
         return (uint32_t)MAP_FAILED;
     }
     return vaddr;
+}
+
+uint32_t sys_mmap(uint32_t user_mmap_args) {
+    struct task_struct* cur = get_running_task_struct();
+    struct mmap_args* user_args = (struct mmap_args*)user_mmap_args;
+
+    // sys_mmap 只能被用户进程调用
+    if (cur->pgdir == NULL) {
+        return (uint32_t)MAP_FAILED;
+    }
+    if (user_args == NULL) {
+        return (uint32_t)MAP_FAILED;
+    }
+    // 校验传入的参数包是否是在用户空间中
+    if (user_mmap_args < USER_VADDR_START ||
+        user_mmap_args + sizeof(struct mmap_args) <= user_mmap_args || // 校验溢出
+        user_mmap_args + sizeof(struct mmap_args) > USER_STACK_BASE) {
+        return (uint32_t)MAP_FAILED;
+    }
+
+    return do_mmap(cur,
+                          user_args->addr,
+                          user_args->len,
+                          user_args->prot,
+                          user_args->flags,
+                          user_args->fd,
+                          user_args->offset);
+}
+
+// 用于适配 mmap2
+// 主要区别就是 mmap 是用参数包来进行参数传递的，而 mmap2 直接用寄存器传参，速度更快
+// 此外，在 32 位系统上，寄存器是 32 位的。原始的 mmap 最后一个参数 offset 是以字节为单位的。
+// 这意味着 mmap 无法映射文件中超过 4GB 位置之后的数据。
+// 为了支持大文件，Linux 引入了 mmap2。它规定最后一个参数不再是字节，而是页面索引，从而进行大范围的索引跨越
+// Musl 几乎总是优先调用 mmap2
+uint32_t sys_mmap_direct(uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset) {
+    struct task_struct* cur = get_running_task_struct();
+    if (cur->pgdir == NULL) {
+        return (uint32_t)MAP_FAILED;
+    }
+    return do_mmap(cur, addr, len, prot, flags, fd, offset);
 }
 
 int32_t sys_munmap(uint32_t addr, uint32_t len) {

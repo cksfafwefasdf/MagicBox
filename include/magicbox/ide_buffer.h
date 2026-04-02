@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <dlist.h>
 #include <sync.h>
 #include <hashtable.h>

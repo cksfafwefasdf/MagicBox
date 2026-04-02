@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <fs_types.h>
 #include <errno.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <ide.h>
 #include <stdio-kernel.h>
 #include <debug.h>

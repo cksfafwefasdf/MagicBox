@@ -1,7 +1,7 @@
 #ifndef __INCLUDE_UAPI_SYSCALL_H
 #define __INCLUDE_UAPI_SYSCALL_H
 #include <stdint.h>
-#include <unistd.h>
+#include <unitype.h>
 
 // syscall.h includes interface for user
 
@@ -61,6 +61,7 @@
 #define SYS_BRK 50
 #define SYS_MMAP 51
 #define SYS_MUNMAP 52
+#define SYS_EXECVE 53
 
 // user interface
 extern uint32_t getpid(void);
@@ -119,5 +120,6 @@ extern void* brk(void* addr);
 extern void* sbrk(int32_t increment);
 extern void* mmap(void* addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset);
 extern int32_t munmap(void* addr, uint32_t len);
+extern int32_t execve(const char* path, const char* argv[], const char* envp[]);
 
 #endif

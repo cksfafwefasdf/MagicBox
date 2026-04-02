@@ -2,7 +2,7 @@
 #include <syscall.h>
 #include <stdio.h>
 #include <assert.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include "buildin_cmd.h"

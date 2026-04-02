@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <console.h>
 #include <stdio-kernel.h>
-#include <unistd.h>
+#include <unitype.h>
 
 void printk(const char* format,...){
 	va_list args;
@@ -9,5 +9,6 @@ void printk(const char* format,...){
 	char buf[PRINT_BUF_SIZE] = {0};
 	vsprintf(buf,format,args);
 	va_end(args);
+
 	console_put_str(buf);
 }

@@ -8,7 +8,7 @@
 #include <string.h>
 #include <ide_buffer.h>
 #include <global.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <device.h>
 #include <block_dev.h>
 #include <fs.h>

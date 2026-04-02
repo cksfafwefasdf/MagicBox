@@ -78,6 +78,7 @@ void syscall_init(void){
 	syscall_table[SYS_BRK] = sys_brk;
 	syscall_table[SYS_MMAP] = sys_mmap;
 	syscall_table[SYS_MUNMAP] = sys_munmap;
+	syscall_table[SYS_EXECVE] = sys_execve;
 	
 	put_str("syscall_init done\n");
 }

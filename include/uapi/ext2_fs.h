@@ -2,7 +2,7 @@
 #define __INCLUDE_UAPI_EXT2_FS_H
 
 #include <stdint.h>
-#include <unistd.h>
+#include <unitype.h>
 
 #define EXT2_BLOCK_UNIT 1024
 #define EXT2_BLOCK_SIZE(sb) ((sb)->s_block_size)

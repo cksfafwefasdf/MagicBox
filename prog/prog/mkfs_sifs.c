@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <stdint.h>
 #include <ioctl.h>
 #include <sifs_sb.h>

@@ -90,7 +90,7 @@ syscall_handler:
 	push gs
 	pushad
 
-	push 0x80 ; just formalize the stack
+	push 0x77 ; just formalize the stack
 	push edi ; arg5
 	push esi ; arg4
 	push edx ; arg3
@@ -113,7 +113,7 @@ syscall_handler_convey_by_stack:
 	push gs
 	pushad
 
-	push 0x80 ; just formalize the stack
+	push 0x77 ; just formalize the stack
 
 	; get user stack esp
 	; 48 = 4*(8+4)
@@ -132,6 +132,40 @@ syscall_handler_convey_by_stack:
 
 	mov [esp+4*8],eax
 	jmp intr_exit ; restore context
+
+; 基本上就是复刻了一遍原有的 syscall_handler 的逻辑来构造栈帧
+; 只不过此处不进行 系统调用表总函数的调用了
+; 而是直接走 musl_syscall_interceptor 拦截器逻辑
+global musl_syscall_handler
+musl_syscall_handler:
+    ; 伪造错误码，使栈布局对齐 struct intr_stack 的 err_code
+    push 0 
+
+    ; 保存段寄存器
+    push ds
+    push es
+    push fs
+    push gs
+
+    ; 保存所有通用寄存器 (EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI)
+    pushad
+
+    ; 此时 ESP 指向的是 EDI。为了对齐 struct intr_stack，
+    ; 我们需要手动压入一个 vec_no (比如 0x80)
+    push 0x80 
+
+    ; 将当前的 ESP 作为参数传递给 C 函数
+    ; 这样在 C 函数中，struct intr_stack* stack 就正好指向了刚才压入的所有数据
+    push esp
+    extern musl_syscall_interceptor
+    call musl_syscall_interceptor
+    
+    ; 回收参数 esp
+    add esp, 4
+
+    ; 跳转到通用的恢复环境逻辑
+    ; 此时栈顶是 edi，完全符合 intr_exit 的逻辑
+    jmp intr_exit
 
 VECTOR 0x00,ZERO
 VECTOR 0X01,ZERO

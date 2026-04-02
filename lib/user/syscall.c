@@ -1,6 +1,6 @@
 #include <syscall.h>
 #include <stdio.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <string.h>
 #include <stdint.h>
 
@@ -24,7 +24,7 @@ __attribute__((weak)) extern void sig_restorer(void);
 #define _syscall0(SYSCALL_NUM) ({ \
 	int retval; \
 	asm volatile( \
-	"int $0x80" \
+	"int $0x77" \
 	:"=a"(retval) \
 	:"a"(SYSCALL_NUM) \
 	:"memory" \
@@ -35,7 +35,7 @@ __attribute__((weak)) extern void sig_restorer(void);
 #define _syscall1(SYSCALL_NUM,ARG1) ({ \
 	int retval; \
 	asm volatile( \
-		"int $0x80" \
+		"int $0x77" \
 		:"=a"(retval) \
 		:"a"(SYSCALL_NUM),"b"(ARG1) \
 		:"memory" \
@@ -46,7 +46,7 @@ __attribute__((weak)) extern void sig_restorer(void);
 #define _syscall2(SYSCALL_NUM,ARG1,ARG2) ({ \
 	int retval; \
 	asm volatile( \
-		"int $0x80" \
+		"int $0x77" \
 		:"=a"(retval) \
 		:"a"(SYSCALL_NUM),"b"(ARG1),"c"(ARG2) \
 		:"memory" \
@@ -58,7 +58,7 @@ __attribute__((weak)) extern void sig_restorer(void);
 #define _syscall3(SYSCALL_NUM,ARG1,ARG2,ARG3) ({ \
 	int retval; \
 	asm volatile( \
-		"int $0x80" \
+		"int $0x77" \
 		:"=a"(retval) \
 		:"a"(SYSCALL_NUM),"b"(ARG1),"c"(ARG2),"d"(ARG3) \
 		:"memory" \
@@ -69,7 +69,7 @@ __attribute__((weak)) extern void sig_restorer(void);
 #define _syscall4(SYSCALL_NUM,ARG1,ARG2,ARG3,ARG4) ({ \
 	int retval; \
 	asm volatile( \
-		"int $0x80" \
+		"int $0x77" \
 		:"=a"(retval) \
 		:"a"(SYSCALL_NUM),"b"(ARG1),"c"(ARG2),"d"(ARG3),"S"(ARG4) \
 		:"memory" \
@@ -80,7 +80,7 @@ __attribute__((weak)) extern void sig_restorer(void);
 #define _syscall5(SYSCALL_NUM,ARG1,ARG2,ARG3,ARG4,ARG5) ({ \
 	int retval; \
 	asm volatile( \
-		"int $0x80" \
+		"int $0x77" \
 		:"=a"(retval) \
 		:"a"(SYSCALL_NUM),"b"(ARG1),"c"(ARG2),"d"(ARG3),"S"(ARG4),"D"(ARG5) \
 		:"memory" \

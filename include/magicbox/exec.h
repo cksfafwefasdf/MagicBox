@@ -54,4 +54,5 @@ enum segment_flags {
 };
 
 extern int32_t sys_execv(const char* path,const char* argv[]);
+extern int32_t sys_execve(const char* path, const char* argv[], const char* envp[]);
 #endif

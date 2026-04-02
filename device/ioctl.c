@@ -1,6 +1,6 @@
 #include <ioctl.h>
 #include <device.h>
-#include <unistd.h>
+#include <unitype.h>
 #include <errno.h>
 #include <stdint.h>
 #include <tty.h>

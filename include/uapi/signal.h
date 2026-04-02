@@ -2,7 +2,7 @@
 #define __INCLUDE_UAPI_SIGNAL_H
 #include <stdint.h>
 #include <stdbool.h>
-#include <unistd.h>
+#include <unitype.h>
 
 struct task_struct;
 struct intr_stack;
