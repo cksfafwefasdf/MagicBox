@@ -4,12 +4,12 @@
 
 > **Note**: This project is intended for learning purposes only, utilizing the traditional 32-bit Protected Mode tech stack.
 
-![MagicBox Preview](./doc/pic/preview.png)
+
 
 ## 📚 Learning Objectives
 
 - **Bootstrapping & Environment**: Implemented a minimal MBR and Loader to handle the transition from Real Mode to 32-bit Protected Mode, along with an initial implementation of basic paging.
-- **Minimalist Process Model**: Explored Unix-style process lifecycle management by replicating core system calls such as `fork()` and `execv()`.
+- **Minimalist Process Model**: Explored Unix-style process lifecycle management by replicating core system calls such as `fork()` and `execve()`.
 - **Experimental App Deployment**: To simplify the deployment process, a simple **Tar-based** archiving mechanism was implemented. Binaries are written to raw disk sectors and extracted by the kernel into the file system during boot.
 - **Basic Interaction**: Developed a rudimentary command-line Shell that supports internal commands and simple path resolution for external programs (e.g., searching in `/bin`).
 
@@ -19,17 +19,19 @@
 
 - **Interrupts & Synchronization**: Utilizes the **8259A PIC** to handle hardware interrupts. Kernel-level thread synchronization is managed through **mutexes and semaphores**, ensuring safe access to critical sections such as disk I/O operations and process lists.
 
-- **Memory Management: Hybrid Dual-Track Architecture**
+- **Memory Management: Direct-Map Kernel + VMA-Based User Space**
 
-  This project implements a practical hybrid memory management system, balancing the deterministic needs of the kernel with the flexibility required by user-level processes:
+  This project implements a layered memory-management design that separates kernel-space access paths from user-space virtual memory management:
 
-  - **Physical Layer (Buddy System):** The physical memory is managed by a **Buddy System allocator** (`buddy.c`), replacing legacy bitmaps. By supporting power-of-two block allocation and merging, the system can now manage up to **3GB of RAM**, effectively overcoming the previous 128MB limitation.
-  - **Kernel Virtual Space (Bitmap-based):** For the kernel virtual address space (3GB–4GB), the system continues to use a **Static Bitmap allocator**.
-    - **Design Choice:** This ensures immediate and deterministic mapping for critical kernel tasks, avoiding the complexity of VMA tracking in the kernel and preventing potential reentrancy/deadlock issues during early memory allocation.
-  - **User Virtual Space (VMA Framework):** The user-level address space has been refactored to use a **VMA (Virtual Memory Area) framework**, decoupling it from the old bitmap-based management.
-    - **Demand Paging:** Supports lazy loading for ELF segments, heap, and stack. Physical pages are only allocated and mapped when a Page Fault is triggered by actual access.
-    - **Dynamic Management:** Supports VMA splitting, merging, and gap searching, providing the necessary infrastructure for `sys_brk` heap scaling and Copy-On-Write (COW) during `fork()` and `execv()`.
-  - **Small Object Allocation:** An **Arena allocator** remains integrated on top of the Buddy System to handle micro-allocations (2B–1024B) efficiently, reducing internal fragmentation for small data structures.
+  - **Physical Layer (Buddy System):** Physical memory is managed by a **Buddy System allocator** (`buddy.c`), replacing the earlier bitmap-only design. This allows scalable page allocation/merge operations and supports large-memory configurations up to the practical 32-bit x86 limit.
+  - **Kernel Low Memory (Direct Mapping):** The kernel no longer allocates ordinary low-memory virtual addresses through a bitmap-managed kernel-vaddr pool. Instead, usable low memory is permanently mapped into the kernel higher-half direct-map window, allowing the kernel to access lowmem pages by simple address translation.
+  - **Kernel High Memory Access (`kmap` / `kunmap`):** Physical pages outside the direct-mapped lowmem range are treated as high memory and are accessed through temporary mappings in a dedicated `kmap` region. This keeps the kernel model simple while still allowing the system to use memory beyond the directly mapped lowmem window.
+  - **User Virtual Space (VMA Framework):** User-space virtual memory is managed through a **VMA (Virtual Memory Area)** framework rather than through per-process virtual bitmaps.
+    - **Demand Paging:** ELF segments, user heap, stack growth, anonymous mappings, and file-backed mappings are all handled lazily. Physical pages are only allocated and mapped when a Page Fault is triggered by actual access.
+    - **Dynamic Management:** Supports VMA insertion, merging, splitting, and gap searching. This provides the infrastructure required for `brk`, `mmap`, `munmap`, lazy file mapping, and Copy-On-Write (COW) during `fork`.
+    - **mmap Layout Policy:** User `mmap` regions are allocated from the high user address range downward (below the reserved stack window), avoiding conflicts with the `brk`-managed heap.
+  - **Kernel Small Allocation:** Kernel small-object allocation still uses an **Arena allocator** built on top of the Buddy System. Arena metadata has been externalized into `struct page`, allowing arena payload pages to remain fully usable.
+  - **User-Space Heap Allocation:** Native user-space `malloc/free` no longer rely on a kernel-side `umalloc` path. Small allocations are managed in user space through `sbrk + arena`, while large allocations are backed by `mmap/munmap`.
 
 - **VFS Implementation & "Everything is a File" Philosophy**
 
@@ -40,7 +42,7 @@
   - **Dynamic I/O Dispatching**: System calls (such as `read`, `write`, and `ioctl`) bind to specific operation sets during the file-opening phase based on the Inode type, reducing the need for hardcoded type-checking:
     - **Files & Directories**: Data block addressing and metadata I/O are handled by the specific Ext2 or SIFS drivers.
     - **Inter-Process Communication (IPC)**: Anonymous pipes and named pipes (FIFOs) are integrated into the standard file descriptor (FD) management logic.
-    - **Device Management**: Character devices (TTY/UART) and block devices (IDE disks) are mapped as file nodes, accessible via the unified FD interface.
+    - **Device Management**: Character devices (TTY) and block devices (IDE disks) are mapped as file nodes, accessible via the unified FD interface.
   - **Metadata Management**: Maintains a global **Inode Hash Table** as a memory cache to ensure the uniqueness of Inode instances. This supports basic features like path backtracking (`getcwd`) and file renaming (`rename`), while ensuring cache consistency during deletion operations like `unlink`.
 
 - **Task Scheduling**: Implements a **Round-Robin** scheduling algorithm. In a design reminiscent of Linux 0.12, a task's `priority` directly determines its allocated clock **ticks**. The system decrements the current task's remaining time slice during timer interrupts, triggering a reschedule only when ticks are exhausted. This non-preemptive approach maintains simplicity while distributing CPU time based on task priority.
@@ -49,14 +51,14 @@
 
 - **Resource Recovery**: Implements a two-stage resource reclamation logic. `sys_exit` releases immediate process-private resources (such as FDs), while the destruction of core structures like page directories and kernel stacks is deferred to the parent process during `wait`/`waitpid`. This ensures stable process state synchronization and memory safety.
 
-------
+
 
 ## 📞 System Calls
 
 **Task Management:**
 
 - `fork()`: Creates a child process utilizing Copy-On-Write (COW).
-- `execv()`: Parses ELF files and registers VMAs to support on-demand loading.
+- `execve()`: Parses ELF files, builds the initial user stack, and registers VMAs to support on-demand loading. The current interface already reserves the `envp` slot for future environment-variable support.
 - `waitpid()` / `exit()`: Handles process lifecycle synchronization and resource recycling.
 - `setpgid()` / `getpgid()`: Provides basic process group management for shell job control.
 - `alarm()` / `pause()`: Supports simple timed signal delivery and process suspension.
@@ -64,70 +66,84 @@
 **File System & IPC:**
 
 - `open()`, `read()`, `write()`, `close()`: POSIX-like file operations.
-
 - `mount()` / `umount()`: Implements UNIX-like VFS mounting/unmounting, establishing "tunnels" between parent directories and child partition roots.
-
 - `pipe()`: Creates Linux-style anonymous pipes for parent-child communication.
 - `mkfifo()`: Creates persistent named pipe nodes in the file system for unrelated process IPC.
 - `mknod()`: Supports the creation of special files or device nodes (e.g., in `/dev`).
 - `dup2()`: Handles file descriptor redirection, essential for shell pipe implementation.
-- `ioctl()`: A simple device control interface, such as managing TTY foreground groups.
+- `ioctl()`: A unified device-control interface, currently used for TTY and block-device style control requests.
 
 **Signal Handling:**
 
-- `sigaction()` / `signal()` : Registers signal handlers and configures signal blocking masks.
+- `sigaction()` / `signal()`: Registers signal handlers and configures signal blocking masks.
 - `kill()`: Dispatches signals to specific processes or process groups.
 - `sigprocmask()` / `sigpending()`: Manages the signal blocking state of a process.
-- `sys_sigreturn()`: (Internal) Facilitates the return from user-mode handlers to the kernel.
+- `sys_sigreturn()`: *(Internal)* Restores execution context after a user-mode signal handler returns.
 
 **Memory Management:**
 
-- `malloc()` / `free()`: User-space heap management based on the kernel's Arena allocator.
-- `brk()`: (Stub) A placeholder for future fine-grained heap boundary control.
+- `brk()` / `sbrk()`: Provides user heap growth/shrink support through the VMA-based heap region.
+- `mmap()` / `munmap()`: Supports anonymous private mappings and file-backed private mappings, both handled lazily through the page-fault path.
+- Native user-space `malloc()` / `free()`: Small allocations use `sbrk + arena`; large allocations use `mmap`.
 
-**Storage & Recovery :**
+**Linux ABI Compatibility (musl-oriented):**
 
-- ~~readraw()~~ : *(Deprecated)* Previously used for raw sector access; now superseded by the unified device-file interface, aligning with the "Everything is a File" philosophy.
-- `open("/dev/...", ...)`: Replaces legacy disk access. All block devices (e.g., `sda`, `sdb1`) are abstracted as files, enabling user-space tools like `mkfs` and `hexdump` to operate via standard I/O calls.  
-  - *Example*: `open("/dev/sda", O_RDONLY)` now provides raw disk access, enabling user-space tools like `mkfs` and `hexdump` to operate via standard POSIX I/O without extra kernel support.
+- MagicBox now reserves interrupt `0x80` as a Linux i386 syscall compatibility entry, while the native MagicBox syscall ABI uses interrupt `0x77`.
+- A compatibility interceptor currently translates the Linux-style syscalls already observed from musl-compiled test programs, including:
+  - `getpid`
+  - `exit` / `exit_group`
+  - `writev`
+  - `ioctl`
+  - `brk`
+  - `mmap2`
+  - `munmap`
+  - `madvise` *(currently treated as a compatibility hint / no-op)*
 
+**Storage & Recovery:**
+
+- ~~readraw()~~: *(Deprecated)* Previously used for raw sector access; now superseded by the unified device-file interface, aligning with the "Everything is a File" philosophy.
+- `open("/dev/...", ...)`: Replaces legacy raw-disk access. All block devices (e.g., `sda`, `sdb1`) are abstracted as files, enabling user-space tools like `mkfs` and `hexdump` to operate via standard I/O calls.
+  - *Example*: `open("/dev/sda", O_RDONLY)` now provides raw disk access without requiring extra dedicated kernel support.
 
 
 
 ## 📂 Project Structure
 
-The project follows a modular design, separating kernel core logic, hardware drivers, and user-space applications. Below is an overview of the directory hierarchy:
+The project follows a modular design, separating kernel core logic, hardware drivers, compatibility glue, and user-space applications. Below is an overview of the current directory hierarchy:
 
-```
+```text
 .
-├── boot/               # MBR & Kernel Loader (System bootup and entry to protected mode)
-├── device/             # Hardware Drivers (Keyboard, IDE, Disk Buffer, TTY, and IOCTL)
-├── fs/                 # File System Layer (VFS, File Table, Pipes, and SIFS implementation)
-│   ├── ext2/           # Ext2 Specific Operations (Super, Inode and File operations)
-│   ├── sifs/           # SIFS Specific Operations (Super, Inode and File operations)
-│   └── *.c           	# Operations for VFS
-├── include/            # Header Files (Organized by subsystem and access level)
-│   ├── arch/           # Architecture-related (Hardware I/O and low-level print)
-│   ├── magicbox/       # Kernel Private Headers (Memory, Threads, FS, and Sync)
-│   ├── sys/            # Standard C Headers (stdint, string, stdio, etc.)
-│   └── uapi/           # User-Kernel Interface (SIFS layout, IOCTL codes, and unistd)
-├── kernel/             # Kernel Core (Interrupts, Initialization, and Signal handling)
-├── lib/                # Library routines
-│   ├── kernel/         # Kernel-mode libraries (Bitmap, DList, Hashtable)
-│   └── user/           # User-mode system call wrappers
-├── mm/                 # Memory Management (Buddy System, VMA, Arena Allocator and Page tables)
-├── prog/               # User-land applications
-│   ├── shell/          # Interactive Shell implementation
-│   └── prog/           # Core utilities (cat, echo, hexdump, and pipe tests)
-├── thread/             # Threading & Sync (Mutex, Semaphores, and Scheduler)
-├── userprog/           # Process Management (Exec, Fork, Wait/Exit, and TSS)
-├── tool/               # Development Tools (GDB scripts and Address-to-line scripts)
-├── disk_env/           # Hard disk images (hd60M and hd80M)
+├── boot/               # MBR & kernel loader (bootstrapping and entry to protected mode)
+├── device/             # Hardware drivers (TTY, keyboard, IDE, IOCTL, timer, console)
+├── fs/                 # VFS layer, file tables, pipes/FIFOs, generic FS logic
+│   ├── ext2/           # Ext2-specific super/inode/file operations
+│   ├── sifs/           # SIFS-specific super/inode/file operations
+│   └── *.c             # VFS and filesystem-independent operations
+├── glue/               # ABI / compatibility glue code (e.g. Linux-style syscall interception)
+├── include/            # Header files organized by scope
+│   ├── arch/           # Architecture-related low-level headers
+│   ├── linux/          # Imported Linux compatibility headers (e.g. i386 syscall numbers)
+│   ├── magicbox/       # Kernel-private subsystem headers
+│   ├── sys/            # Standard C-style headers used inside the project
+│   └── uapi/           # User-kernel ABI definitions (types, ioctls, syscall-facing layouts)
+├── kernel/             # Kernel core (initialization, interrupts, debug, signals)
+├── lib/                # Shared support code
+│   ├── kernel/         # Kernel-mode utility libraries
+│   └── user/           # Native MagicBox user-space wrappers / allocator code
+├── mm/                 # Memory management (buddy allocator, VMA, paging, swap/fault handling)
+├── prog/               # User-space applications and tests
+│   ├── musl_test/      # Linux-ABI / musl-oriented compatibility tests
+│   ├── native_test/    # Tests written against MagicBox's native userspace ABI
+│   └── shell/          # Interactive shell implementation
+├── thread/             # Thread scheduler and synchronization primitives
+├── userprog/           # Process and userspace management (exec, fork, wait/exit, TSS, syscalls)
+├── tool/               # Development helper tools and host-side helper scripts
+├── disk_env/           # Virtual disk images
 ├── doc/                # Documentation and preview images
-├── build/              # Binary artifacts and object files
+├── build/              # Build artifacts
 ├── makefile            # Master build script
-├── init_disk.sh        # Disk image & partition setup script
-└── install_apps.sh     # User app deployment script (Tar-based)
+├── init_disk.sh        # Disk image / partition setup script
+└── install_apps.sh     # Native user-app deployment script
 ```
 
 
@@ -217,7 +233,4 @@ qemu-system-i386 \
 
 
 
-**Memory Support:** Thanks to the newly implemented **Buddy System**, the `-m` parameter now supports up to **3072** (3GB), which is the theoretical limit for physical RAM in 32-bit x86 systems (approaching the PCI/MMIO hole).
-
-
-
+**Memory Support:** Thanks to the newly implemented **Buddy System**, the `-m` parameter now supports up to **2048** (2GB).
