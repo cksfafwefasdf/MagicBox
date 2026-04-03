@@ -16,6 +16,7 @@
 #include <timer.h>
 #include <signal.h>
 #include <ioctl.h>
+#include <time.h>
 
 #define SYSCALL_NR 64
 typedef void* syscall_func;
@@ -79,6 +80,7 @@ void syscall_init(void){
 	syscall_table[SYS_MMAP] = sys_mmap;
 	syscall_table[SYS_MUNMAP] = sys_munmap;
 	syscall_table[SYS_EXECVE] = sys_execve;
+	syscall_table[SYS_TIME] = sys_time;
 	
 	put_str("syscall_init done\n");
 }

@@ -99,7 +99,7 @@ char* buildin_cd(uint32_t argc,char** argv){
 		make_clear_abs_path(argv[1],final_path);
 	}
 
-	if(chdir(final_path)==-1){
+	if(chdir(final_path) < 0){
 		printf("cd: no such direcotry %s\n",final_path);
 		return NULL;
 	}
@@ -154,7 +154,7 @@ void buildin_ls(uint32_t argc, char** argv) {
     }
 
     // 获取目标路径的状态
-    if (stat(pathname, &file_stat) == -1) {
+    if (stat(pathname, &file_stat) < 0) {
         printf("ls: cannot access %s: No such file or directory\n", pathname);
         return;
     }
@@ -162,7 +162,7 @@ void buildin_ls(uint32_t argc, char** argv) {
     // 处理目录逻辑
     if (file_stat.st_filetype == FT_DIRECTORY) {
         int32_t fd = open(pathname,O_RDONLY); 
-        if (fd == -1) {
+        if (fd < 0) {
             printf("ls: opendir %s failed\n", pathname);
             return;
         }
@@ -180,7 +180,8 @@ void buildin_ls(uint32_t argc, char** argv) {
         rewinddir(fd); 
 
         if (long_info) {
-            printf("total: %d\n", file_stat.st_size);
+			
+            printf("total: %d\n", (int32_t)file_stat.st_size);
             while (readdir(fd, &dir_e) > 0) {
         
                 char ftype = (dir_e.d_type == FT_DIRECTORY) ? 'd' : '-';
@@ -188,22 +189,22 @@ void buildin_ls(uint32_t argc, char** argv) {
                 sub_pathname[pathname_len] = 0;
                 
                 strcat(sub_pathname, dir_e.d_name);
-                
                 memset(&file_stat, 0, sizeof(struct stat));
-                if (stat(sub_pathname, &file_stat) == -1) {
+                if (stat(sub_pathname, &file_stat) < 0) {
                     printf("ls: cannot access %s\n", dir_e.d_name);
                     close(fd);
                     return;
                 }
 
+				// st_size 是 64 位的，为了防止 printf 读 dir_e.d_name 读到 st_size 的高 32 位，我们要将这个数据强转成 32 位的
                 if (FT_DIRECTORY == dir_e.d_type) {
-                    printf("%c %d %d " BLUE "%s" RESET "\n", ftype, dir_e.d_ino, file_stat.st_size, dir_e.d_name);
+                    printf("%c %d %d " BLUE "%s" RESET "\n", ftype, dir_e.d_ino, (int32_t)file_stat.st_size, dir_e.d_name);
                 } else if (FT_CHAR_SPECIAL == dir_e.d_type) {
-                    printf("%c %d %d " RED "%s" RESET "\n", ftype, dir_e.d_ino, file_stat.st_size, dir_e.d_name);
+                    printf("%c %d %d " RED "%s" RESET "\n", ftype, dir_e.d_ino,  (int32_t)file_stat.st_size, dir_e.d_name);
                 } else if (FT_BLOCK_SPECIAL == dir_e.d_type) {
-                    printf("%c %d %d " YELLOW "%s" RESET "\n", ftype, dir_e.d_ino, file_stat.st_size, dir_e.d_name);
+                    printf("%c %d %d " YELLOW "%s" RESET "\n", ftype, dir_e.d_ino,  (int32_t)file_stat.st_size, dir_e.d_name);
                 } else {
-                    printf("%c %d %d %s\n", ftype, dir_e.d_ino, file_stat.st_size, dir_e.d_name);
+                    printf("%c %d %d %s\n", ftype, dir_e.d_ino,  (int32_t)file_stat.st_size, dir_e.d_name);
                 }
             }
         } else {
@@ -225,7 +226,7 @@ void buildin_ls(uint32_t argc, char** argv) {
     } else {
         // 处理普通文件逻辑保持不变
         if (long_info) {
-            printf("- %d %d %s\n", file_stat.st_ino, file_stat.st_size, pathname);
+            printf("- %d %d %s\n", file_stat.st_ino,  (int32_t)file_stat.st_size, pathname);
         } else {
             printf("%s\n", pathname);
         }

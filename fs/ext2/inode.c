@@ -10,6 +10,8 @@
 #include <debug.h>
 #include <fs_types.h>
 #include <unitype.h>
+#include <time.h>
+#include <inode.h>
 
 static int32_t ext2_bmap(struct inode* inode, int32_t _index);
 
@@ -348,9 +350,10 @@ static void ext2_inode_init(struct partition* part, uint32_t inode_no,struct ino
 	new_inode->i_dev = part->i_rdev;
     new_inode->i_sb = part->sb; // 建立归属超级块，以后读写数据块要用到他
     new_inode->write_deny = false;
+    new_inode->i_mode = encode_imode(ft,mode);
 
 	// 初始化ext2专用字段
-    new_inode->ext2_i.i_mode = ext2_encode_type(ft,mode);
+    new_inode->i_mode = encode_imode(ft,mode);
     if(ft == FT_DIRECTORY){
         // 初始计数为2，例如d/dd，dd目录在创建时的初始计数为2，这是因为d下有一个目录项d计数了一次
         // dd自己下面还有一个目录项 . 又计数了一次
@@ -422,6 +425,15 @@ static int32_t ext2_mkdir(struct inode* dir,char* name, int len, int mode)  {
     // 初始化新目录的数据块 (. 和 ..)
     ext2_init_dir_block(sb, block_addr, inode_no, dir->i_no);
 
+    // 获取 64 位时间戳并转为磁盘需要的 32 位
+    uint32_t now = (uint32_t)sys_time();
+
+    // 初始化新目录的 inode 时间
+    new_inode->i_atime = now;
+    new_inode->i_mtime = now;
+    new_inode->i_ctime = now;
+    new_inode->ext2_i.i_dtime = 0;
+
     // 将新目录挂载到父目录的数据块中
     if (ext2_add_entry(dir, inode_no, name, FT_DIRECTORY) < 0) {
         // 回滚逻辑...
@@ -432,9 +444,9 @@ static int32_t ext2_mkdir(struct inode* dir,char* name, int len, int mode)  {
     // 更新元数据账本
     // 更新父目录
     dir->ext2_i.i_links_count++; // 因为子目录有 ".." 指向父目录
-    
-    // 按理说，我们还要补上时间戳的更新，但是目前我们先不填它，让他为0
-    // dir->i_mtime = dir->i_atime = read_rtc(); 
+
+    dir->i_mtime = now;   // 目录内容变了
+    dir->i_ctime = now;   // 链接数和 mtime 变了，所以 ctime 必变
     
     // 更新目录数量
     ext2_info->group_desc[group].bg_used_dirs_count++;
@@ -548,6 +560,14 @@ static int32_t ext2_create(struct inode* dir, char* name, int len, int mode) {
 
     ext2_inode_init(part, inode_no, new_file_inode, FT_REGULAR, mode);
 
+    int64_t now = sys_time(); 
+
+    // 初始化新文件的 inode 时间
+    new_file_inode->i_atime = (uint32_t)now;
+    new_file_inode->i_mtime = (uint32_t)now;
+    new_file_inode->i_ctime = (uint32_t)now;
+    new_file_inode->ext2_i.i_dtime = 0;
+
     // 在父目录的数据块中添加目录项
     if (ext2_add_entry(dir, inode_no, name, FT_REGULAR) < 0) {
         // 回滚逻辑
@@ -555,6 +575,10 @@ static int32_t ext2_create(struct inode* dir, char* name, int len, int mode) {
         PANIC("fail to ext2_add_entry");
         return -EIO;
     }
+
+    // 更新父目录的修改时间和状态改变时间
+    dir->i_mtime = (uint32_t)now;
+    dir->i_ctime = (uint32_t)now;
 
     // 持久化元数据
     // 写入新创建文件的 inode 到磁盘上的 Inode Table
@@ -719,6 +743,15 @@ static int32_t ext2_mknod(struct inode* dir, char* name, int len, int type, int 
     // 在 Ext2 磁盘结构中，通常将设备号存放在 i_block[0]
     new_inode->ext2_i.i_block[0] = dev; 
 
+    uint32_t now = (uint32_t)sys_time();
+
+    // 初始化新设备文件的 Inode 时间
+    // 即使是设备文件，这些字段在磁盘镜像 struct ext2_inode 中也是存在的
+    new_inode->i_atime = now;
+    new_inode->i_mtime = now;
+    new_inode->i_ctime = now;
+    new_inode->ext2_i.i_dtime = 0;
+
     // 将新 Inode 挂载到父目录的数据块中
     if (ext2_add_entry(dir, inode_no, name, type) < 0) {
         // 这里理论上需要回滚 inode_bitmap，目前先简单处理
@@ -726,6 +759,10 @@ static int32_t ext2_mknod(struct inode* dir, char* name, int len, int type, int 
         kfree(new_inode);
         return -EIO;
     }
+
+    // 更新父目录时间
+    dir->i_mtime = now;
+    dir->i_ctime = now;
 
     // 同步元数据到磁盘
     sb->s_op->write_inode(new_inode); // 写入新 inode
@@ -862,6 +899,12 @@ static void ext2_truncate(struct inode *inode) {
         inode->ext2_i.i_block[14] = 0;
     }
 
+    uint32_t now = (uint32_t)sys_time();
+
+    // 更新时间戳
+    inode->i_mtime = now;
+    inode->i_ctime = now;
+
     // 重置元数据
     inode->i_size = 0;
     inode->ext2_i.i_blocks = 0;
@@ -967,6 +1010,8 @@ static int32_t ext2_unlink(struct inode* dir, char* name, int len) {
         return -EISDIR; 
     }
 
+    int64_t now = sys_time();
+
     // 从父目录删除目录项 (这一步比较复杂，因此给他封装一下)
     // Ext2 的删除需要处理 rec_len 的合并
     if (ext2_remove_entry(dir, name) != 0) {
@@ -974,11 +1019,19 @@ static int32_t ext2_unlink(struct inode* dir, char* name, int len) {
         return -1;
     }
 
+    dir->i_mtime = (uint32_t)now;
+    dir->i_ctime = (uint32_t)now;
+
     // 递减 Inode 链接数
     // 在 Ext2 中，只有 i_links_count == 0 且 i_open_cnts == 0 才会真正释放
     target_inode->ext2_i.i_links_count--;
 
+    target_inode->i_ctime = (uint32_t)now; // 链接数变了，ctime 必变
+
     if (target_inode->ext2_i.i_links_count == 0) {
+        // 记录删除时间
+        target_inode->ext2_i.i_dtime = (uint32_t)now;
+
         // 释放所有关联的磁盘块，直接调用truncate就行
         // 对于设备文件之类的文件，他们没有磁盘块，因此不需要truncate
         // 由于他们的truncate都为NULL，因此这个条件可以将他们拦住
@@ -1002,6 +1055,7 @@ static int32_t ext2_unlink(struct inode* dir, char* name, int len) {
 
     ext2_sync_gdt(sb);
     sb->s_op->write_super(sb);
+    sb->s_op->write_inode(dir);
     
     return 0;
 }
@@ -1072,14 +1126,23 @@ static int32_t ext2_rmdir(struct inode *dir, char *name, int len) {
         return -EIO;
     }
 
+    uint32_t now = (uint32_t)sys_time();
+
     // 更新引用计数
     // 目录被删除，父目录的 links_count 减 1 (对应子目录的 ..)
     dir->ext2_i.i_links_count--;
+
+    dir->i_mtime = now;   // 内容变了
+    dir->i_ctime = now;   // 链接数变了，ctime 必变
+
     sb->s_op->write_inode(dir);
 
     // 目标目录自身的 links_count 设为 0 以触发完全释放
     // 正常目录下 links_count 应该是 2 (父目录指向它，加上它自身的 .)
     target_inode->ext2_i.i_links_count = 0;
+
+    target_inode->i_ctime = now;   // 链接数归零也是状态改变
+    target_inode->ext2_i.i_dtime = now;   // 记录删除时间
 
     // 彻底释放资源
     ext2_truncate(target_inode); // 释放所有数据块
@@ -1266,6 +1329,20 @@ static int ext2_rename(struct inode *old_dir, char *old_name, int old_len UNUSED
     // 从原位置抹除
     ext2_remove_entry(old_dir, old_name);
 
+    uint32_t now = (uint32_t)sys_time();
+
+    // 目标目录 (new_dir) 增加了条目
+    new_dir->i_mtime = now;
+    new_dir->i_ctime = now;
+
+    // 源目录 (old_dir) 删除了条目
+    old_dir->i_mtime = now;
+    old_dir->i_ctime = now;
+
+    // 被移动的文件/目录本身 (old_inode)
+    // 即使只是改个名，它的状态（ctime）也算改变了
+    old_inode->i_ctime = now;
+
     // 如果是目录移动，需要修正 ".." 
     // 这些修正操作最好放到 ext2_remove_entry 后面做
     // 不然若ext2_remove_entry在io过程中失败的话，会导致父目录的计数异常
@@ -1277,10 +1354,12 @@ static int ext2_rename(struct inode *old_dir, char *old_name, int old_len UNUSED
             // 维护父目录的链接计数
             new_dir->ext2_i.i_links_count++;
             old_dir->ext2_i.i_links_count--;
-            sb->s_op->write_inode(new_dir);
-            sb->s_op->write_inode(old_dir);
         }
     }
+
+    sb->s_op->write_inode(new_dir);
+    sb->s_op->write_inode(old_dir);
+    sb->s_op->write_inode(old_inode);
 
     // 同步并返回
     sb->s_op->write_super(sb);

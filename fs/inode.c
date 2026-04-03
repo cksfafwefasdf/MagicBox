@@ -49,6 +49,30 @@ static bool inode_condition(struct dlist_elem* pelem, void* arg) {
     return (i->i_dev == ik->i_dev && i->i_no == ik->i_no);
 }
 
+// 将 ext2 的 i_mode 字段转换成我们系统的 i_type 字段 
+enum file_types decode_imode(uint16_t mode) {
+    if (S_ISREG(mode))  return FT_REGULAR;
+    if (S_ISDIR(mode))  return FT_DIRECTORY;
+    if (S_ISCHR(mode))  return FT_CHAR_SPECIAL;
+    if (S_ISBLK(mode))  return FT_BLOCK_SPECIAL;
+    if (S_ISFIFO(mode)) return FT_FIFO;
+    if (S_ISLNK(mode))  return FT_SYMBOLIC_LINK;
+    if (S_ISSOCK(mode)) return FT_SOCKET;
+    return FT_UNKNOWN;
+}
+
+uint16_t encode_imode(enum file_types ft,uint16_t mode) {
+    if (ft == FT_REGULAR)  return S_IFREG|mode;
+    if (ft == FT_DIRECTORY)  return S_IFDIR|mode;
+    if (ft == FT_CHAR_SPECIAL)  return S_IFCHR|mode;
+    if (ft == FT_BLOCK_SPECIAL)  return S_IFBLK|mode;
+    if (ft == FT_FIFO)  return S_IFIFO|mode;
+    if (ft == FT_SOCKET)  return S_IFSOCK|mode;
+    if (ft == FT_SYMBOLIC_LINK)  return S_IFLNK|mode;
+
+    return 0;
+}
+
 void inode_cache_init() {
 
     lock_init(&inode_global_cache.lock);
@@ -249,6 +273,7 @@ struct inode* make_anonymous_inode() {
     inode->i_no = ANONY_I_NO; // 使用-1标志匿名inode
     inode->i_dev = -1; // 使用 -1 （全1）标志其没有存储设备
     inode->i_type = FT_PIPE;
+    inode->i_mode = encode_imode(FT_PIPE,0777);
     
     // 初始化引用计数：由 sys_pipe 进一步管理
     inode->i_open_cnts = 0; 

@@ -24,7 +24,7 @@ static int32_t load(const char* pathname){
 	memset(&elf_header,0,sizeof(struct Elf32_Ehdr));
 
 	int32_t fd = sys_open(pathname,O_RDONLY);
-	if(fd == -1){
+	if(fd < 0){
 		return -1;
 	}
 	

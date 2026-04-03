@@ -56,7 +56,7 @@ ASFLAGS := -f elf
 # 我们不想搜当前目录，而是只想搜-I目录，因此使用<>配合 -nostdinc 和 -I 效果更好
 CFLAGS  := -Wall $(LIB) -g -c -fno-builtin -W -Wstrict-prototypes \
            -Wmissing-prototypes -m32 -fno-stack-protector -fcommon \
-           -Wno-error=implicit-function-declaration -MMD -nostdinc -D DEBUG_TIMER -D DEBUG_SYSCALL_INTRCPT
+           -Wno-error=implicit-function-declaration -MMD -nostdinc -D DEBUG_TIMER
 
 LDFLAGS := -Ttext $(ENTRY_POINT) -e main -Map $(BUILD_DIR)/kernel.map -m elf_i386
 

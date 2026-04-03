@@ -9,18 +9,6 @@
 #include <signal.h>
 #include <errno.h>
 
-#define IRQ0_FREQUENCY 100 //intr freq is 100 times/s
-#define INPUT_FREQUENCY 1193180
-#define COUNT0_INIT_COUNT_VALUE INPUT_FREQUENCY/IRQ0_FREQUENCY
-#define COUNT0_PORT 0x40 
-#define COUNT0_NO 0 // select counter0
-#define COUNT0_MODE 2 // Rate Generator mode,software start
-#define READ_WRITE_LATCH_MODE 3 // read/write low 8 bit at first,then do it again for high 8 bit
-#define PIT_CONTROL_PORT 0x43 
-#define IS_BCD 0 // BCD or binary 
-
-#define mil_seconds_per_intr (1000/IRQ0_FREQUENCY)
-
 // 在时钟中断频率为 100 次每秒的情况下，一个 32 位的uint32_t tick 数据发生溢出环回大约要497天
 // 也就是说系统要连续运行 497 天这个时钟才会溢出环回，因此问题不大
 // 即使改成 int 类型，也得要 248 天左右

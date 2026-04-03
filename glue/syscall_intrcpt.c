@@ -70,14 +70,11 @@ void musl_syscall_interceptor(struct intr_stack* stack) {
     uint32_t m_eax = stack->eax;
     int32_t ret = -ENOSYS; // 默认返回错误码
 #ifdef DEBUG_SYSCALL_INTRCPT
-    // printk("Intrcpt 0x80: Syscall 0x%x from EIP: 0x%x\n", stack->eax, stack->eip);
+    printk("Intrcpt 0x80: Syscall 0x%x from EIP: 0x%x\n", stack->eax, stack->eip);
 #endif
     switch (m_eax) {
         case __NR_getpid: // SYS_getpid
             ret = sys_getpid();
-#ifdef DEBUG_SYSCALL_INTRCPT
-            printk("PID requested: %d\n", ret);
-#endif
             break;
         // exit_group 会杀死一个进程的所有线程
         // 由于我们现在的用户进程都只对应一个内核线程，因此直接用exit就行
@@ -119,7 +116,83 @@ void musl_syscall_interceptor(struct intr_stack* stack) {
         case __NR_madvise: // 这是一个malloc的性能优化函数，不是必须的，为了防止报unknown警告，我直接no-op返回
             ret = 0;
             break;
+        
+        // 较老版本的编译器中只能在语句块中定义变量
+        // 我们这个open里面定义了path，依次加个花括号给他括住
+        case __NR_open:{
+            const char* path = (const char*)stack->ebx;
+            uint32_t linux_flags = stack->ecx;
+            uint8_t kernel_flags = 0;
 
+            // 转换读写模式 (Linux 的 RDONLY 是 0，必须特殊处理)
+            uint32_t mode = linux_flags & 3; // 取低 2 位
+            if (mode == 0) kernel_flags |= O_RDONLY;      // Linux 0 -> 1
+            else if (mode == 1) kernel_flags |= O_WRONLY; // Linux 1 -> 2
+            else if (mode == 2) kernel_flags |= O_RDWR;   // Linux 2 -> 4
+
+            //  转换状态标志
+            if (linux_flags & 0x40)  kernel_flags |= O_CREATE; // Linux 0x40 -> 8
+            if (linux_flags & 0x80) kernel_flags |= O_EXCL; // Linux 0x80 ->  64
+            if (linux_flags & 0x200) kernel_flags |= O_TRUNC;  // Linux 0x200 -> 16
+            if (linux_flags & 0x400) kernel_flags |= O_APPEND; // Linux 0x400 -> 32
+
+            ret = sys_open(path, kernel_flags);
+            break;
+        }
+
+        case __NR_write: // 0x4
+            // EBX: fd, ECX: buf, EDX: count
+            ret = sys_write((int32_t)stack->ebx, 
+                            (void*)stack->ecx, 
+                            (uint32_t)stack->edx);
+            break;
+        
+        case __NR__llseek:{
+            printk("Intrcpt: warning, use lseek as llseek\n");
+            int32_t fd = (int32_t)stack->ebx;
+            int32_t offset = (int32_t)stack->edx; // 取低32位
+            int64_t* res_ptr = (int64_t*)stack->esi;
+            
+            // 对齐 whence: Linux(0,1,2) -> 我们的(1,2,3)
+            uint32_t linux_whence = stack->edi;
+            uint32_t kernel_whence = linux_whence + 1;
+
+            // 边界检查，防止用户传入非法值导致 ASSERT 触发
+            if (kernel_whence < 1 || kernel_whence > 3) {
+                ret = -EINVAL;
+                break;
+            }
+
+            int32_t new_pos = sys_lseek(fd, offset, kernel_whence);
+
+            if (new_pos < 0) {
+                ret = new_pos; // 此时 ret 为 -1 或错误码
+            } else {
+                if (res_ptr != NULL) {
+                    *res_ptr = (int64_t)new_pos;
+                }
+                ret = 0; // 成功返回 0
+            }
+            break;
+        }
+
+        case __NR_read: {
+            // EBX: fd, ECX: buf, EDX: count
+            int32_t fd = (int32_t)stack->ebx;
+            void* buf = (void*)stack->ecx;
+            uint32_t count = (uint32_t)stack->edx;
+
+            ret = sys_read(fd, buf, count);
+            break;
+        }
+
+        case __NR_close: {
+            // EBX: fd
+            int32_t fd = (int32_t)stack->ebx;
+
+            ret = sys_close(fd);
+            break;
+        }
 
         default:
             printk("Unknown Syscall 0x%x\n", m_eax);

@@ -19,12 +19,12 @@ int main(int argc, char** argv) {
         // 第一次尝试：直接打开 (O_WRONLY)
         fd = open(path, O_WRONLY); 
 
-        if (fd == -1) {
+        if (fd < 0) {
             // 第二次尝试：创建 (O_WRONLY | O_CREATE)
             fd = open(path, O_WRONLY | O_CREATE);
         }
 
-        if (fd == -1) {
+        if (fd < 0) {
             printf("echo: open/create %s failed\n", path);
             return -1;
         }

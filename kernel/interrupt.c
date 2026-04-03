@@ -38,7 +38,7 @@ intr_handler_addr idt_ISR[IDT_DESC_CNT];
 
 extern intr_handler_addr intr_entry_table[IDT_DESC_CNT];
 extern uint32_t syscall_handler(void);
-extern musl_syscall_handler(void);
+extern void musl_syscall_handler(void);
 
 static void make_idt_desc(struct intr_gate_desc* p_gdesc,uint8_t attr,intr_handler_addr addr){
     p_gdesc->attribute=attr;

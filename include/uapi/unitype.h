@@ -63,6 +63,9 @@ enum oflags{ // operation flags
 	O_CREATE=8, // only create
 	O_TRUNC = 16, // 从头开始读写文件
 	O_APPEND = 32, // 从文件的末尾开始读写 
+	// 排他性创建，O_CREATE操作是文件不存在则创建，存在则打开
+	// 加上O_EXCL则是只有在不存在时才创建，存在时报错不打开
+	O_EXCL = 64, 
 };
 
 enum whence{
@@ -79,7 +82,9 @@ struct dirent {
     uint32_t d_off; // 在目录文件中的偏移
     uint16_t d_reclen; // 当前 dirent 的长度
     uint8_t  d_type; // 文件类型
-    char d_name[MAX_FILE_NAME_LEN]; // 文件名字符串
+	// 文件名字符串，默认占一个固定长度来兼容sifs
+	// 在 ext2 里面就使用 d_reclen 来定位，可以无视 MAX_FILE_NAME_LEN
+    char d_name[MAX_FILE_NAME_LEN]; 
 };
 
 struct statfs {
@@ -106,10 +111,29 @@ enum std_fd{
 	stderr_no
 };
 
-struct stat{
-	uint32_t st_ino;
-	uint32_t st_size;
-	enum file_types st_filetype;
+// struct stat{
+// 	uint32_t st_ino;
+// 	uint32_t st_size;
+// 	enum file_types st_filetype;
+// };
+
+struct stat {
+    uint64_t st_dev;      // 文件所在设备 ID
+    uint32_t st_ino;      // Inode 编号
+    uint32_t st_mode;     // 类型 + 权限 (例如 S_IFREG | 0644)
+    uint32_t st_nlink;    // 连结数 (建议至少给个 1)
+    uint32_t st_uid;      // 用户 ID (暂时填 0 也行)
+    uint32_t st_gid;      // 组 ID
+    uint64_t st_rdev;     // 若为特殊设备文件，其设备 ID
+    int64_t  st_size;     // 文件大小 (用 int64 预防大文件)
+    
+    // 时间戳
+    uint32_t st_atime;    // 最后访问
+    uint32_t st_mtime;    // 最后修改
+    uint32_t st_ctime;    // 最后状态改变
+    
+    // 内部快捷访问字段
+    enum file_types st_filetype; 
 };
 
 #endif

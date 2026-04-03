@@ -31,7 +31,7 @@ int main(int argc,char** argv){
 	
 	int fd = open(path,O_RDONLY);
 	
-	if(fd == -1){
+	if(fd < 0){
 		printf("cat:open: open %s failed\n",argv[1]);
 		return -1;
 	}

@@ -34,6 +34,9 @@
 // VFS 直接操作的inode 对象
 struct inode{
 	enum file_types i_type;
+	// 存储 Ext2 原始的 i_mode (包含 Linux 标准权限和类型) 
+    // 虽然 VFS inode 有 i_type，但写回磁盘和stat时需要原始的权限位
+	uint16_t i_mode;
 	// 在目录文件中 i_size 标记的是该目录文件目前所达到的最大逻辑偏移量。
 	// 对于目录文件而言，这个值只增不减，只会越变越大，但是对于普通文件而言他是会减小的！
 	// 目录文件i_size只增不减的目的是为了避免目录“空洞”问题，比如 1 2 3 中，删除了 2，这样就剩下 1 X 3，中间的X是空洞
@@ -51,12 +54,17 @@ struct inode{
 	// write operation will cause concurrent safty problem
 	// so make write_deny true, before write the file. 
 	bool write_deny;
+
 	// this tag is used for the 'already opened inode queue'
 	// to prevent redundant reads of inodes from the disk.
 
 	struct super_block* i_sb;      // 指向该 inode 所属分区的 VFS 超级块
     struct inode* i_mount;         // 向下隧道，如果我是挂载点(如 /mnt)，我指向被挂载分区的根 inode
     struct inode* i_mount_at;      // 向上隧道，如果我是被挂载分区的根，我指向父分区的挂载点 inode
+
+	uint32_t i_atime; // Access
+    uint32_t i_mtime; // Modify
+    uint32_t i_ctime; // Change (Status change)
 
 	struct inode_operations* i_op;
 

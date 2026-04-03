@@ -43,7 +43,7 @@ static void* do_alloc(uint32_t size);
 static void do_free(void* ptr);
 static uint32_t prot_to_vm_flags(uint32_t prot, bool anon);
 static struct vm_area* find_covering_or_next_vma(struct task_struct* task, uint32_t vaddr);
-static uint32_t do_mmap_common(struct task_struct* cur, uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset);
+static uint32_t do_mmap(struct task_struct* cur, uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset);
 
 static void mem_pool_init(uint32_t all_mem) {
     put_str("mem_pool init start\n");

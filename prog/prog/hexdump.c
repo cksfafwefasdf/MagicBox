@@ -33,7 +33,7 @@ int main(int argc, char** argv) {
 
     int32_t fd = open(path, O_RDONLY);
 
-    if (fd == -1) {
+    if (fd < 0) {
         printf("hd: open %s failed!\n", path);
         return -1;
     }

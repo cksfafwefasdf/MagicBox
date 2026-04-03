@@ -1,4 +1,4 @@
-IMG="../disk_env/hd60M.img"
+IMG="../disk_env/hd80M.img"
 MNT="../disk_env/mnt"
 
 LOOP_DEV=$(sudo losetup -fP --show $IMG)

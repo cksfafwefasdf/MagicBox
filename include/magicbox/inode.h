@@ -19,5 +19,7 @@ extern void inode_cache_init(void);
 extern struct inode* make_anonymous_inode(void);
 extern int32_t inode_read_data(struct inode* inode, uint32_t offset, void* buf, uint32_t count);
 extern void inode_evict(struct inode* inode);
+extern enum file_types decode_imode(uint16_t mode);
+extern uint16_t encode_imode(enum file_types ft,uint16_t mode);
 
 #endif

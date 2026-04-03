@@ -39,6 +39,9 @@ static int32_t ext2_file_mmap(struct inode* inode, struct file* file UNUSED,
         return -EINVAL;
     }
 
+    // 建立映射视为一次访问
+    // inode->i_atime = (uint32_t)sys_time();
+
     uint32_t file_visible_bytes = 0;
     if (offset < inode->i_size) {
         file_visible_bytes = inode->i_size - offset;
@@ -69,6 +72,12 @@ static int32_t ext2_readdir(struct inode* inode UNUSED, struct file* file, struc
 
     uint8_t* block_buf = (uint8_t*)kmalloc(block_size);
     if (block_buf == NULL) return -ENOMEM;
+
+    // 只有当从头开始读取目录时，更新一次 atime 即可
+    // if (file->fd_pos == 0) {
+    //     dir_inode->i_atime = (uint32_t)sys_time();
+    //     // 同样，这里只更新内存，不强制刷盘
+    // }
 
     // 开始遍历，直到达到目录文件末尾
     while (file->fd_pos < dir_inode->i_size) {
@@ -135,6 +144,9 @@ static int32_t ext2_readdir(struct inode* inode UNUSED, struct file* file, struc
     return -1;
 }
 
+// read 操作确实会改变atime，但是它不会里面同步回去，因此只有在进行write操作时才会写回去
+// 例如我们先cat，后echo，后面那个echo会把前面那个cat改变的atime写回去，但是我们要是先echo，后cat，这个时间就不会写回去了
+// 这点先需要注意一下，以后需要改进，目前就先这样吧
 static int32_t ext2_file_read(struct inode* inode, struct file* file, char* buf, int32_t count) {
     struct partition* part = get_part_by_rdev(inode->i_dev);
     struct super_block* sb = inode->i_sb;
@@ -189,6 +201,15 @@ static int32_t ext2_file_read(struct inode* inode, struct file* file, char* buf,
         size_left -= chunk_size;
     }
 
+    // 只有当真正读到了数据（bytes_read > 0）时才更新
+    // if (bytes_read > 0) {
+    //     inode->i_atime = (uint32_t)sys_time();
+        
+    //     // 这里通常不需要立即调用 sb->s_op->write_inode(inode)。
+    //     // atime 的修改通常只停留在内存中，
+    //     // 等到 inode 周期性同步或者文件关闭时再写回磁盘。
+    // }
+
     kfree(io_buf);
     return bytes_read;
 }
@@ -240,7 +261,7 @@ static int32_t ext2_generic_lseek(struct inode* inode, struct file* pf, int32_t 
 }
 
 static int32_t ext2_file_write(struct inode* inode, struct file* file,char* buf,int32_t count) {
-    ASSERT(inode = file->fd_inode);
+    ASSERT(inode == file->fd_inode);
     struct super_block* sb = inode->i_sb;
     struct partition* part = get_part_by_rdev(inode->i_dev);
     uint32_t block_size = sb->s_block_size;
@@ -309,6 +330,12 @@ static int32_t ext2_file_write(struct inode* inode, struct file* file,char* buf,
         size_left -= chunk_size;
 
     }
+
+    // if (bytes_written > 0) {
+    //     uint32_t now = (uint32_t)sys_time();
+    //     inode->i_mtime = now;
+    //     inode->i_ctime = now;
+    // }
 
     // 持久化 Inode
     // 由于 sb 和 块组描述符里面都维护了很多实时信息，所以都要更新

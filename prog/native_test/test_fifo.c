@@ -18,7 +18,7 @@ int main() {
         // 子进程 A，写者 
         printf("Writer Process (PID:%d) attempting to open FIFO...\n", getpid());
         int32_t fd = open("/data/fifo_test", O_WRONLY);
-        if (fd != -1) {
+        if (fd >= 0) {
             printf("Writer Process: Opened FIFO, writing data...\n");
             write(fd, "Message from Writer!", 21);
             close(fd);
@@ -32,7 +32,7 @@ int main() {
         // 子进程 B：读者 
         printf("Reader Process (PID:%d) attempting to open FIFO...\n", getpid());
         int32_t fd = open("/data/fifo_test", O_RDONLY);
-        if (fd != -1) {
+        if (fd >= 0) {
             printf("Reader Process: Opened FIFO, reading data...\n");
             char buf[64] = {0};
             read(fd, buf, 21);

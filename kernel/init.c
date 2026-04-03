@@ -23,6 +23,7 @@
 #include <debug.h>
 #include <vma.h>
 #include <ioctl.h>
+#include <time.h>
 
 void init(void);
 void print_logo(void);
@@ -66,19 +67,15 @@ void init(void) {
 
         setpgid(0, 0); // 确保自己进组，双重确认
 
-        int mnt_dir_fd = open("/mnt",O_RDONLY);
+        struct stat st;
 
-        if(mnt_dir_fd==-1){
+        if(stat("/mnt",&st)<0){
             mkdir("/mnt");
         }
-        if(mnt_dir_fd!=-1){
-            close(mnt_dir_fd);
-        }
+
         
         // 检查 Shell 是否已经存在于文件系统中
-        int fd = open(SHELL_PATH, O_RDONLY);
-
-        if (fd == -1) {
+        if (stat(SHELL_PATH,&st)<0) {
             // 如果 Shell 不存在，说明是首次启动或文件系统损坏，执行全量恢复
             printf("init: shell not found. Unpacking system files from LBA 1000...\n");
             
@@ -87,15 +84,15 @@ void init(void) {
             untar_all(APPS_LBA); 
 
             // 解压完成后，再次确认 Shell 是否成功创建
-            fd = open(SHELL_PATH, O_RDONLY);
-            if (fd == -1) {
+            int32_t fd = open(SHELL_PATH, O_RDONLY);
+            if (fd < 0) {
                 printf("init: critical error! Shell extraction failed.\n");
                 while(1); // 挂起，以便查看错误日志
             }
+            close(fd);
         }
         
         // 运行 Shell
-        close(fd);
         printf("init: starting shell %s...\n", SHELL_PATH);
         execv(SHELL_PATH, (const char **)argv);
 
@@ -191,6 +188,7 @@ static void after_init() {
     intr_enable(); // ide_init will use the interrupt
     ide_buffer_init();
     ide_init();
+    time_init(); // 这里面会用到printk函数，因此放到此处
     filesys_init();
     make_dev_nodes();
     // 先回收idle，使得并使得main变成idle

@@ -13,6 +13,7 @@
 #include <debug.h>
 #include <ext2_file.h>
 #include <errno.h>
+#include <time.h>
 
 /*
     该文件中对file的操作与具体的文件系统无关
@@ -23,7 +24,7 @@
 // else return -1
 int32_t file_close(struct file* file){
 	if (file == NULL || file->fd_inode == NULL) {
-        return -1;
+        return -EBADF;
     }
 
 	file->f_count--;
@@ -153,5 +154,7 @@ int32_t file_mmap(struct file* file, uint32_t addr, uint32_t len, uint32_t prot,
     if (file == NULL || file->fd_inode == NULL || file->f_op == NULL || file->f_op->mmap == NULL) {
         return -ENODEV;
     }
+	// 建立映射视为一次访问
+    file->fd_inode->i_atime = (uint32_t)sys_time();
     return file->f_op->mmap(file->fd_inode, file, addr, len, prot, flags, offset);
 }

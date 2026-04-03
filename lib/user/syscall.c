@@ -309,3 +309,7 @@ void* mmap(void* addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, 
 int32_t munmap(void* addr, uint32_t len){
 	return _syscall2(SYS_MUNMAP, addr, len);
 }
+
+uint32_t time(void){
+	return _syscall0(SYS_TIME);
+}

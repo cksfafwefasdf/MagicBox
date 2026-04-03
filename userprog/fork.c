@@ -120,7 +120,7 @@ static int32_t copy_process(struct task_struct* child_thread,struct task_struct*
 		return -1;
 	}
 
-	if(copy_pcb_vaddrbitmap_stack0(child_thread,parent_thread)==-1){
+	if(copy_pcb_vaddrbitmap_stack0(child_thread,parent_thread) == -1){
 		return -1;
 	}
 
@@ -162,7 +162,7 @@ pid_t sys_fork(){
 	}
 
 	ASSERT(INTR_OFF == intr_get_status()&&parent_thread->pgdir!=NULL);
-	if(copy_process(child_thread,parent_thread)==-1){
+	if(copy_process(child_thread,parent_thread) == -1){
 		return -1;
 	}
 	

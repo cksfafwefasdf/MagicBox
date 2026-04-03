@@ -24,7 +24,7 @@ nasm ./prog/start.s -f elf -o "$BUILD_DIR/start.o"
 
 # 定义目标程序
 # 格式: "程序名,源文件"
-TARGETS="cat,prog/prog/cat.c echo,prog/prog/echo.c prog_pipe,prog/prog/prog_pipe.c shell,prog/shell/shell.c hd,prog/prog/hexdump.c mkfs_sifs,prog/prog/mkfs_sifs.c mkfs_ext2,prog/prog/mkfs_ext2.c test_sig,prog/native_test/test_sig.c test_malloc,prog/native_test/test_malloc.c test_kmalloc,prog/native_test/test_kmalloc.c test_mmap,prog/native_test/test_mmap.c test_mmap_file,prog/native_test/test_mmap_file.c"
+TARGETS="cat,prog/prog/cat.c echo,prog/prog/echo.c shell,prog/shell/shell.c hd,prog/prog/hexdump.c mkfs_sifs,prog/prog/mkfs_sifs.c mkfs_ext2,prog/prog/mkfs_ext2.c test_sig,prog/native_test/test_sig.c test_fifo,prog/native_test/test_fifo.c test_malloc,prog/native_test/test_malloc.c test_kmalloc,prog/native_test/test_kmalloc.c test_mmap,prog/native_test/test_mmap.c test_mmap_file,prog/native_test/test_mmap_file.c"
 
 # 循环编译
 BIN_LIST="" # 用于记录编译成功的二进制文件名

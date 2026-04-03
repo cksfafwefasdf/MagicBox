@@ -23,7 +23,7 @@
 #define	SYS_UNLINK 12
 #define	SYS_MKDIR 13
 // #define	SYS_OPENDIR 14
-// #define	SYS_CLOSEDIR 15
+#define	SYS_TIME 15
 #define	SYS_CHDIR 16
 #define	SYS_RMDIR 17
 #define	SYS_READDIR 18
@@ -121,5 +121,5 @@ extern void* sbrk(int32_t increment);
 extern void* mmap(void* addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset);
 extern int32_t munmap(void* addr, uint32_t len);
 extern int32_t execve(const char* path, const char* argv[], const char* envp[]);
-
+extern uint32_t time(void);
 #endif

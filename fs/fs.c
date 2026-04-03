@@ -23,7 +23,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <ext2_sb.h>
-
+#include <time.h>
 
 // root_part 用于记录根分区，他是全局唯一的
 struct partition* root_part;
@@ -382,10 +382,16 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
         if (flags & (O_WRONLY | O_RDWR | O_CREATE)) {
             printk("sys_open: directory %s is read-only\n", pathname);
             inode_close(searched_record.parent_inode);
-            return -1;
+            return -EACCES; // 目录不可写
         }
         // 校验通过，允许进入下面的 file_open 流程
 	}
+
+    // Linux 标准行为，如果同时有 CREATE 和 EXCL，且文件已存在，报错 EEXIST
+    if (found && (flags & O_CREATE) && (flags & O_EXCL)) {
+        inode_close(searched_record.parent_inode);
+        return -EEXIST;
+    }
 
 	uint32_t path_searched_depth = path_depth_cnt(searched_record.searched_path);
 	// to process the situation /a/b/c (/a/b is a regular file or not exists)
@@ -393,24 +399,28 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
 		printk("sys_open: cannot access %s: Not a directory, subpath %s is't exist\n",\
 		pathname,searched_record.searched_path);
 		inode_close(searched_record.parent_inode);
-		return -1;
+		return -ENOENT; // 路径中的某个目录不存在
 	}
 
+    
 	if(!found&&!(flags&O_CREATE)){
-		printk("in path %s,file %s is't exist\n",\
+        // 文件不存在，且没要求创建，则报错
+		printk("in path %s,file %s not exist\n",\
 		searched_record.searched_path,\
 		(strrchr(searched_record.searched_path,'/')+1));
 		inode_close(searched_record.parent_inode);
-		return -1;
-	}else if(found && (flags & O_CREATE)){
-		printk("%s has already exist!\n",pathname);
-		inode_close(searched_record.parent_inode);
-		return -1;
+		return -ENOENT;
 	}
+    // else if(found && (flags & O_CREATE)){
+	// 	printk("%s has already exist!\n",pathname);
+	// 	inode_close(searched_record.parent_inode);
+	// 	return -1;
+	// }
 
     int32_t final_inode_no = -1;
 
-	if (flags&O_CREATE) {
+    // 只有在文件真的不存在 且 要求创建时才走创建分支
+	if (!found && (flags & O_CREATE)) {
         char* filename = strrchr(pathname, '/') + 1;
         
         // create 只会负责持久化文件，他不会建立运行时数据
@@ -427,10 +437,12 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
         // 一般不会是0，因为这被stdin和stdout占了
         if (final_inode_no < 0) {
             inode_close(searched_record.parent_inode);
-            return -1;
+            return final_inode_no; // 返回底层错误码给磁盘层报错
         } 
 
     } else {
+        // 文件已存在不管带不带 O_CREATE，直接用现成的 inode 打开
+        // 在linux下，O_CREAT 的语义是文件不存在则创建，存在则打开
         // file is existed, open the file
 		// O_RDONLY,O_WRONLY,O_RDWR
         final_inode_no = inode_no;
@@ -458,26 +470,31 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
     // 因此这个操作就这么留在这就行，然后将普通文件，设备文件等的 open 置为 NULL 即可
     fd = file_open(part,final_inode_no,flags);
 
-	// 对于 FIFO 的处理 
-	// 检查这个 FIFO 之前是否被打开过
-    // fd 为 -1 是正常的，我们可以通过这一点来判断文件是否存在！
-    if (fd != -1) {
-        // 处理追加模式
+    // 我们不再以open操作来探测文件是否存在，而使用更轻量的stat操作来探测！
+    if (fd < 0) {
+        // 如果 FD 分配失败（比如表满了）
+        // 我们必须把搜索路径时打开的父目录 Inode 给关掉，否则这个 Inode 永远留在内存里
+        inode_close(searched_record.parent_inode);
         
-        struct task_struct* cur = get_running_task_struct();
-        struct file* f = &file_table[cur->fd_table[fd]];
-        struct inode* inode = f->fd_inode;
+        // 返回 Linux 标准的“打开文件过多”错误码
+        // EMFILE (24): Too many open files
+        return -EMFILE; 
+    }
 
-        if(flags & O_APPEND){
-            f->fd_pos = f->fd_inode->i_size;
-        }
+    // 处理追加模式
+    struct task_struct* cur = get_running_task_struct();
+    struct file* f = &file_table[cur->fd_table[fd]];
+    struct inode* inode = f->fd_inode;
 
-        if(f->f_op && f->f_op->open){
-            printk("try to open fifo\n");
-            int32_t ret = f->f_op->open(inode,f);
-            if(ret == -1){
-				PANIC("fail to init fifo inode.");
-			}
+    if(flags & O_APPEND){
+        f->fd_pos = f->fd_inode->i_size;
+    }
+
+    if(f->f_op && f->f_op->open){
+        printk("try to open fifo\n");
+        int32_t ret = f->f_op->open(inode,f);
+        if(ret < 0){
+            PANIC("fail to init fifo inode.");
         }
     }
 
@@ -491,14 +508,14 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
 // else return -1
 int32_t sys_close(int32_t fd) {
     if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC) {
-        return -1;
+        return -EBADF;
     }
 
     struct task_struct* cur = get_running_task_struct();
     int32_t global_fd = cur->fd_table[fd];
 
     if (global_fd == -1) {
-        return -1; 
+        return -EBADF; // 该 FD 并没有指向任何打开的文件
     }
 
     struct file* file = &file_table[global_fd];
@@ -549,6 +566,9 @@ int32_t sys_write(int32_t fd,void* buf, uint32_t count) {
     enum file_types type = inode->i_type;
 
     if(wr_file->f_op!=NULL && wr_file->f_op->write!=NULL){
+        uint32_t now = (uint32_t)sys_time();
+        inode->i_mtime = now;
+        inode->i_ctime = now;
         return wr_file->f_op->write(wr_file->fd_inode,wr_file,buf,count);
     }else{
         printk("sys_write: type %x cannot write!\n", type);
@@ -557,20 +577,24 @@ int32_t sys_write(int32_t fd,void* buf, uint32_t count) {
 }
 
 // 从文件描述符 fd 中读取 count 个字节到 buf
+// read 操作确实会改变atime，但是它不会里面同步回去，因此只有在进行write操作时才会写回去
+// 例如我们先cat，后echo，后面那个echo会把前面那个cat改变的atime写回去，但是我们要是先echo，后cat，这个时间就不会写回去了
+// 这点先需要注意一下，以后需要改进，目前就先这样吧
 int32_t sys_read(int32_t fd, void* buf, uint32_t count) {
     if (fd < 0) {
         printk("sys_read: fd error! fd cannot be negative\n");
-        return -1;
+        return -EBADF;
     }
     ASSERT(buf != NULL);
 
     // 获取全局文件结构体
     int32_t global_fd_idx = fd_local2global(get_running_task_struct(), fd);
+    if (global_fd_idx == -1) return -EBADF;
     struct file* rd_file = &file_table[global_fd_idx];
 
     // 权限检查
     if (!(rd_file->fd_flag & O_RDONLY || rd_file->fd_flag & O_RDWR)) {
-        return -1;
+        return -EACCES;
     }
 
     struct inode* inode = rd_file->fd_inode;
@@ -580,6 +604,11 @@ int32_t sys_read(int32_t fd, void* buf, uint32_t count) {
     enum file_types type = inode->i_type;
 
     if(rd_file->f_op!=NULL && rd_file->f_op->read!=NULL){
+        // 这里通常不需要立即调用 sb->s_op->write_inode(inode)。
+        // atime 的修改通常只停留在内存中，
+        // 等到 inode 周期性同步或者文件关闭时再写回磁盘。
+        inode->i_atime = (uint32_t)sys_time();
+
         return rd_file->f_op->read(rd_file->fd_inode,rd_file,buf,count);
     }else{
         printk("sys_write: type %x cannot write!\n", type);
@@ -746,14 +775,21 @@ int32_t sys_readdir(int32_t fd, struct dirent* de) {
     // dir_read 内部会处理 fd_pos 增加和 dirent 填充
     int status = -1;
     if(f->f_op!=NULL && f->f_op->readdir!=NULL){
-        // 我们目前的实现中，暂时用不到 readdir 的第四个参数count，因此先随便传个0进去
-        // 我们目前的实现中，暂时用不到 readdir 的第四个参数count，因此先随便传个0进去
+
+        // 只有当从头开始读取目录时，更新一次 atime 即可
+        if (f->fd_pos == 0) {
+            f->fd_inode->i_atime = (uint32_t)sys_time();
+            // 同样，这里只更新内存，不强制刷盘
+        }
+
         // 我们目前的实现中，暂时用不到 readdir 的第四个参数count，因此先随便传个0进去
         status = f->f_op->readdir(f->fd_inode,f,de,0);
     }else{
         printk("type: %x do not support readdir!\n", f->fd_inode->i_type);
         return -EINVAL;
     }
+
+    
 
     if (status == 0) return 1; // 有数据
     if (status == -1) return 0; // 正常结束
@@ -1000,39 +1036,58 @@ int32_t sys_chdir(const char* _pathname) {
 }
 
 
-int32_t sys_stat(const char* _pathname,struct stat* buf){
+int32_t sys_stat(const char* _pathname, struct stat* buf) {
+    char path[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, path); 
 
-	char path[MAX_PATH_LEN] = {0};
-    make_abs_pathname(_pathname, path); // 统一转成绝对路径
+    // 处理根目录
+    if(!strcmp(path,"/") || !strcmp(path,"/.") || !strcmp(path,"/..")){
+        buf->st_filetype = FT_DIRECTORY;
+        buf->st_ino = root_dir_inode->i_no;
+        buf->st_size = root_dir_inode->i_size;
+        buf->st_atime = root_dir_inode->i_atime;
+        buf->st_mtime = root_dir_inode->i_mtime;
+        buf->st_ctime = root_dir_inode->i_ctime;
+        buf->st_mode = root_dir_inode->i_mode;
+        buf->st_dev = root_dir_inode->i_dev;
+        return 0;
+    }
 
-	if(!strcmp(path,"/")||!strcmp(path,"/.")||!strcmp(path,"/..")){
-		buf->st_filetype = FT_DIRECTORY;
-		buf->st_ino = root_dir_inode->i_no;
-		buf->st_size = root_dir_inode->i_size;
-		return 0;
-	}
+    struct path_search_record searched_record;
+    memset(&searched_record, 0, sizeof(struct path_search_record));
+    
+    int32_t inode_no = search_file(path, &searched_record);
+    if(inode_no == -1) {
+        // 注意：即使没找到目标，parent_inode 也要关掉（由 search_file 开启）
+        inode_close(searched_record.parent_inode);
+        return -ENOENT;
+    }
 
-	int32_t ret = -1;
-	struct path_search_record searched_record;
-	memset(&searched_record,0,sizeof(struct path_search_record));
-	
-	int32_t inode_no = search_file(path,&searched_record);
-	struct partition* part = get_part_by_rdev(searched_record.i_dev);
+    struct partition* part = get_part_by_rdev(searched_record.i_dev);
+    struct inode* obj_inode = inode_open(part, inode_no); 
 
-	if(inode_no!=-1){
-		struct inode* obj_inode = inode_open(part,inode_no); 
-		buf->st_size = obj_inode->i_size;
-		inode_close(obj_inode);
-		buf->st_filetype = searched_record.file_type;
-		buf->st_ino = inode_no;
-		ret = 0;
+    if(obj_inode) {
+        // 先填充数据，再关闭句柄
+        buf->st_size = obj_inode->i_size;
+        buf->st_ino = inode_no;
+        buf->st_atime = obj_inode->i_atime;
+        buf->st_mtime = obj_inode->i_mtime;
+        buf->st_ctime = obj_inode->i_ctime;
+        buf->st_dev = obj_inode->i_dev;
+        buf->st_mode = obj_inode->i_mode;
+        buf->st_filetype = searched_record.file_type;
+        
+        buf->st_nlink = 1; // 在实现link操作前，Ext2 默认为 1
+        buf->st_uid = 0;   // root
+        buf->st_gid = 0;   // root
 
-	}else{	
-		printk("sys_stat: %s not found!\n",path);
-	}
+        inode_close(obj_inode); 
+        inode_close(searched_record.parent_inode);
+        return 0;
+    }
 
-	inode_close(searched_record.parent_inode);
-	return ret;
+    inode_close(searched_record.parent_inode);
+    return -EIO;
 }
 
 static bool check_disk_name(struct dlist_elem* pelem,void* arg){
@@ -1384,16 +1439,16 @@ static bool make_partition_node(struct dlist_elem* pelem, void* arg UNUSED) {
 
 // /dev 目录下的所有非目录文件（设备节点）
 static void clear_dev_directory(void) {
-    int32_t fd;
+    
     struct dirent de; // 使用新的通用目录项结构体，这个目录项结构体是同时给用户和 VFS 使用的
     char path[MAX_PATH_LEN];
-    fd = sys_open("/dev", O_RDONLY);
-    if (fd == -1) {
+    struct stat stat;
+    if (sys_stat("/dev",&stat) < 0) {
         // 如果 /dev 不存在，创建它并直接返回
         sys_mkdir("/dev");
         return;
     }
-
+    int32_t fd = sys_open("/dev", O_RDONLY);
     // 根据重构后的 sys_readdir，它返回 1 表示成功，0 表示结束
     while (sys_readdir(fd, &de) > 0) {
 

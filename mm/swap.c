@@ -10,6 +10,7 @@
 #include <process.h>
 #include <bitmap.h>
 #include <stdint.h>
+#include <wait_exit.h>
 
 // 使用位图来磁盘管理swap分区中有哪些空间是空闲的
 struct swap_info {

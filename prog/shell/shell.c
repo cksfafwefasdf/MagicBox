@@ -60,11 +60,11 @@ static void cmd_execute(uint32_t argc, char** argv, int32_t pgid_to_set, bool is
             strcpy(exec_path, argv[0]);
         } else {
             make_clear_abs_path(argv[0], exec_path);
-            if (stat(exec_path, &file_stat) == -1) {
+            if (stat(exec_path, &file_stat) < 0) {
                 memset(exec_path, 0, MAX_PATH_LEN);
                 strcpy(exec_path, "/bin/");
                 strcat(exec_path, argv[0]);
-                if (stat(exec_path, &file_stat) == -1) {
+                if (stat(exec_path, &file_stat) < 0) {
                     printf("shell: command not found: %s\n", argv[0]);
                     exit(-1);
                 }

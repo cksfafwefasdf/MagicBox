@@ -7,30 +7,7 @@
 #include <fs_types.h>
 #include <inode.h>
 #include <unitype.h>
-
-// 将 ext2 的 i_mode 字段转换成我们系统的 i_type 字段 
-enum file_types ext2_decode_type(uint16_t mode) {
-    if (S_ISREG(mode))  return FT_REGULAR;
-    if (S_ISDIR(mode))  return FT_DIRECTORY;
-    if (S_ISCHR(mode))  return FT_CHAR_SPECIAL;
-    if (S_ISBLK(mode))  return FT_BLOCK_SPECIAL;
-    if (S_ISFIFO(mode)) return FT_FIFO;
-    if (S_ISLNK(mode))  return FT_SYMBOLIC_LINK;
-    if (S_ISSOCK(mode)) return FT_SOCKET;
-    return FT_UNKNOWN;
-}
-
-uint16_t ext2_encode_type(enum file_types ft,uint16_t mode) {
-    if (ft == FT_REGULAR)  return S_IFREG|mode;
-    if (ft == FT_DIRECTORY)  return S_IFDIR|mode;
-    if (ft == FT_CHAR_SPECIAL)  return S_IFCHR|mode;
-    if (ft == FT_BLOCK_SPECIAL)  return S_IFBLK|mode;
-    if (ft == FT_FIFO)  return S_IFIFO|mode;
-    if (ft == FT_SOCKET)  return S_IFSOCK|mode;
-    if (ft == FT_SYMBOLIC_LINK)  return S_IFLNK|mode;
-
-    return 0;
-}
+#include <time.h>
 
 static struct super_block * ext2_read_super(struct super_block *sb, void *data UNUSED, int silent) {
 
@@ -54,6 +31,13 @@ static struct super_block * ext2_read_super(struct super_block *sb, void *data U
         if (!silent) printk("VFS: device %d is not an ext2 filesystem\n", sb->s_dev);
         return NULL;
     }
+
+    // 更新挂载时间 
+    // raw->s_mtime 是 uint32_t，所以这里会截断，但符合 Ext2 磁盘规范
+    raw->s_mtime = (uint32_t)sys_time();
+
+    // 增加挂载计数
+    raw->s_mnt_count++;
 
     //计算运行时辅助字段
     // BlockSize = 1024 << s_log_block_size
@@ -147,14 +131,19 @@ static void ext2_read_inode(struct inode* inode) {
 
     // 填充 VFS 通用字段 
     inode->i_size = ei->i_size;
-    inode->i_type = ext2_decode_type(ei->i_mode);
+    inode->i_type = decode_imode(ei->i_mode);
+    inode->i_mode = ei->i_mode;
 
     // 填充 Ext2 私有字段 
     memcpy(inode->ext2_i.i_block, ei->i_block, sizeof(uint32_t) * 15);
-    inode->ext2_i.i_mode = ei->i_mode;
     inode->ext2_i.i_links_count = ei->i_links_count;
     inode->ext2_i.i_blocks = ei->i_blocks;
     inode->ext2_i.i_size = ei->i_size; // 记录原始大小
+
+    inode->i_atime = ei->i_atime;
+    inode->i_mtime = ei->i_mtime;
+    inode->i_ctime = ei->i_ctime;
+    inode->ext2_i.i_dtime = ei->i_dtime;
 
     // 处理特殊设备文件
     if (inode->i_type == FT_CHAR_SPECIAL || inode->i_type == FT_BLOCK_SPECIAL) {
@@ -220,7 +209,7 @@ static void ext2_write_inode(struct inode* inode) {
     struct ext2_inode* ei = (struct ext2_inode*)(io_buf + off_in_sec);
 
     // 同步字段
-    ei->i_mode = inode->ext2_i.i_mode; // 包含文件类型和权限
+    ei->i_mode = inode->i_mode; // 包含文件类型和权限
     ei->i_size = inode->i_size;
     ei->i_links_count = inode->ext2_i.i_links_count;
     ei->i_blocks = inode->ext2_i.i_blocks; // 这是以 512 字节为单位的计数，而不是真的按 block 计数
@@ -228,9 +217,23 @@ static void ext2_write_inode(struct inode* inode) {
     // 拷贝块寻址数组 (i_block[15])
     memcpy(ei->i_block, inode->ext2_i.i_block, sizeof(uint32_t) * 15);
 
-    // 后期实现时间相关的 atime/mtime/ctime 操作的话
-    // 可以在这里进行时间戳相关的操作，在此先留位
-    // ei->i_mtime = ...
+    // 更新 ctime (Status Change Time)
+    // 只要进入了这个 write_inode 函数，说明 inode 的元数据（大小、链接数、块指向）变了
+    // 按照 Unix 标准，此时必须更新 ctime。
+    inode->i_ctime = (uint32_t)sys_time(); 
+
+    // 将内存中的三个时间戳刷入磁盘镜像 (ei 是磁盘上的结构)
+    ei->i_atime = inode->i_atime;
+    ei->i_mtime = inode->i_mtime;
+    ei->i_ctime = inode->i_ctime;
+
+    // 处理 dtime (Deletion Time)
+    // 如果链接数为 0，说明文件被删除了，记录删除时间
+    if (inode->ext2_i.i_links_count == 0) {
+        ei->i_dtime = (uint32_t)sys_time();
+    } else {
+        ei->i_dtime = 0;
+    }
 
     // 写回磁盘
     partition_write(part, sec_lba, io_buf, 1);
@@ -243,6 +246,8 @@ static void ext2_write_inode(struct inode* inode) {
 static void ext2_write_super(struct super_block *sb) {
     struct partition *part = get_part_by_rdev(sb->s_dev);
     
+    sb->ext2_info.sb_raw.s_wtime = (uint32_t)sys_time();
+
     // Ext2 超级块始终在分区的 1024 字节偏移处
     // 无论块大小是 1KB, 2KB 还是 4KB，LBA 始终是从 2 开始（512字节扇区）
     // 超级块结构体本身 1024 字节，所以占 2 个扇区

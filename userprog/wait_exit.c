@@ -75,7 +75,7 @@ pid_t sys_wait(int32_t* status){
 			struct task_struct* child_thread = member_to_entry(struct task_struct,all_list_tag,child_elem);
 			if(status!=NULL){
 				// *status = child_thread->exit_status;
-				printk("Writing exit_status to vaddr: %x\n", status);
+				// printk("Writing exit_status to vaddr: %x\n", status);
         		*status = child_thread->exit_status;
 			}
 
@@ -87,7 +87,7 @@ pid_t sys_wait(int32_t* status){
 			release_pg_table(child_thread);
 			release_pg_dir(child_thread);
 			thread_exit(child_thread,false);
-			put_str("sys_wait is about to return to userland...\n");
+			// put_str("sys_wait is about to return to userland...\n");
 			return child_pid;
 		}
 
@@ -103,7 +103,7 @@ pid_t sys_wait(int32_t* status){
 void sys_exit(int32_t status){
 	struct task_struct* child_thread = get_running_task_struct();
 	child_thread->exit_status = status;
-	if(child_thread->parent_pid==-1){
+	if(child_thread->parent_pid == -1){
 		PANIC("sys_exit: child_thread->parent_pid is -1\n");
 	}
 
