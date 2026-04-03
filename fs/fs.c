@@ -1050,6 +1050,7 @@ int32_t sys_stat(const char* _pathname, struct stat* buf) {
         buf->st_ctime = root_dir_inode->i_ctime;
         buf->st_mode = root_dir_inode->i_mode;
         buf->st_dev = root_dir_inode->i_dev;
+        buf->st_blksize = root_dir_inode->i_sb->s_block_size;
         return 0;
     }
 
@@ -1076,6 +1077,7 @@ int32_t sys_stat(const char* _pathname, struct stat* buf) {
         buf->st_dev = obj_inode->i_dev;
         buf->st_mode = obj_inode->i_mode;
         buf->st_filetype = searched_record.file_type;
+        buf->st_blksize = root_dir_inode->i_sb->s_block_size;
         
         buf->st_nlink = 1; // 在实现link操作前，Ext2 默认为 1
         buf->st_uid = 0;   // root

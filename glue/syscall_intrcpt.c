@@ -9,6 +9,11 @@
 #include <memory.h>
 #include <syscall-init.h>
 #include <wait_exit.h>
+#include <linux_stat.h>
+#include <fs_types.h>
+#include <thread.h>
+#include <file_table.h>
+#include <debug.h>
 
 // 用于和 Linux 的 writev 调用对齐
 // 我们用多次 write 操作来简单的模拟 writev 操作
@@ -61,6 +66,91 @@ static uint32_t musl_sys_mmap2(uint32_t addr, uint32_t len, uint32_t prot, uint3
         return (uint32_t)MAP_FAILED;
     }
     return sys_mmap_direct(addr, len, prot, flags, fd, pgoff << 12);
+}
+
+static int32_t linux_sys_stat64(const char* pathname, struct linux_stat64* buf) {
+    struct stat kstat; // MagicBox 内核定义的 stat
+    
+    // 调用 MagicBox 原生的 sys_stat 获取数据
+    int32_t ret = sys_stat(pathname, &kstat);
+    if (ret < 0) return ret;
+
+    // 格式转换，从 stat (MagicBox) 搬运到 linux_stat64 (Linux ABI)
+    memset(buf, 0, sizeof(struct linux_stat64));
+        buf->st_dev = kstat.st_dev;
+    buf->st_ino = kstat.st_ino; // 低位 Inode
+    buf->st_mode = kstat.st_mode;
+    buf->st_nlink = kstat.st_nlink;
+    buf->st_uid = kstat.st_uid;
+    buf->st_gid = kstat.st_gid;
+    buf->st_rdev = kstat.st_rdev;
+    buf->st_size = kstat.st_size; // 这里是 int64，已经对齐了 stat64 的要求
+    
+    buf->st_blksize = kstat.st_blksize; 
+    buf->st_blocks = (kstat.st_size + 511) / SECTOR_SIZE; // 以 512 字节块为单位计
+
+    // 时间戳转换
+    buf->st_atime = kstat.st_atime;
+    buf->st_atime_nsec = 0; // 我们暂不支持纳秒，填 0 即可
+    buf->st_mtime = kstat.st_mtime;
+    buf->st_mtime_nsec = 0;
+    buf->st_ctime = kstat.st_ctime;
+    buf->st_ctime_nsec = 0;
+
+    buf->st_ino = kstat.st_ino; // stat64 末尾还有一个真正的 64 位 inode 字段
+
+    return 0;
+}
+
+// linux_sys_fstat64 对接 0xc5
+// 意为使用 fd 来获取文件信息而不是path
+static int32_t linux_sys_fstat64(int32_t fd, struct linux_stat64* buf) {
+    // 检查 fd 是否越界
+    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC) {
+        return -EBADF;
+    }
+
+    // 从当前进程的 fd_table 中获取文件结构
+    struct task_struct* cur = get_running_task_struct();
+    int32_t global_fd = fd_local2global(cur,fd);
+    struct file* file = &file_table[global_fd];
+
+    // 检查该 fd 是否指向一个有效的 inode
+    if (file->fd_inode == NULL) {
+        return -EBADF;
+    }
+
+    struct inode* inv = file->fd_inode;
+    printk("inode no: %d\n",inv->i_no);
+
+    // 填充 linux_stat64 结构体
+    // 先清空，防止内核栈数据泄露
+    memset(buf, 0, sizeof(struct linux_stat64));
+
+    buf->st_dev = inv->i_dev;
+    buf->__st_ino = inv->i_no;     // 传统 32 位 inode
+    buf->st_mode = inv->i_mode;
+    buf->st_nlink = 1;              // 暂时硬编码为 1
+    buf->st_uid = 0;                // root
+    buf->st_gid = 0;                // root
+    buf->st_rdev = inv->i_dev;      // 简单起见同 st_dev
+    buf->st_size = inv->i_size;     // 64 位文件大小
+    
+    
+    buf->st_blksize = inv->i_sb->s_block_size; 
+    buf->st_blocks = (inv->i_size + 511) / SECTOR_SIZE;
+
+    buf->st_atime = inv->i_atime;
+    buf->st_atime_nsec = 0;
+    buf->st_mtime = inv->i_mtime;
+    buf->st_mtime_nsec = 0;
+    buf->st_ctime = inv->i_ctime;
+    buf->st_ctime_nsec = 0;
+
+    // 结构体末尾的真实 64 位 Inode 字段
+    buf->st_ino = (unsigned long long)inv->i_no;
+
+    return 0; // 成功返回 0
 }
 
 // 根据 i386 Linux ABI:
@@ -191,6 +281,22 @@ void musl_syscall_interceptor(struct intr_stack* stack) {
             int32_t fd = (int32_t)stack->ebx;
 
             ret = sys_close(fd);
+            break;
+        }
+
+        case __NR_stat64: { // 通过路径来获取文件信息
+            const char* path = (const char*)stack->ebx;
+            struct linux_stat64* linux_buf = (struct linux_stat64*)stack->ecx;
+            
+            ret = linux_sys_stat64(path, linux_buf);
+            break;
+        }
+
+        case __NR_fstat64: { // 通过描述符fd来获取文件信息
+            int32_t fd = (int32_t)stack->ebx;
+            struct linux_stat64* linux_buf = (struct linux_stat64*)stack->ecx;
+            
+            ret = linux_sys_fstat64(fd, linux_buf);
             break;
         }
 

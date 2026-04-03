@@ -131,6 +131,8 @@ struct stat {
     uint32_t st_atime;    // 最后访问
     uint32_t st_mtime;    // 最后修改
     uint32_t st_ctime;    // 最后状态改变
+
+    uint32_t st_blksize; // 文件系统的块大小
     
     // 内部快捷访问字段
     enum file_types st_filetype; 

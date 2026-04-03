@@ -1,5 +1,5 @@
-#ifndef __INCLUDE_LINUX_STAT_H
-#define __INCLUDE_LINUX_STAT_H
+#ifndef __INCLUDE_LINUX_LINUX_STAT_H
+#define __INCLUDE_LINUX_LINUX_STAT_H
 
 #define STAT_HAVE_NSEC 1
 
@@ -58,7 +58,7 @@ struct linux_stat64 {
 	unsigned long	st_ctime_nsec;
 
 	unsigned long long	st_ino;
-};
+}__attribute__((packed));
 
 /* for 32bit emulation and 32 bit kernels */
 struct __old_kernel_stat {

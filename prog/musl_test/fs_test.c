@@ -24,11 +24,11 @@ int main() {
         // 触发 SYS_write (4) 或 SYS_writev (146)
         const char* msg = "Hello from MagicBox OS via Musl-gcc!\n";
         ssize_t bytes = write(fd, msg, strlen(msg));
-        printf("Written %ld bytes to fd %d\n", bytes, fd);
+        printf("Written %d bytes to fd %d\n", bytes, fd);
 
         // 触发 SYS_lseek (19)
         off_t offset = lseek(fd, 0, SEEK_SET);
-        printf("Lseek back to %ld\n", offset);
+        printf("Lseek back to %lld\n", offset);
 
         // 触发 SYS_read (3)
         char read_buf[64] = {0};
@@ -38,7 +38,7 @@ int main() {
         // 触发 SYS_fstat64 (197)
         struct stat st;
         if (fstat(fd, &st) == 0) {
-            printf("Fstat: Size = %ld, Inode = %ld\n", st.st_size, st.st_ino);
+            printf("Fstat: Size = %lld, Inode = %llu\n", st.st_size, st.st_ino);
         }
 
         // 触发 SYS_close (6)
@@ -47,19 +47,19 @@ int main() {
     }
 
     // // --- 内存管理部分 ---
-    // printf("\n--- [3] Testing Memory (Malloc/Free/Brk) ---\n");
-    // // 触发 SYS_brk (45) 或 SYS_mmap2 (192)
-    // void* ptr = malloc(1024 * 4); 
-    // if (ptr) {
-    //     strcpy(ptr, "Dynamic memory is working!");
-    //     printf("Malloc address: %p, content: %s\n", ptr, (char*)ptr);
-    //     free(ptr);
-    //     printf("Free success.\n");
-    // }
+    printf("\n--- [3] Testing Memory (Malloc/Free/Brk) ---\n");
+    // 触发 SYS_brk (45) 或 SYS_mmap2 (192)
+    void* ptr = malloc(1024 * 4); 
+    if (ptr) {
+        strcpy(ptr, "Dynamic memory is working!");
+        printf("Malloc address: %p, content: %s\n", ptr, (char*)ptr);
+        free(ptr);
+        printf("Free success.\n");
+    }
 
-    // // --- 目录操作部分 ---
+    // --- 目录操作部分 ---
     // printf("\n--- [4] Testing Directory (Opendir/Getdents) ---\n");
-    // // 触发 SYS_open (5) 并带 O_DIRECTORY 标志，接着触发 SYS_getdents64 (220)
+    // 触发 SYS_open (5) 并带 O_DIRECTORY 标志，接着触发 SYS_getdents64 (220)
     // DIR* dir = opendir("/");
     // if (dir) {
     //     struct dirent* de;
@@ -72,7 +72,7 @@ int main() {
     //     perror("opendir / failed");
     // }
 
-    // printf("\n--- [5] Testing Final Exit ---\n");
+    printf("\n--- [5] Testing Final Exit ---\n");
     // 触发 SYS_exit_group (252)
     return 0;
 }

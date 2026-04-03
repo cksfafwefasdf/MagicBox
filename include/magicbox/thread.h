@@ -8,7 +8,7 @@
 #include <unitype.h>
 
 // each process can open 8 files at most
-#define MAX_FILES_OPEN_PER_PROC 8
+#define MAX_FILES_OPEN_PER_PROC 32
 #define TASK_NAME_LEN 64
 #define MAX_PID_NUM 1024
 #define MAX_PID_NUM_IN_BYTE MAX_PID_NUM/8
