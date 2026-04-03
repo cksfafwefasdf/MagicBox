@@ -58,19 +58,19 @@ int main() {
     }
 
     // --- 目录操作部分 ---
-    // printf("\n--- [4] Testing Directory (Opendir/Getdents) ---\n");
+    printf("\n--- [4] Testing Directory (Opendir/Getdents) ---\n");
     // 触发 SYS_open (5) 并带 O_DIRECTORY 标志，接着触发 SYS_getdents64 (220)
-    // DIR* dir = opendir("/");
-    // if (dir) {
-    //     struct dirent* de;
-    //     printf("Contents of '/':\n");
-    //     while ((de = readdir(dir)) != NULL) {
-    //         printf("  - %s (type: %d)\n", de->d_name, de->d_type);
-    //     }
-    //     closedir(dir);
-    // } else {
-    //     perror("opendir / failed");
-    // }
+    DIR* dir = opendir("/");
+    if (dir) {
+        struct dirent* de;
+        printf("Contents of '/':\n");
+        while ((de = readdir(dir)) != NULL) {
+            printf("  - %s (type: %d)\n", de->d_name, de->d_type);
+        }
+        closedir(dir);
+    } else {
+        perror("opendir / failed");
+    }
 
     printf("\n--- [5] Testing Final Exit ---\n");
     // 触发 SYS_exit_group (252)

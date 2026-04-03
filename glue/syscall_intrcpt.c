@@ -14,6 +14,7 @@
 #include <thread.h>
 #include <file_table.h>
 #include <debug.h>
+#include <linux_dirent.h>
 
 // 用于和 Linux 的 writev 调用对齐
 // 我们用多次 write 操作来简单的模拟 writev 操作
@@ -151,6 +152,63 @@ static int32_t linux_sys_fstat64(int32_t fd, struct linux_stat64* buf) {
     buf->st_ino = (unsigned long long)inv->i_no;
 
     return 0; // 成功返回 0
+}
+
+// 用户态的 readdir 函数底层会进行这个调用
+static int32_t linux_sys_getdents64(int32_t fd, void* dirp, uint32_t count) {
+    struct task_struct* cur = get_running_task_struct();
+    int32_t _fd = fd_local2global(cur, fd);
+    struct file* f = &file_table[_fd];
+    
+    if (f->fd_inode == NULL || f->fd_inode->i_type != FT_DIRECTORY) return -EBADF;
+
+    uint32_t bytes_written = 0;
+    struct dirent kde;
+
+    while (bytes_written < count) {
+        // 记录读取前的偏移量
+        uint32_t last_pos = f->fd_pos;
+
+        // status == 0 表示成功读到一个
+        int status = f->f_op->readdir(f->fd_inode, f, &kde, 0);
+        if (status != 0) break; // 读取结束或失败
+
+        // 计算 Linux 格式需要的长度 (对齐到 8 字节)
+        int name_len = strlen(kde.d_name);
+        // 19是linux_dirent64头部固定长度
+        // 由于这个结构体里面有一个柔性数组，所以最好不要用sizeof来计算头部的大小
+        // 不然编译器编译后会给我们带来很多问题！
+        int linux_reclen = (19 + name_len + 1 + 7) & ~7; 
+
+        // 检查缓冲区是否够用
+        if (bytes_written + linux_reclen > count) {
+            // 放不下了，必须把文件指针退回到读取这一条之前
+            // 否则这一条数据在下一次系统调用时就被跳过了
+            f->fd_pos = last_pos; 
+            break; 
+        }
+
+        // 手动填充用户缓冲区
+        struct linux_dirent64* udir = (struct linux_dirent64*)((char*)dirp + bytes_written);
+        udir->d_ino = (uint64_t) kde.d_ino;
+        // Linux 规范中，d_off 应该指向下一个条目的起始偏移
+        udir->d_off = (int64_t) f->fd_pos; // 记录当前读取到的偏移
+        udir->d_reclen = (unsigned short)linux_reclen;
+        udir->d_type = kde.d_type;
+        // 我们的 FT_REGULAR 等与 Linux 一致，不用映射 
+        // 拷贝文件名并确保末尾填充 0（防止泄露内核栈余温）
+        strcpy(udir->d_name, kde.d_name);
+
+        // 清理对齐产生的填充位
+        int actual_data_len = 19 + name_len + 1;
+        if (linux_reclen > actual_data_len) {
+            memset((char*)udir + actual_data_len, 0, linux_reclen - actual_data_len);
+        }
+
+        bytes_written += linux_reclen;
+    }
+
+    return bytes_written; // 返回实际填入缓冲区的字节数
 }
 
 // 根据 i386 Linux ABI:
@@ -299,6 +357,10 @@ void musl_syscall_interceptor(struct intr_stack* stack) {
             ret = linux_sys_fstat64(fd, linux_buf);
             break;
         }
+
+        case __NR_getdents64: // 用户态的 readdir 函数底层会进行这个调用
+            ret = linux_sys_getdents64((int32_t)stack->ebx, (void*)stack->ecx, (uint32_t)stack->edx);
+            break;
 
         default:
             printk("Unknown Syscall 0x%x\n", m_eax);

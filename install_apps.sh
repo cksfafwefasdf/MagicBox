@@ -15,7 +15,7 @@ mkdir -p "$BUILD_DIR"
 rm -f "$TAR_NAME"
 
 # 编译选项
-CFLAGS="-Wall -c -fno-builtin -m32 -fno-stack-protector -I $LIB_DIR -I $LIB_DIR/uapi -I $LIB_DIR/sys"
+CFLAGS="-Wall -c -fno-builtin -m32 -fno-stack-protector -I $LIB_DIR -I $LIB_DIR/uapi -I $LIB_DIR/sys -I $LIB_DIR/linux"
 BASE_OBJS="$KERNEL_BUILD/string.o $KERNEL_BUILD/syscall.o $KERNEL_BUILD/stdio.o $KERNEL_BUILD/assert.o"
 
 # 编译 CRT 入口

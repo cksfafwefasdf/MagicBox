@@ -10,6 +10,18 @@
 #include <thread.h>
 #include <vma.h>
 
+// 用于将 ext2 中的文件类型字段转换成在 Linux ABI 层上的定义
+static const uint8_t ext2_to_linux_dt[] = {
+    [FT_UNKNOWN]       = DT_UNKNOWN,
+    [FT_REGULAR]       = DT_REG, 
+    [FT_DIRECTORY]     = DT_DIR, 
+    [FT_CHAR_SPECIAL]  = DT_CHR, 
+    [FT_BLOCK_SPECIAL] = DT_BLK, 
+    [FT_FIFO]          = DT_FIFO, 
+    [FT_SOCKET]        = DT_SOCK,
+    [FT_SYMBOLIC_LINK] = DT_LNK, 
+};
+
 static uint32_t ext2_mmap_prot_to_vm_flags(uint32_t prot) {
     uint32_t vma_flags = 0;
     if (prot & PROT_READ) {
@@ -112,7 +124,10 @@ static int32_t ext2_readdir(struct inode* inode UNUSED, struct file* file, struc
             if (p_de->i_no != 0) {
                 // 找到有效条目，填充通用 dirent
                 de->d_ino = p_de->i_no;
-                de->d_type = p_de->file_type; // Ext2 的 file_type 与 enum 类型兼容
+                // Ext2 的 file_type 与 enum 类型兼容
+                // 由于不同文件系统对文件类型的定义不同
+                // 因此提交到vfs时要转化成统一的 linux abi
+                de->d_type = ext2_to_linux_dt[p_de->file_type]; 
                 de->d_off = file->fd_pos;
                 de->d_reclen = sizeof(struct dirent);
                 

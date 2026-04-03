@@ -27,6 +27,15 @@
 
 #define MAP_FAILED ((void*)-1)
 
+#define DT_UNKNOWN 0
+#define DT_REG 8
+#define DT_DIR 4
+#define DT_CHR 2 
+#define DT_BLK 6
+#define DT_FIFO 1 
+#define DT_SOCK  12 // FT_SOCKET
+#define DT_LNK 10 // FT_SYMBOLIC_LINK 
+
 // mmap 函数的参数包
 struct mmap_args {
     uint32_t addr;
@@ -83,7 +92,6 @@ struct dirent {
     uint16_t d_reclen; // 当前 dirent 的长度
     uint8_t  d_type; // 文件类型
 	// 文件名字符串，默认占一个固定长度来兼容sifs
-	// 在 ext2 里面就使用 d_reclen 来定位，可以无视 MAX_FILE_NAME_LEN
     char d_name[MAX_FILE_NAME_LEN]; 
 };
 

@@ -12,6 +12,18 @@
 #include <inode.h>
 #include <fs_types.h> 
 
+// 用于将 sifs 中的文件类型字段转换成在 Linux ABI 层上的定义
+static const uint8_t sifs_to_linux_dt[] = {
+    [FT_UNKNOWN]       = DT_UNKNOWN,
+    [FT_REGULAR]       = DT_REG, 
+    [FT_DIRECTORY]     = DT_DIR, 
+    [FT_CHAR_SPECIAL]  = DT_CHR, 
+    [FT_BLOCK_SPECIAL] = DT_BLK, 
+    [FT_FIFO]          = DT_FIFO, 
+    [FT_SOCKET]        = DT_SOCK,
+    [FT_SYMBOLIC_LINK] = DT_LNK, 
+};
+
 bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, const char* name,int len, struct sifs_dir_entry* de) {
     // 计算所有可能的块地址（包括一级间接块）
     uint32_t block_cnt = DIRECT_INDEX_BLOCK + (SECTOR_SIZE / ADDR_BYTES_32BIT);
@@ -374,7 +386,7 @@ int32_t sifs_readdir(struct inode* inode UNUSED, struct file* file, struct diren
             if (cur_sifs_de->f_type != FT_UNKNOWN) {
                 // 将 SIFS 磁盘镜像转为通用 dirent
                 de->d_ino = cur_sifs_de->i_no;
-                de->d_type = cur_sifs_de->f_type;
+                de->d_type = sifs_to_linux_dt[cur_sifs_de->f_type];
                 de->d_off = file->fd_pos;
                 de->d_reclen = sizeof(struct dirent);
                 memset(de->d_name, 0, MAX_FILE_NAME_LEN);

@@ -184,7 +184,7 @@ void buildin_ls(uint32_t argc, char** argv) {
             printf("total: %d\n", (int32_t)file_stat.st_size);
             while (readdir(fd, &dir_e) > 0) {
         
-                char ftype = (dir_e.d_type == FT_DIRECTORY) ? 'd' : '-';
+                char ftype = (DT_DIR == dir_e.d_type) ? 'd' : '-';
 
                 sub_pathname[pathname_len] = 0;
                 
@@ -197,11 +197,11 @@ void buildin_ls(uint32_t argc, char** argv) {
                 }
 
 				// st_size 是 64 位的，为了防止 printf 读 dir_e.d_name 读到 st_size 的高 32 位，我们要将这个数据强转成 32 位的
-                if (FT_DIRECTORY == dir_e.d_type) {
+                if (DT_DIR == dir_e.d_type) {
                     printf("%c %d %d " BLUE "%s" RESET "\n", ftype, dir_e.d_ino, (int32_t)file_stat.st_size, dir_e.d_name);
-                } else if (FT_CHAR_SPECIAL == dir_e.d_type) {
+                } else if (DT_CHR == dir_e.d_type) {
                     printf("%c %d %d " RED "%s" RESET "\n", ftype, dir_e.d_ino,  (int32_t)file_stat.st_size, dir_e.d_name);
-                } else if (FT_BLOCK_SPECIAL == dir_e.d_type) {
+                } else if (DT_BLK == dir_e.d_type) {
                     printf("%c %d %d " YELLOW "%s" RESET "\n", ftype, dir_e.d_ino,  (int32_t)file_stat.st_size, dir_e.d_name);
                 } else {
                     printf("%c %d %d %s\n", ftype, dir_e.d_ino,  (int32_t)file_stat.st_size, dir_e.d_name);
@@ -210,11 +210,11 @@ void buildin_ls(uint32_t argc, char** argv) {
         } else {
             // 简略模式
             while (readdir(fd, &dir_e) > 0) {
-                if (FT_DIRECTORY == dir_e.d_type) {
+                if (DT_DIR == dir_e.d_type) {
                     printf(BLUE "%s " RESET, dir_e.d_name);
-                } else if (FT_CHAR_SPECIAL == dir_e.d_type) {
+                } else if (DT_CHR == dir_e.d_type) {
                     printf(RED "%s " RESET, dir_e.d_name);
-                } else if (FT_BLOCK_SPECIAL == dir_e.d_type) {
+                } else if (DT_BLK == dir_e.d_type) {
                     printf(YELLOW "%s " RESET, dir_e.d_name);
                 } else {
                     printf("%s ", dir_e.d_name);
