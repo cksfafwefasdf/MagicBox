@@ -97,6 +97,10 @@
   - `brk`
   - `mmap2`
   - `munmap`
+  - `open`
+  - `write`
+  - `read`
+  - `close`
   - `madvise` *(currently treated as a compatibility hint / no-op)*
 
 **Storage & Recovery:**
