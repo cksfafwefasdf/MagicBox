@@ -216,6 +216,16 @@ qemu-system-i386 \
   -drive file=hd20M_share.img,format=raw,index=2,media=disk
 ```
 
+If you want to use the UART, try:
+
+```shell
+qemu-system-i386 \
+  -m 32 \
+  -drive file=hd60M.img,format=raw,index=0,media=disk \
+  -drive file=hd80M.img,format=raw,index=1,media=disk \
+  -nographic -serial mon:stdio
+```
+
 #### **Hardware Simulation Mode**
 
 To better simulate real hardware behavior (including sync disk I/O and precise clocking), use the following:
