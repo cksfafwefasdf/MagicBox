@@ -33,7 +33,12 @@ void tty_input_handler(char c) {
             uint32_t last_idx = (console_tty.ibuf.head - 1 + BUFSIZE) % BUFSIZE;
             if (console_tty.ibuf.buf[last_idx] != '\n') {
                 ioq_popchar(&console_tty.ibuf);
-                if (term->c_lflag & ECHO) console_put_char('\b');
+                // if (term->c_lflag & ECHO) console_put_char('\b');
+
+                // 我们的 print.s 中会处理 \b 后的光标移动以及空格输出，但是走 uart 时就没法处理了
+                // 因为现代的linux例如ubuntu接收到\b后只会移动光标，不会输出空格
+                // 因此我们在此直接输出一个 "\b \b"，手动把相应的字符删除，让vga和uart都能处理
+                if (term->c_lflag & ECHO) console_put_str("\b \b");
             }
         }
         return;

@@ -46,7 +46,7 @@ int main() {
         printf("File closed.\n");
     }
 
-    // // --- 内存管理部分 ---
+    // --- 内存管理部分 ---
     printf("\n--- [3] Testing Memory (Malloc/Free/Brk) ---\n");
     // 触发 SYS_brk (45) 或 SYS_mmap2 (192)
     void* ptr = malloc(1024 * 4); 

@@ -15,6 +15,7 @@
 #include <file_table.h>
 #include <debug.h>
 #include <linux_dirent.h>
+#include <time.h>
 
 // 用于和 Linux 的 writev 调用对齐
 // 我们用多次 write 操作来简单的模拟 writev 操作
@@ -122,7 +123,6 @@ static int32_t linux_sys_fstat64(int32_t fd, struct linux_stat64* buf) {
     }
 
     struct inode* inv = file->fd_inode;
-    printk("inode no: %d\n",inv->i_no);
 
     // 填充 linux_stat64 结构体
     // 先清空，防止内核栈数据泄露
@@ -361,6 +361,20 @@ void musl_syscall_interceptor(struct intr_stack* stack) {
         case __NR_getdents64: // 用户态的 readdir 函数底层会进行这个调用
             ret = linux_sys_getdents64((int32_t)stack->ebx, (void*)stack->ecx, (uint32_t)stack->edx);
             break;
+
+        case __NR_unlink: { 
+            const char* path = (const char*)stack->ebx;
+            ret = sys_unlink(path);
+            break;
+        }
+
+        case __NR_time: {
+            uint32_t* tloc = (uint32_t*)stack->ebx;
+            int32_t now = sys_time(); // 返回 Unix 秒数
+            if (tloc) *tloc = now;
+            ret = now;
+            break;
+        }
 
         default:
             printk("Unknown Syscall 0x%x\n", m_eax);

@@ -3,6 +3,8 @@
 #include <interrupt.h>
 #include <stdio.h>
 #include <syscall.h>
+#include <uart.h>
+#include <stdio-kernel.h>
 
 void panic_spin(char* filename,int line,const char* func,const char* condition){
    	intr_disable();
@@ -11,6 +13,19 @@ void panic_spin(char* filename,int line,const char* func,const char* condition){
     put_str("line: 0x");put_int(line);put_str("\n");
     put_str("function: ");put_str((char*)func);put_str("\n");
     put_str("condition: ");put_str((char*)condition);put_str("\n");
+
+    // 同时向uart转发一份
+    uart_puts("\n\n\n!!!!!!!!!! error !!!!!!!!!!\n");
+    uart_puts("filename: ");uart_puts(filename);uart_puts("\n");
+    uart_puts("line: 0x");
+    // 如果在系统初始化早期的panic操作出现了问题
+    // 可以检查一下这个printk操作是否在那时可用
+    // 但是按理来说，只要console初始化完毕了，这个函数应该就能正常输出内容了
+    printk("%x",line);
+    
+    uart_puts("\n");
+    uart_puts("function: ");uart_puts((char*)func);uart_puts("\n");
+    uart_puts("condition: ");uart_puts((char*)condition);uart_puts("\n");
 
     // 开始栈回溯
     // C 语言在编译成汇编代码时，遵循了一套标准化的函数调用规约

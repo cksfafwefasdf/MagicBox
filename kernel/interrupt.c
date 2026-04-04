@@ -17,6 +17,13 @@
 #define PIC_S_CTRL 0xa0 // slave-control-port => ICW1，OCW2, OCW3
 #define PIC_S_DATA 0xa1 // slave-data-port => ICW2 ICW3 ICW4  OCW1
 
+#define IRQ0_TIMER    0x01
+#define IRQ1_KEYBOARD 0x02
+#define IRQ2_SLAVE    0x04
+#define IRQ4_SERIAL   0x10
+#define IRQ14_ATA1    0x40
+#define IRQ15_ATA2    0x80
+
 #define EFLAGS_IF 0x00000200
 
 #define GET_EFLAGS(EFLAGS_VAR) asm volatile ("pushfl;popl %0":"=g"(EFLAGS_VAR));
@@ -84,11 +91,19 @@ static void pic_init(void){
 
     // allow IRQ0(timer),IRQ1(keyboard) ,IRQ2(slave 8259A),IRQ14(ata-1)
     // IMR for master 
-    outb(PIC_M_DATA,0xf8);
+    // outb(PIC_M_DATA,0xf8);
     // IMR(intr mask) for slave
     // outb(PIC_S_DATA,0xbf);
     // 不要屏蔽磁盘的secondary通道，以便支持更多的磁盘
-    outb(PIC_S_DATA, 0x3f);
+    // outb(PIC_S_DATA, 0x3f);
+
+    // Master IMR，允许 0, 1, 2, 4
+    // ~(0x01 | 0x02 | 0x04 | 0x10) = 0xE8
+    outb(PIC_M_DATA, ~(IRQ0_TIMER | IRQ1_KEYBOARD | IRQ2_SLAVE | IRQ4_SERIAL));
+
+    // Slave IMR，允许 14, 15 (即 Bit 6, 7)
+    // ~(0x40 | 0x80) = 0x3F
+    outb(PIC_S_DATA, ~(IRQ14_ATA1 | IRQ15_ATA2));
 
     put_str("init pic done\n");
 }

@@ -585,7 +585,13 @@ int32_t sys_read(int32_t fd, void* buf, uint32_t count) {
         printk("sys_read: fd error! fd cannot be negative\n");
         return -EBADF;
     }
-    ASSERT(buf != NULL);
+    // ASSERT(buf != NULL);
+
+    if (buf == NULL) {
+    printk("sys_read: process [%d] passed NULL buffer, count=%d\n", 
+            get_running_task_struct()->pid, count);
+        return -EFAULT;
+    }
 
     // 获取全局文件结构体
     int32_t global_fd_idx = fd_local2global(get_running_task_struct(), fd);
@@ -654,7 +660,7 @@ int32_t sys_unlink(const char* _pathname) {
         if (searched_record.parent_inode && searched_record.parent_inode != root_dir_inode) {
             inode_close(searched_record.parent_inode);
         }
-        return -1;
+        return -ENOENT;
     }
 
     // 检查文件类型，unlink 只能删除非目录文件
@@ -663,7 +669,7 @@ int32_t sys_unlink(const char* _pathname) {
         if (searched_record.parent_inode != root_dir_inode) {
             inode_close(searched_record.parent_inode);
         }
-        return -1;
+        return -EISDIR;
     }
 
     // 检查文件是否正在被系统打开
@@ -682,7 +688,7 @@ int32_t sys_unlink(const char* _pathname) {
             inode_close(searched_record.parent_inode);
         }
         printk("file %s is in use, not allowed to delete!\n", pathname);
-        return -1;
+        return -EBUSY;
     }
 
     // 执行磁盘数据删除逻辑
@@ -698,6 +704,7 @@ int32_t sys_unlink(const char* _pathname) {
         parent_inode->i_op->unlink(parent_inode, last_name, name_len);
     }else{
         PANIC("parent_inode->i_op->unlink is NULL");
+        return -EPERM;
     }
   
     // 清理 search_file 留在内存里的父目录句柄

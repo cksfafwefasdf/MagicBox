@@ -1,0 +1,314 @@
+# 如何在系统中使用tcc来编译程序
+
+## 1.安装 musl
+
+首先，先下载 [musl-1.0.5](https://musl.libc.org/releases/musl-1.0.5.tar.gz) 的源码，然后解压后进入源码根目录
+
+进入musl源码目录，执行下面的代码进行配置
+
+```shell
+# musl 的包装器是路径敏感的，他不会自动展开 ~
+# 所以最好用 $HOME
+./configure \
+    --target=i686 \
+    --prefix=$HOME/musl-install \
+    CC='gcc -m32' \
+    CFLAGS='-m32 -march=i486 -fno-stack-protector' \
+    --enable-gcc-wrapper
+```
+
+之后执行下面的命令进行编译和安装
+
+```shell
+mkdir ~/musl-install
+# 编译
+make -j$(nproc)
+# 虚拟安装到一个临时打包目录，安装在前面指定的prefix目录下
+make install
+```
+
+这样，musl 库就被安装在了 prefix 所指定的目录下。
+
+之后进行下面的操作
+
+```shell
+# 切换到安装目录
+cd ~/musl-install
+# （可选）为了便于操作，为 musl-gcc 包装器创建一个符号链接
+ln -s $(pwd)/bin/musl-gcc musl-gcc
+# （可选）将符号链接拷贝到 /usr/bin 目录下，以便在宿主机上可以直接调用
+sudo mv ./musl-gcc /usr/bin
+```
+
+然后编写下面的 `test.c` 程序，使用 musl 的 gcc 包装器来编译
+
+```c
+// test.c
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <dirent.h>
+
+int main() {
+    printf("--- [1] Testing PID & Basic I/O ---\n");
+    printf("Current PID: %d\n", getpid()); // 触发 SYS_getpid (20)
+
+    // --- 文件操作部分 ---
+    printf("\n--- [2] Testing File System (Open/Write/Close) ---\n");
+    const char* filename = "/test_musl.txt";
+    
+    // 触发 SYS_open (5)
+    int fd = open(filename, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        perror("open failed");
+    } else {
+        printf("Open '%s' success, fd: %d\n", filename, fd);
+
+        // 触发 SYS_write (4) 或 SYS_writev (146)
+        const char* msg = "Hello from MagicBox OS via Musl-gcc!\n";
+        ssize_t bytes = write(fd, msg, strlen(msg));
+        printf("Written %d bytes to fd %d\n", bytes, fd);
+
+        // 触发 SYS_lseek (19)
+        off_t offset = lseek(fd, 0, SEEK_SET);
+        printf("Lseek back to %lld\n", offset);
+
+        // 触发 SYS_read (3)
+        char read_buf[64] = {0};
+        read(fd, read_buf, sizeof(read_buf));
+        printf("Read back: %s", read_buf);
+
+        // 触发 SYS_fstat64 (197)
+        struct stat st;
+        if (fstat(fd, &st) == 0) {
+            printf("Fstat: Size = %lld, Inode = %llu\n", st.st_size, st.st_ino);
+        }
+
+        // 触发 SYS_close (6)
+        close(fd);
+        printf("File closed.\n");
+    }
+
+    // --- 内存管理部分 ---
+    printf("\n--- [3] Testing Memory (Malloc/Free/Brk) ---\n");
+    // 触发 SYS_brk (45) 或 SYS_mmap2 (192)
+    void* ptr = malloc(1024 * 4); 
+    if (ptr) {
+        strcpy(ptr, "Dynamic memory is working!");
+        printf("Malloc address: %p, content: %s\n", ptr, (char*)ptr);
+        free(ptr);
+        printf("Free success.\n");
+    }
+
+    // --- 目录操作部分 ---
+    printf("\n--- [4] Testing Directory (Opendir/Getdents) ---\n");
+    // 触发 SYS_open (5) 并带 O_DIRECTORY 标志，接着触发 SYS_getdents64 (220)
+    DIR* dir = opendir("/");
+    if (dir) {
+        struct dirent* de;
+        printf("Contents of '/':\n");
+        while ((de = readdir(dir)) != NULL) {
+            printf("  - %s (type: %d)\n", de->d_name, de->d_type);
+        }
+        closedir(dir);
+    } else {
+        perror("opendir / failed");
+    }
+
+    printf("\n--- [5] Testing Final Exit ---\n");
+    // 触发 SYS_exit_group (252)
+    return 0;
+}
+```
+
+运行下面的指令来编译
+
+```shell
+bin/musl-gcc -g -O0 -fno-stack-protector -m32 -static test.c -o test -Wl,-m,elf_i386
+```
+
+得到 `test` 文件，编译完毕后，在宿主机上运行一下看看有没有问题，没有问题就把编译好的可运行文件拷贝到 MagicBox 上运行一下，看看有没有问题。
+
+在 MagicBox 中的运行结果大概是这样的话，那么就没问题了，关键看 `Contents of '/':` 这一块的内容和实际根目录下的内容是否一致。
+
+```shell
+--- [1] Testing PID & Basic I/O ---
+Intrcpt: warning, use lseek as llseek
+Current PID: 3
+
+--- [2] Testing File System (Open/Write/Close) ---
+Open '/test_musl.txt' success, fd: 3
+Written 37 bytes to fd 3
+Lseek back to 0
+Read back: Hello from MagicBox OS via Musl-gcc!
+Fstat: Size = 37, Inode = 43
+File closed.
+
+--- [3] Testing Memory (Malloc/Free/Brk) ---
+Malloc address: 0x8051010, content: Dynamic memory is working!
+Free success.
+
+--- [4] Testing Directory (Opendir/Getdents) ---
+Contents of '/':
+  - . (type: 4)
+  - .. (type: 4)
+  - lost+found (type: 4)
+  - dev (type: 4)
+  - mnt (type: 4)
+  - bin (type: 4)
+
+--- [5] Testing Final Exit ---
+Process 3 exiting with status 0
+```
+
+
+
+## 2.安装 tcc
+
+首先，去下载tcc的 [这个版本]( https://repo.or.cz/tinycc.git/snapshot/98765e5ebc04ea464195fa80ea5e4bbdc70a29cc.tar.gz)（不是 `0.9.27`，是 `tinycc-98765e5`，`0.9.27` 版本的链接器有很多bug，在链接阶段会出现很多问题），之后进入新版tcc源码根目录，进行编译配置。
+
+```shell
+./configure \
+    --cpu=i386 \
+    --cc=musl-gcc \
+    --prefix=/usr \
+    --elf-entry-addr=0x8048000 \
+    --with-selinux \
+    --static
+```
+
+由于新版的tcc会缺少一个tccdefs_.h文件，我们需要手动创建
+
+```shell
+# 确保 tccdefs_.h 是纯字符串格式
+sed 's/\\/\\\\/g;s/"/\\"/g;s/$/\\n/g' include/tccdefs.h | awk '{print "\""$0"\""}' > tccdefs_.h
+```
+
+之后，在宿主机上编译 tcc (此时位于tcc源码根目录)
+
+```shell
+gcc -m32 -static -O0 -nostdlib \
+    -DONE_SOURCE=1 \
+    -DCONFIG_TCC_STATIC=1 \
+    -DTCC_TARGET_I386=1 \
+    -DCONFIG_TCC_SELINUX=1 \
+    -I . -I ./include \
+    -I $HOME/musl-install/include \
+    -L $HOME/musl-install/lib \
+    $HOME/musl-install/lib/crt1.o \
+    $HOME/musl-install/lib/crti.o \
+    ./tcc.c \
+    $HOME/musl-install/lib/crtn.o \
+    -lc -lm -ldl -lgcc -lgcc_eh \
+    -o tcc
+```
+
+之后会产生一个名为 tcc 的文件，这就是我们需要的
+
+然后，我们安装 tcc 所需要的运行时环境
+
+```shell
+# 创建安装目录
+mkdir -p ~/tcc-install 
+make -j$(nproc)
+# 安装运行时环境
+make install DESTDIR=$HOME/tcc-install 
+```
+
+执行此操作后，在 tcc-install 目录下会产生一个 usr 目录。目录拼接的逻辑是 config 里面设置的 `prefix` 加上此处的 `DESTDIR`，即 `DESTDIR/prefix`，此处为 `$HOME/tcc-install/usr`，因此会产生一个 usr 目录。此外，`prefix` 参数还会影响到 tcc 默认的库文件搜索路径。
+
+
+
+## 3.创建完整的编译器运行环境
+
+经过上面两步后，`musl-install` 和 `tcc-install` 目录里面应该都有相应的安装好的库文件了，我们将 `musl-install` 下的 `include` 中的所有文件和其下的 `lib` 目录中的所有文件都分别拷贝到  `tcc-install/usr` 中的 `include` 和 `lib` 目录下即可。
+
+```shell
+cd $HOME/musl-install
+cp -r ./include/* $HOME/tcc-install/usr/include
+cp -r ./lib/* $HOME/tcc-install/usr/lib
+```
+
+拷贝完毕后，把 `tcc-install` 目录下的整个 `usr` 目录（包括 usr 本身）都拷贝到 MagicBox 的根目录即可。编译好的 tcc 就放在 `usr/lib/bin` 目录下，可以把他拷贝到 MagicBox 的根目录。
+
+在宿主机上写一个测试程序，顺手拷贝到 MagicBox 中，用来测试编译器是否可用。
+
+```c
+// hello.c
+int main(){
+    return 42;
+}
+```
+
+在MagicBox中，使用此命令来编译一个程序
+
+```shell
+# tcc、hello.c 按照实际情况修改
+tcc -nostdlib -static -o hello /usr/lib/crt1.o /usr/lib/crti.o ../hello.c -L/usr/lib -lc /usr/lib/crtn.o
+```
+
+在编译的时候若出现了
+
+```shell
+Intrcpt: warning, use lseek as llseek
+```
+
+这是正常的，这是我们在拦截层加上的一个提示，表示使用 `lseek` 来替代了 `llseek` ，这在小于2GB的文件下不会出现太大问题。
+
+在MagicBox中运行后的结果如果是这样的话，那就没问题了。
+
+```shell
+ccc@magic-box:/usr/bin$ ./hello
+Process 3 exiting with status 42
+```
+
+
+
+## 4.注意事项
+
+目前的静态库（例如 `libtcc1.a` 等）以及 tcc 的默认搜索路径等仍没有处理好，因此如果代码中包含 `stdio.h` 的话，链接过程中会出现错误，这将在之后修复，这是由于 `musl-gcc` 对 `libtcc1.c` 等文件的编译存在问题而导致的，一个可能的解决方案如下
+
+```shell
+# 用下面这条命令编译可以正确的找到 start
+tcc -nostdlib -static -o hello_fixed /usr/lib/crt1.o /usr/lib/crti.o hello.c -L/usr/lib -lc /usr/lib/crtn.o
+
+# 使用这个命令编译带有 printf 函数的程序
+./tcc -static -nostdlib -include usr/include/stdio.h -include usr/include/features.h -Iusr/include -Iusr/lib/tcc/include -o hello usr/lib/crt1.o usr/lib/crti.o ./hello.c -Lusr/lib -Lusr/lib/tcc -lc usr/lib/tcc/libtcc1.a usr/lib/crtn.o
+
+# 如果使用 musl-gcc 编译 tcc 的话，libcll1.a 文件可能会无法生成，此时只会产生各种include文件
+# 如果想要产生 .a 文件，得重新配置，用gcc来编译
+./configure \
+    --cpu=i386 \
+    --prefix=/usr \
+    --cc=gcc \
+    --extra-cflags="-m32 -DCONFIG_TCC_SELINUX=1" \
+    --extra-ldflags="-m32 -static" \
+    --with-selinux \
+    --elf-entry-addr=0x8048000
+
+# 但是这样编译出来的 tcc 是无法使用的，因为他没用musl库
+# 因此我们得用
+
+gcc -m32 -static -O0 -nostdlib \
+    -DONE_SOURCE=1 \
+    -DCONFIG_TCC_STATIC=1 \
+    -DTCC_TARGET_I386=1 \
+    -DCONFIG_TCC_SELINUX=1 \
+    -I . -I ./include \
+    -I $HOME/musl-install/include \
+    -L $HOME/musl-install/lib \
+    $HOME/musl-install/lib/crt1.o \
+    $HOME/musl-install/lib/crti.o \
+    ./tcc.c \
+    $HOME/musl-install/lib/crtn.o \
+    -lc -lm -ldl -lgcc -lgcc_eh \
+    -o tcc
+
+# 单独编译一个 tcc 后，来使用这个单独编译的 tcc
+```
+
+但是这么做过于麻烦，还有一个可能的方法就是使用由 musl-gcc 编译而来的 tcc 来手动编译 `libtcc1.c` 等文件后手动打包，这个路径将在之后探索。

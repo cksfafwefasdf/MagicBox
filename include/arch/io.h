@@ -38,4 +38,16 @@ static inline void insw(uint16_t port,void *addr,uint32_t word_cnt){
     asm volatile ("cld;rep insw":"+c"(word_cnt),"+D"(addr):"Nd"(port):"memory");
 }
 
+// 向端口写入一个字 (16bit)
+static inline void outw(uint16_t port, uint16_t data) {
+    asm volatile ("outw %w0, %w1" : : "a" (data), "Nd" (port));
+}
+
+// 从端口读取一个字 (16bit)
+static inline uint16_t inw(uint16_t port) {
+    uint16_t data;
+    asm volatile ("inw %w1, %w0" : "=a" (data) : "Nd" (port));
+    return data;
+}
+
 #endif

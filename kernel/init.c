@@ -24,6 +24,7 @@
 #include <vma.h>
 #include <ioctl.h>
 #include <time.h>
+#include <uart.h>
 
 void init(void);
 void print_logo(void);
@@ -180,6 +181,7 @@ static void after_init() {
     // 此时它已经站在全新的、动态分配的 PCB 顶端了
     idle_thread = thread_start("idle",3,idle,NULL);
     timer_init();
+    uart_init();
     console_init();
     tty_init();
     keyboard_init();
