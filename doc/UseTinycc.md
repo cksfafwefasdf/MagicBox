@@ -7,6 +7,9 @@
 进入musl源码目录，执行下面的代码进行配置
 
 ```shell
+# 彻底清理环境（包括配置文件）
+make distclean
+
 # musl 的包装器是路径敏感的，他不会自动展开 ~
 # 所以最好用 $HOME
 ./configure \
@@ -14,6 +17,7 @@
     --prefix=$HOME/musl-install \
     CC='gcc -m32' \
     CFLAGS='-m32 -march=i486 -fno-stack-protector' \
+    --disable-shared \
     --enable-gcc-wrapper
 ```
 
@@ -221,6 +225,56 @@ make install DESTDIR=$HOME/tcc-install
 
 执行此操作后，在 tcc-install 目录下会产生一个 usr 目录。目录拼接的逻辑是 config 里面设置的 `prefix` 加上此处的 `DESTDIR`，即 `DESTDIR/prefix`，此处为 `$HOME/tcc-install/usr`，因此会产生一个 usr 目录。此外，`prefix` 参数还会影响到 tcc 默认的库文件搜索路径。
 
+由于 `musl` 库封装的编译器 `musl-gcc` 在编译 `libcc1.a` 的过程中会出现一些交叉编译和链接的问题，因此我们需要手动创建 `libcc1.a` 库文件。
+
+进入到 `tinycc-98765e5/lib` 下，手动编译 `libcc1.a`
+
+```shell
+musl-gcc -m32 -O0 -c libtcc1.c ../i386-gen.c \
+    -Dstatic="" \
+    -fvisibility=default \
+    -DTCC_TARGET_I386 \
+    -I..
+# 检查符号，必须出现 00000000 T __udivmoddi4
+# 也就是说必须是大写的T，而不是小写的t，t表示此函数是static的
+# 具有内部链接性，其他函数无法调用，tcc为了防止和外部的c语言库冲突
+# 把udivmoddi4定义为了static，但是musl没有提供这个函数，所以我们需要手动包含
+nm libtcc1.o | grep udivmoddi4
+# 打包文件，之后就可以拷贝 libtcc1.a 到镜像了，将其拷贝到 $HOME/tcc-install/usr/lib/tcc 下
+ar rcs libtcc1.a libtcc1.o i386-gen.o
+```
+
+由于某些未知的原因，我们在包含musl的库进行编译时，链接器总是会去寻找 `__stack_chk_fail` 这个参数，即使在编译时加上了 `-fno-stack-protector ` 也没办法解决，因此我们就手动给它定义个假的，然后每次编译时都带上它。
+
+```c
+// fix.c
+void __stack_chk_fail_local(void)
+{
+
+        return;
+}
+
+void __stack_chk_fail(void) {
+
+        return;
+}
+```
+
+如果不想每次编译的时候都带上这个 `fix.c`，那么就把他包含到 `libcc1.a` 中，一起打包进去（推荐这么做）
+
+```shell
+# 编译得到 fix.o
+../tcc -c fix.c
+# 打包到生生成的 libtcc1.a 中
+ar rcs libtcc1.a fix.o
+```
+
+最后，将打包好的 `libtcc1.a` 拷贝到 `tcc-install/usr/lib/tcc` 目录下
+
+```shell
+cp ./libtcc1.a $HOME/tcc-install/usr/lib/tcc
+```
+
 
 
 ## 3.创建完整的编译器运行环境
@@ -235,11 +289,19 @@ cp -r ./lib/* $HOME/tcc-install/usr/lib
 
 拷贝完毕后，把 `tcc-install` 目录下的整个 `usr` 目录（包括 usr 本身）都拷贝到 MagicBox 的根目录即可。编译好的 tcc 就放在 `usr/lib/bin` 目录下，可以把他拷贝到 MagicBox 的根目录。
 
-在宿主机上写一个测试程序，顺手拷贝到 MagicBox 中，用来测试编译器是否可用。
+之后切换到 `$HOME/tcc-install/usr/bin` 下
+
+```shell
+cd $HOME/tcc-install/usr/bin
+```
+
+在宿主机上写一个测试程序，顺手和usr目录一起拷贝到 MagicBox 中，用来测试编译器是否可用。
 
 ```c
 // hello.c
+#include <stdio.h>
 int main(){
+    printf("hello world!\n");
     return 42;
 }
 ```
@@ -248,7 +310,7 @@ int main(){
 
 ```shell
 # tcc、hello.c 按照实际情况修改
-tcc -nostdlib -static -o hello /usr/lib/crt1.o /usr/lib/crti.o ../hello.c -L/usr/lib -lc /usr/lib/crtn.o
+tcc -static -o hello hello.c
 ```
 
 在编译的时候若出现了
@@ -263,52 +325,6 @@ Intrcpt: warning, use lseek as llseek
 
 ```shell
 ccc@magic-box:/usr/bin$ ./hello
+hello world!
 Process 3 exiting with status 42
 ```
-
-
-
-## 4.注意事项
-
-目前的静态库（例如 `libtcc1.a` 等）以及 tcc 的默认搜索路径等仍没有处理好，因此如果代码中包含 `stdio.h` 的话，链接过程中会出现错误，这将在之后修复，这是由于 `musl-gcc` 对 `libtcc1.c` 等文件的编译存在问题而导致的，一个可能的解决方案如下
-
-```shell
-# 用下面这条命令编译可以正确的找到 start
-tcc -nostdlib -static -o hello_fixed /usr/lib/crt1.o /usr/lib/crti.o hello.c -L/usr/lib -lc /usr/lib/crtn.o
-
-# 使用这个命令编译带有 printf 函数的程序
-./tcc -static -nostdlib -include usr/include/stdio.h -include usr/include/features.h -Iusr/include -Iusr/lib/tcc/include -o hello usr/lib/crt1.o usr/lib/crti.o ./hello.c -Lusr/lib -Lusr/lib/tcc -lc usr/lib/tcc/libtcc1.a usr/lib/crtn.o
-
-# 如果使用 musl-gcc 编译 tcc 的话，libcll1.a 文件可能会无法生成，此时只会产生各种include文件
-# 如果想要产生 .a 文件，得重新配置，用gcc来编译
-./configure \
-    --cpu=i386 \
-    --prefix=/usr \
-    --cc=gcc \
-    --extra-cflags="-m32 -DCONFIG_TCC_SELINUX=1" \
-    --extra-ldflags="-m32 -static" \
-    --with-selinux \
-    --elf-entry-addr=0x8048000
-
-# 但是这样编译出来的 tcc 是无法使用的，因为他没用musl库
-# 因此我们得用
-
-gcc -m32 -static -O0 -nostdlib \
-    -DONE_SOURCE=1 \
-    -DCONFIG_TCC_STATIC=1 \
-    -DTCC_TARGET_I386=1 \
-    -DCONFIG_TCC_SELINUX=1 \
-    -I . -I ./include \
-    -I $HOME/musl-install/include \
-    -L $HOME/musl-install/lib \
-    $HOME/musl-install/lib/crt1.o \
-    $HOME/musl-install/lib/crti.o \
-    ./tcc.c \
-    $HOME/musl-install/lib/crtn.o \
-    -lc -lm -ldl -lgcc -lgcc_eh \
-    -o tcc
-
-# 单独编译一个 tcc 后，来使用这个单独编译的 tcc
-```
-
-但是这么做过于麻烦，还有一个可能的方法就是使用由 musl-gcc 编译而来的 tcc 来手动编译 `libtcc1.c` 等文件后手动打包，这个路径将在之后探索。
