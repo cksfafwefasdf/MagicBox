@@ -328,3 +328,37 @@ ccc@magic-box:/usr/bin$ ./hello
 hello world!
 Process 3 exiting with status 42
 ```
+
+
+
+## 4. 使用现成的 tcc 环境
+
+如果上面的安装步骤出现问题，可以使用现成的 tcc 环境。首先，进入项目根目录下的 `third_party` 目录，然后解压压缩包
+
+```shell
+tar -zvxf tcc_env.tar.gz
+```
+
+上面的操作结束后可以得到一个 `usr` 目录。
+
+然后，进入项目根目录下的 `tool` 目录，运行
+
+```shell
+sh bind.sh
+```
+
+这会将 `hd60M.img` 的第一个分区 `sda1` 转换为循环设备后挂载到宿主机的 `disk_env/mnt` 目录下，之后进入这个 `mnt` 目录，执行
+
+```shell
+sudo mv ../../third_party/usr ./
+```
+
+之后回到 `tool` 目录，运行
+
+```shell
+# 需要注意的是，unbind 会删除你机器上所有的循环设备，先确定你是否有不该被删除的循环设备！
+# 如果有则不要运行这个脚本！而是去手动卸载刚刚 bind 挂载的设备！
+sh unbind.sh
+```
+
+现在进入系统，不出意外的话应该是可以直接使用 `/usr/bin` 下的 tcc 了。
