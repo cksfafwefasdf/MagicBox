@@ -4,4 +4,5 @@
 struct intr_stack;
 
 extern void musl_syscall_interceptor(struct intr_stack* stack);
+extern void musl_syscall_intrcpt_init(void);
 #endif

@@ -7,6 +7,8 @@
  * This file contains the system call numbers.
  */
 
+#define NR_syscalls 341
+
 #define __NR_restart_syscall      0
 #define __NR_exit		  1
 #define __NR_fork		  2
@@ -350,8 +352,6 @@
 #define __NR_prlimit64		340
 
 #ifdef __KERNEL__
-
-#define NR_syscalls 341
 
 #define __ARCH_WANT_IPC_PARSE_VERSION
 #define __ARCH_WANT_OLD_READDIR

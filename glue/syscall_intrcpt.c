@@ -17,6 +17,19 @@
 #include <linux_dirent.h>
 #include <time.h>
 
+// 基于 i386 Linux 0x80 中断的参数约定
+// 强制转换成 uint32_t 是为了防止在进行地址运算或逻辑判断时产生符号位扩展的意外。
+#define ARG1(stack) ((uint32_t)(stack)->ebx)
+#define ARG2(stack) ((uint32_t)(stack)->ecx)
+#define ARG3(stack) ((uint32_t)(stack)->edx)
+#define ARG4(stack) ((uint32_t)(stack)->esi)
+#define ARG5(stack) ((uint32_t)(stack)->edi)
+#define ARG6(stack) ((uint32_t)(stack)->ebp)
+
+typedef int32_t (*musl_syscall_handler)(struct intr_stack*);
+
+musl_syscall_handler musl_syscall_table[NR_syscalls];
+
 // 用于和 Linux 的 writev 调用对齐
 // 我们用多次 write 操作来简单的模拟 writev 操作
 // 因此我们的 writev 操作并不具备 Linux 那样的原子语义
@@ -211,178 +224,209 @@ static int32_t linux_sys_getdents64(int32_t fd, void* dirp, uint32_t count) {
     return bytes_written; // 返回实际填入缓冲区的字节数
 }
 
+static int32_t do_default(struct intr_stack* stack){
+    printk("Unknown Syscall 0x%x\n", stack->eax);
+    // 按照 Linux 规范，未实现的调用通常返回 -38 (ENOSYS)
+    return -ENOSYS; 
+}
+
+static int32_t do_getpid(struct intr_stack* stack UNUSED){
+    return sys_getpid();
+}
+
+// exit_group 和 exit 都使用这个函数
+// exit_group 会杀死一个进程的所有线程
+// 由于我们现在的用户进程都只对应一个内核线程，因此直接用exit就行
+static int32_t do_exit_default(struct intr_stack* stack){
+    // exit(status) 的参数在 ebx 里 
+    printk("Process %d exiting with status %d\n", get_running_task_struct()->pid, ARG1(stack)); 
+    sys_exit(ARG1(stack));
+
+    // 理论上不应该到这
+    PANIC("do_exit_default: should not be here!");
+    return 0;
+}
+
+static int32_t do_writev(struct intr_stack* stack){
+    return musl_sys_writev((int32_t)ARG1(stack),
+                            (const struct linux_iovec*)ARG2(stack),
+                            (int32_t)ARG3(stack));
+}
+
+static int32_t do_ioctl(struct intr_stack* stack){
+    return sys_ioctl((int32_t)ARG1(stack),
+                    (uint32_t)ARG2(stack),
+                    (uint32_t)ARG3(stack));
+}
+
+static int32_t do_brk(struct intr_stack* stack){
+    return (int32_t)sys_brk((uint32_t)ARG1(stack));
+}
+
+static int32_t do_mmap2(struct intr_stack* stack){
+    return (int32_t)musl_sys_mmap2((uint32_t)ARG1(stack),
+                                    (uint32_t)ARG2(stack),
+                                    (uint32_t)ARG3(stack),
+                                    (uint32_t)ARG4(stack),
+                                    (int32_t)ARG5(stack),
+                                    (uint32_t)ARG6(stack));
+}
+
+static int32_t do_munmap(struct intr_stack* stack){
+    return sys_munmap((uint32_t)ARG1(stack),
+                        (uint32_t)ARG2(stack));  
+}   
+
+static int32_t do_madvise(struct intr_stack* stack UNUSED){
+    // 这是一个malloc的性能优化函数，不是必须的，为了防止报unknown警告，我直接no-op返回
+    return 0;
+}
+
+static int32_t do_open(struct intr_stack* stack){
+    const char* path = (const char*)ARG1(stack);
+    uint32_t linux_flags = ARG2(stack);
+    uint8_t kernel_flags = 0;
+
+    // 转换读写模式 (Linux 的 RDONLY 是 0，必须特殊处理)
+    uint32_t mode = linux_flags & 3; // 取低 2 位
+    if (mode == 0) kernel_flags |= O_RDONLY;      // Linux 0 -> 1
+    else if (mode == 1) kernel_flags |= O_WRONLY; // Linux 1 -> 2
+    else if (mode == 2) kernel_flags |= O_RDWR;   // Linux 2 -> 4
+
+    //  转换状态标志
+    if (linux_flags & 0x40)  kernel_flags |= O_CREATE; // Linux 0x40 -> 8
+    if (linux_flags & 0x80) kernel_flags |= O_EXCL; // Linux 0x80 ->  64
+    if (linux_flags & 0x200) kernel_flags |= O_TRUNC;  // Linux 0x200 -> 16
+    if (linux_flags & 0x400) kernel_flags |= O_APPEND; // Linux 0x400 -> 32
+
+    return sys_open(path, kernel_flags);
+}
+
+static int32_t do_write(struct intr_stack* stack){
+    // EBX: fd, ECX: buf, EDX: count
+    return sys_write((int32_t)ARG1(stack), 
+                    (void*)ARG2(stack), 
+                    (uint32_t)ARG3(stack));
+}
+
+static int32_t do_llseek(struct intr_stack* stack){
+    printk("Intrcpt: warning, use lseek as llseek\n");
+            int32_t fd = (int32_t)ARG1(stack);
+            int32_t offset = (int32_t)ARG3(stack); // 取低32位
+            int64_t* res_ptr = (int64_t*)ARG4(stack);
+
+    // 对齐 whence: Linux(0,1,2) -> 我们的(1,2,3)
+    uint32_t linux_whence = ARG5(stack);
+    uint32_t kernel_whence = linux_whence + 1;
+
+    // 边界检查，防止用户传入非法值导致 ASSERT 触发
+    if (kernel_whence < 1 || kernel_whence > 3) {
+        return -EINVAL;
+    }
+
+    int32_t new_pos = sys_lseek(fd, offset, kernel_whence);
+
+    if (new_pos < 0) {
+        return new_pos; // 此时 ret 为 -1 或错误码
+    } else {
+        if (res_ptr != NULL) {
+            *res_ptr = (int64_t)new_pos;
+        }
+        return 0; // 成功返回 0
+    }
+}
+
+static int32_t do_read(struct intr_stack* stack){
+    // EBX: fd, ECX: buf, EDX: count
+    int32_t fd = (int32_t)ARG1(stack);
+    void* buf = (void*)ARG2(stack);
+    uint32_t count = (uint32_t)ARG3(stack);
+
+    return sys_read(fd, buf, count);
+}
+
+static int32_t do_close(struct intr_stack* stack){
+    // EBX: fd
+    int32_t fd = (int32_t)ARG1(stack);
+
+    return sys_close(fd);
+}
+
+static int32_t do_stat64(struct intr_stack* stack){
+     // 通过路径来获取文件信息
+    const char* path = (const char*)ARG1(stack);
+    struct linux_stat64* linux_buf = (struct linux_stat64*)ARG2(stack);
+    
+    return linux_sys_stat64(path, linux_buf);
+}
+
+static int32_t do_fstat64(struct intr_stack* stack){
+    int32_t fd = (int32_t)ARG1(stack);
+    struct linux_stat64* linux_buf = (struct linux_stat64*)ARG2(stack);
+    
+    return linux_sys_fstat64(fd, linux_buf);
+}
+
+static int32_t do_getdents64(struct intr_stack* stack){
+    // 用户态的 readdir 函数底层会进行这个调用
+    return linux_sys_getdents64((int32_t)ARG1(stack), (void*)ARG2(stack), (uint32_t)ARG3(stack));
+}
+
+static int32_t do_unlink(struct intr_stack* stack){
+    const char* path = (const char*)ARG1(stack);
+    return sys_unlink(path);
+}
+
+static int32_t do_time(struct intr_stack* stack){
+    uint32_t* tloc = (uint32_t*)ARG1(stack);
+    int32_t now = sys_time(); // 返回 Unix 秒数
+    if (tloc) *tloc = now;
+    return now;
+}
+
+void musl_syscall_intrcpt_init(){
+    for (int i = 0; i < NR_syscalls; i++) {
+        musl_syscall_table[i] = do_default;
+    }
+
+    musl_syscall_table[__NR_getpid] = do_getpid;
+    musl_syscall_table[__NR_exit_group] = do_exit_default;
+    musl_syscall_table[__NR_exit] = do_exit_default;
+    musl_syscall_table[__NR_writev] = do_writev;
+    musl_syscall_table[__NR_ioctl] = do_ioctl;
+    musl_syscall_table[__NR_brk] = do_brk;
+    musl_syscall_table[__NR_munmap] = do_munmap;
+    musl_syscall_table[__NR_madvise] = do_madvise;
+    musl_syscall_table[__NR_open] = do_open;
+    musl_syscall_table[__NR_write] = do_write;
+    musl_syscall_table[__NR__llseek] = do_llseek;
+    musl_syscall_table[__NR_read] = do_read;
+    musl_syscall_table[__NR_close] = do_close;
+    musl_syscall_table[__NR_stat64] = do_stat64;
+    musl_syscall_table[__NR_fstat64] = do_fstat64;
+    musl_syscall_table[__NR_getdents64] = do_getdents64;
+    musl_syscall_table[__NR_unlink] = do_unlink;
+    musl_syscall_table[__NR_time] = do_time;
+    musl_syscall_table[__NR_mmap2] = do_mmap2;
+}
+
 // 根据 i386 Linux ABI:
 // eax: 调用号
 // ebx: arg1, ecx: arg2, edx: arg3, esi: arg4, edi: arg5, ebp: arg6
 void musl_syscall_interceptor(struct intr_stack* stack) {
-    uint32_t m_eax = stack->eax;
+    uint32_t sc_nr = stack->eax;
     int32_t ret = -ENOSYS; // 默认返回错误码
 #ifdef DEBUG_SYSCALL_INTRCPT
     printk("Intrcpt 0x80: Syscall 0x%x from EIP: 0x%x\n", stack->eax, stack->eip);
 #endif
-    switch (m_eax) {
-        case __NR_getpid: // SYS_getpid
-            ret = sys_getpid();
-            break;
-        // exit_group 会杀死一个进程的所有线程
-        // 由于我们现在的用户进程都只对应一个内核线程，因此直接用exit就行
-        case __NR_exit_group: 
-        case __NR_exit:
 
-            printk("Process %d exiting with status %d\n", 
-            get_running_task_struct()->pid, 
-            stack->ebx); // exit(status) 的参数在 ebx 里 
-
-            sys_exit(stack->ebx);
-            break;
-        case __NR_writev:
-            ret = musl_sys_writev((int32_t)stack->ebx,
-                                  (const struct linux_iovec*)stack->ecx,
-                                  (int32_t)stack->edx);
-            break;
-        case __NR_ioctl:
-            ret = sys_ioctl((int32_t)stack->ebx,
-                            (uint32_t)stack->ecx,
-                            (uint32_t)stack->edx);
-            break;
-        case __NR_brk:
-            ret = (int32_t)sys_brk((uint32_t)stack->ebx);
-            break;
-        case __NR_mmap2:
-            ret = (int32_t)musl_sys_mmap2((uint32_t)stack->ebx,
-                                          (uint32_t)stack->ecx,
-                                          (uint32_t)stack->edx,
-                                          (uint32_t)stack->esi,
-                                          (int32_t)stack->edi,
-                                          (uint32_t)stack->ebp);
-            break;
-        case __NR_munmap:
-            ret = sys_munmap((uint32_t)stack->ebx,
-                             (uint32_t)stack->ecx);
-            break;
-        
-        case __NR_madvise: // 这是一个malloc的性能优化函数，不是必须的，为了防止报unknown警告，我直接no-op返回
-            ret = 0;
-            break;
-        
-        // 较老版本的编译器中只能在语句块中定义变量
-        // 我们这个open里面定义了path，依次加个花括号给他括住
-        case __NR_open:{
-            const char* path = (const char*)stack->ebx;
-            uint32_t linux_flags = stack->ecx;
-            uint8_t kernel_flags = 0;
-
-            // 转换读写模式 (Linux 的 RDONLY 是 0，必须特殊处理)
-            uint32_t mode = linux_flags & 3; // 取低 2 位
-            if (mode == 0) kernel_flags |= O_RDONLY;      // Linux 0 -> 1
-            else if (mode == 1) kernel_flags |= O_WRONLY; // Linux 1 -> 2
-            else if (mode == 2) kernel_flags |= O_RDWR;   // Linux 2 -> 4
-
-            //  转换状态标志
-            if (linux_flags & 0x40)  kernel_flags |= O_CREATE; // Linux 0x40 -> 8
-            if (linux_flags & 0x80) kernel_flags |= O_EXCL; // Linux 0x80 ->  64
-            if (linux_flags & 0x200) kernel_flags |= O_TRUNC;  // Linux 0x200 -> 16
-            if (linux_flags & 0x400) kernel_flags |= O_APPEND; // Linux 0x400 -> 32
-
-            ret = sys_open(path, kernel_flags);
-            break;
-        }
-
-        case __NR_write: // 0x4
-            // EBX: fd, ECX: buf, EDX: count
-            ret = sys_write((int32_t)stack->ebx, 
-                            (void*)stack->ecx, 
-                            (uint32_t)stack->edx);
-            break;
-        
-        case __NR__llseek:{
-            printk("Intrcpt: warning, use lseek as llseek\n");
-            int32_t fd = (int32_t)stack->ebx;
-            int32_t offset = (int32_t)stack->edx; // 取低32位
-            int64_t* res_ptr = (int64_t*)stack->esi;
-            
-            // 对齐 whence: Linux(0,1,2) -> 我们的(1,2,3)
-            uint32_t linux_whence = stack->edi;
-            uint32_t kernel_whence = linux_whence + 1;
-
-            // 边界检查，防止用户传入非法值导致 ASSERT 触发
-            if (kernel_whence < 1 || kernel_whence > 3) {
-                ret = -EINVAL;
-                break;
-            }
-
-            int32_t new_pos = sys_lseek(fd, offset, kernel_whence);
-
-            if (new_pos < 0) {
-                ret = new_pos; // 此时 ret 为 -1 或错误码
-            } else {
-                if (res_ptr != NULL) {
-                    *res_ptr = (int64_t)new_pos;
-                }
-                ret = 0; // 成功返回 0
-            }
-            break;
-        }
-
-        case __NR_read: {
-            // EBX: fd, ECX: buf, EDX: count
-            int32_t fd = (int32_t)stack->ebx;
-            void* buf = (void*)stack->ecx;
-            uint32_t count = (uint32_t)stack->edx;
-
-            ret = sys_read(fd, buf, count);
-            break;
-        }
-
-        case __NR_close: {
-            // EBX: fd
-            int32_t fd = (int32_t)stack->ebx;
-
-            ret = sys_close(fd);
-            break;
-        }
-
-        case __NR_stat64: { // 通过路径来获取文件信息
-            const char* path = (const char*)stack->ebx;
-            struct linux_stat64* linux_buf = (struct linux_stat64*)stack->ecx;
-            
-            ret = linux_sys_stat64(path, linux_buf);
-            break;
-        }
-
-        case __NR_fstat64: { // 通过描述符fd来获取文件信息
-            int32_t fd = (int32_t)stack->ebx;
-            struct linux_stat64* linux_buf = (struct linux_stat64*)stack->ecx;
-            
-            ret = linux_sys_fstat64(fd, linux_buf);
-            break;
-        }
-
-        case __NR_getdents64: // 用户态的 readdir 函数底层会进行这个调用
-            ret = linux_sys_getdents64((int32_t)stack->ebx, (void*)stack->ecx, (uint32_t)stack->edx);
-            break;
-
-        case __NR_unlink: { 
-            const char* path = (const char*)stack->ebx;
-            ret = sys_unlink(path);
-            break;
-        }
-
-        case __NR_time: {
-            uint32_t* tloc = (uint32_t*)stack->ebx;
-            int32_t now = sys_time(); // 返回 Unix 秒数
-            if (tloc) *tloc = now;
-            ret = now;
-            break;
-        }
-
-        default:
-            printk("Unknown Syscall 0x%x\n", m_eax);
-            // 按照 Linux 规范，未实现的调用通常返回 -38 (ENOSYS)
-            ret = -ENOSYS; 
-            break;
+    // 防止数组越界访问导致内核崩溃
+    if (sc_nr >= NR_syscalls) {
+        stack->eax = -ENOSYS;
+        return;
     }
-
+ 
+    ret = musl_syscall_table[sc_nr](stack);
     // 将返回值写入中断栈中的 eax 位置
     // 当汇编执行 popad 时，这个值会被加载到用户的 EAX 寄存器中
     // 按照 ABI 规定，系统调用只允许修改 EAX（作为返回值）

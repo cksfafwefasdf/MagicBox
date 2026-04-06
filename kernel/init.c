@@ -25,6 +25,7 @@
 #include <ioctl.h>
 #include <time.h>
 #include <uart.h>
+#include <syscall_intrcpt.h>
 
 void init(void);
 void print_logo(void);
@@ -187,6 +188,7 @@ static void after_init() {
     keyboard_init();
     tss_init();
     syscall_init();
+    musl_syscall_intrcpt_init();
     intr_enable(); // ide_init will use the interrupt
     ide_buffer_init();
     ide_init();
