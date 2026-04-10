@@ -313,3 +313,7 @@ int32_t munmap(void* addr, uint32_t len){
 uint32_t time(void){
 	return _syscall0(SYS_TIME);
 }
+
+int32_t symlink(const char* target, const char* linkpath){
+	return _syscall2(SYS_SYMLINK,target,linkpath);
+}

@@ -61,7 +61,7 @@ enum file_types{
 	FT_BLOCK_SPECIAL, // 块设备
 	FT_FIFO, // 具名管道，不占磁盘数据块但inode要写回磁盘
 	FT_SOCKET, // UNIX 套接字
-	FT_SYMBOLIC_LINK, // 符号链接
+	FT_SYMLINK, // 符号链接
 	FT_PIPE, // 匿名管道，inode都不写回磁盘
 };
 

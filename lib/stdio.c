@@ -134,7 +134,7 @@ uint32_t vsprintf(char* str,const char* format,va_list ap){
 				break;
 			case 'c':
 				// copy the arg to the buf directly
-				*(buf_ptr++) = va_arg(ap,char);
+				*(buf_ptr++) = (char) va_arg(ap,char);
 				index_char = *(++index_ptr);
 				break;
 			case 'd':

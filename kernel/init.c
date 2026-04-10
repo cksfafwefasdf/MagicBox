@@ -96,6 +96,7 @@ void init(void) {
         
         // 运行 Shell
         printf("init: starting shell %s...\n", SHELL_PATH);
+
         execv(SHELL_PATH, (const char **)argv);
 
         // 如果 execv 返回了，说明执行失败

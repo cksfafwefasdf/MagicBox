@@ -56,7 +56,7 @@ enum file_types decode_imode(uint16_t mode) {
     if (S_ISCHR(mode))  return FT_CHAR_SPECIAL;
     if (S_ISBLK(mode))  return FT_BLOCK_SPECIAL;
     if (S_ISFIFO(mode)) return FT_FIFO;
-    if (S_ISLNK(mode))  return FT_SYMBOLIC_LINK;
+    if (S_ISLNK(mode))  return FT_SYMLINK;
     if (S_ISSOCK(mode)) return FT_SOCKET;
     return FT_UNKNOWN;
 }
@@ -68,7 +68,7 @@ uint16_t encode_imode(enum file_types ft,uint16_t mode) {
     if (ft == FT_BLOCK_SPECIAL)  return S_IFBLK|mode;
     if (ft == FT_FIFO)  return S_IFIFO|mode;
     if (ft == FT_SOCKET)  return S_IFSOCK|mode;
-    if (ft == FT_SYMBOLIC_LINK)  return S_IFLNK|mode;
+    if (ft == FT_SYMLINK)  return S_IFLNK|mode;
 
     return 0;
 }

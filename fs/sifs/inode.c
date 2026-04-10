@@ -495,6 +495,8 @@ struct inode_operations sifs_file_inode_operations = {
     .rename     = NULL,
     .bmap       = NULL,      // 后期实现
     .truncate   = NULL,
+    .symlink    = NULL, 
+    .readlink   = NULL,
 };
 
 // 目录文件的 Inode 操作集
@@ -509,6 +511,8 @@ struct inode_operations sifs_dir_inode_operations = {
     .rename     = NULL,      // 暂时忽略，等file写完后再补
     .bmap       = NULL,      // 目录通常不需要 bmap
     .truncate   = NULL,
+    .symlink    = NULL, 
+    .readlink   = NULL,
 };
 
 // 设备文件基本上也没什么inode操作，主要是用来指向相应的default_file_ops操作
@@ -525,6 +529,8 @@ struct inode_operations sifs_char_inode_operations = {
     .rename     = NULL,
     .bmap       = NULL, 
     .truncate   = NULL,
+    .symlink    = NULL, 
+    .readlink   = NULL,
 };
 
 // 块设备的 Inode 操作集
@@ -540,4 +546,6 @@ struct inode_operations sifs_block_inode_operations = {
     .rename     = NULL,
     .bmap       = NULL, 
     .truncate   = NULL,
+    .symlink    = NULL, 
+    .readlink   = NULL,
 };

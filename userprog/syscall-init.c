@@ -81,6 +81,7 @@ void syscall_init(void){
 	syscall_table[SYS_MUNMAP] = sys_munmap;
 	syscall_table[SYS_EXECVE] = sys_execve;
 	syscall_table[SYS_TIME] = sys_time;
+	syscall_table[SYS_SYMLINK] = sys_symlink;
 	
 	put_str("syscall_init done\n");
 }

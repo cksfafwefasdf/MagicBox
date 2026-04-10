@@ -34,6 +34,17 @@ struct dlist file_systems;
 // 由于我们去除了 dir 结构，因此现在改用 inode 来标记根目录
 struct inode* root_dir_inode; 
 
+// search_file 函数所使用的状态机定义
+typedef enum {
+    STATE_START,            // 初始化起点
+    STATE_PARSE_COMPONENT,  // 解析路径中的下一个名字 (usr, bin等)
+    STATE_LOOKUP,           // 在磁盘/缓存中查找该名字
+    STATE_CHECK_TYPE,       // 检查查到的 Inode 类型（目录？链接？挂载点？）
+    STATE_FOLLOW_LINK,      // 处理符号链接
+    STATE_DONE,             // 解析成功结束
+    STATE_ERROR             // 出错结束
+} path_state_t;
+
 static void open_root_dir(struct partition* part) {
     root_dir_inode = inode_open(part, part->sb->s_root_ino);
 }
@@ -243,100 +254,195 @@ int32_t path_depth_cnt(char* pathname){
 
 // search_file 只关闭中间搜索过程中的“中间父目录”，最终的父目录无论如何他都不关闭
 // 由调用者关闭
-static int32_t search_file(char* pathname, struct path_search_record* searched_record) {
-    // 处理根目录特例
-    if (!strcmp(pathname, "/") || !strcmp(pathname, "/.") || !strcmp(pathname, "/..")) {
-        searched_record->parent_inode = inode_open(root_part, root_dir_inode->i_no); 
-        searched_record->file_type = FT_DIRECTORY;
-        searched_record->searched_path[0] = 0;
-        searched_record->i_dev = root_dir_inode->i_dev;
-        return root_dir_inode->i_no;
+// follow_link 用于指明是否跟踪link，有些时候我们需要判断链接本身是否存在，而不是判断链接指向的文件是否存在
+// 这时我们需要将其置为 false
+// 例如，如果返回 -ENOENT 我们需要区分是“真没坑位”还是“断链占坑”
+// 这是因为对于一个符号链接而言，有两种情况都会导致 search_file 返回 ENOENT
+// 一种是 符号链接文件本身不存在，还有一种是符号链接所指向的文件不存在
+// 我们的 search_file 函数功能比较简单，只会一条路走到底
+// 当它去跟踪一个符号链接时，他会一路走到底，当发现符号链接指向的目标不存在时，他会返回 -ENOENT
+// 因此我们只通过 -ENOENT 是无法直接判断出到底是符号链接本身不存在还是符号链接指向的文件不存在的
+// 对于followlink的传入值而言
+// 消费型函数 (open, stat, mount, chdir)：通常传入 true，因为它们关心路径指向的那个“实体内容”。
+// 管理型/创建型函数 (mknod, mkdir, symlink, unlink, rename)：必须传入 false，因为它们操作的是目录里的那个“名字（Entry）”本身。
+static int32_t search_file(char* pathname, struct path_search_record* searched_record, bool follow_link) {
+    char path_buf[MAX_PATH_LEN];
+    memset(searched_record, 0, sizeof(struct path_search_record));
+    memcpy(path_buf, pathname, MAX_PATH_LEN);
+
+    path_state_t state = STATE_START;
+    struct inode* curr_inode = NULL;  
+    struct inode* next_inode = NULL;  
+    char* p = path_buf;
+    char name[MAX_FILE_NAME_LEN];
+    int symlink_depth = 0;
+
+    while (state != STATE_DONE && state != STATE_ERROR) {
+        switch (state) {
+            case STATE_START:
+                if (curr_inode && curr_inode != root_dir_inode) inode_close(curr_inode);
+                curr_inode = inode_open(root_part, root_dir_inode->i_no);
+                p = path_buf;
+                // 跳过所有开头的斜杠，防止 // 导致的空组件
+                while (*p == '/') p++; 
+                next_inode = NULL;
+                // 初始化 record，默认指向根
+                searched_record->parent_inode = curr_inode;
+                searched_record->i_dev = curr_inode->i_dev;
+                memset(searched_record->searched_path, 0, MAX_PATH_LEN);
+                // 初始化一个根目录
+                searched_record->searched_path[0] = '/'; // 设为 "/"
+                searched_record->searched_path[1] = '\0';
+                state = STATE_PARSE_COMPONENT;
+                break;
+
+            case STATE_PARSE_COMPONENT:
+                while (*p == '/') p++;
+                if (*p == 0) { // 根目录或者以 / 结尾
+                    searched_record->file_type = FT_DIRECTORY;
+                    state = STATE_DONE;
+                    break;
+                }
+                memset(name, 0, MAX_FILE_NAME_LEN);
+                char* name_start = p;
+                while (*p && *p != '/') p++;
+                int len = p - name_start;
+                memcpy(name, name_start, len);
+
+                if (searched_record->searched_path[0] == '\0') {
+                    // 只有在路径完全为空时（通常不应发生），才初始化为 /
+                    strcpy(searched_record->searched_path, "/");
+                } 
+
+                // 如果当前路径不是只有 "/"，则需要补一个 "/"
+                uint32_t sp_len = strlen(searched_record->searched_path);
+                if (sp_len > 1 && searched_record->searched_path[sp_len - 1] != '/') {
+                    strcat(searched_record->searched_path, "/");
+                }
+
+                strcat(searched_record->searched_path, name);
+                state = STATE_LOOKUP;
+                break;
+
+            case STATE_LOOKUP:
+                // printk("Lookup: name='%s' in parent_ino=%d\n", name, curr_inode->i_no);
+                // 处理 ".." 向上穿透
+                if (len == 2 && memcmp(name, "..", 2) == 0) {
+                    if (curr_inode->i_no == curr_inode->i_sb->s_root_ino && curr_inode->i_mount_at) {
+                        struct inode* old = curr_inode;
+                        struct inode* mp = curr_inode->i_mount_at;
+                        curr_inode = inode_open(get_part_by_rdev(mp->i_dev), mp->i_no);
+                        if (old != root_dir_inode) inode_close(old);
+                    }
+                }
+
+                // 磁盘查找
+                if (curr_inode->i_op->lookup(curr_inode, name, len, &next_inode) != 0) {
+                    // 没找到，保持 curr_inode 为 parent_inode
+                    searched_record->parent_inode = curr_inode;
+                    searched_record->i_dev = curr_inode->i_dev;
+                    state = STATE_ERROR;
+                } else {
+                    state = STATE_CHECK_TYPE;
+                }
+                break;
+
+            case STATE_CHECK_TYPE:
+                //  处理向下跳转 (进入挂载分区的根)
+                while (next_inode->i_mount != NULL) {
+                    struct inode* mounted_root = next_inode->i_mount;
+                    inode_open(get_part_by_rdev(mounted_root->i_dev), mounted_root->i_no);
+                    inode_close(next_inode);
+                    next_inode = mounted_root;
+                }
+
+                // 检查符号链接
+                if (next_inode->i_type == FT_SYMLINK) {
+                    // 判断是否为路径的最后一个组件（通过 p 指针是否到头来判断）
+                    bool is_last = (*p == 0);
+
+                    // 如果不是最后一个组件，必须 Follow（为了穿透中间路径）
+                    // 如果是最后一个组件，则取决于调用者的意愿 (follow_last)
+                    if (!is_last || follow_link) {
+                        state = STATE_FOLLOW_LINK;
+                    } else {
+                        // 命中了，不跟随最后一个链接，直接返回链接自己的 Inode
+                        searched_record->file_type = FT_SYMLINK;
+                        searched_record->parent_inode = curr_inode;
+                        uint32_t link_ino = next_inode->i_no;
+                        inode_close(next_inode);
+                        return link_ino;
+                    }
+                } else if (*p == 0) { // 路径终点判断
+                    searched_record->file_type = next_inode->i_type;
+                    searched_record->i_dev = next_inode->i_dev; // 确保是跳转后的设备号
+                    searched_record->parent_inode = curr_inode; 
+                    uint32_t final_ino = next_inode->i_no;
+                    inode_close(next_inode); 
+                    return final_ino; // 直接返回，避免 DONE 状态的复杂逻辑
+                } else { // 推进到下一层目录
+                    if (curr_inode != root_dir_inode) inode_close(curr_inode);
+                    curr_inode = next_inode;
+                    next_inode = NULL;
+                    // 更新 record，当前的 next 变成了下一轮的 parent
+                    searched_record->parent_inode = curr_inode;
+                    searched_record->i_dev = curr_inode->i_dev;
+                    state = STATE_PARSE_COMPONENT;
+                }
+                break;
+
+            case STATE_FOLLOW_LINK:
+                // 防止出现循环链接
+                if (++symlink_depth > 8) {
+                    printk("search_file: Too many levels of symbolic links!\n");
+                    // 即使出错，也要把当前的现场交给 record，防止调用者误判为“找不到父目录”
+                    searched_record->parent_inode = curr_inode;
+                    state = STATE_ERROR; 
+                    return -ELOOP; 
+                }
+
+                char link_target[MAX_PATH_LEN] = {0};
+
+                int link_len = next_inode->i_op->readlink(next_inode, link_target, MAX_PATH_LEN);
+
+                if (link_len <= 0) {
+                    state = STATE_ERROR;
+                    break;
+                }
+
+                inode_close(next_inode);
+
+                // 拼凑新路径，link_target + 剩下的 p
+                char temp[MAX_PATH_LEN];
+                // 如果 p 后面还有内容，且不是以 / 开头，才补 /
+                char* sep = (*p != 0 && *p != '/') ? "/" : "";
+                // 如访问 /dir/link1/file1 ，link1指向 dir2/dir （相对路径） 时，我们最终会拼接成 /dir/dir2/dir/file1
+                // 如访问 /dir/link1/file1 ，link1指向 /dir2/dir （绝对路径）时，我们会拼接成 /dir2/dir/file1，最开始已经解析完了的上下文会被丢弃，然后我们必须从头开始解析
+                sprintf(temp, "%s%s%s", link_target, sep, p);
+                memcpy(path_buf, temp, MAX_PATH_LEN);
+
+                if (link_target[0] == '/') {
+                    state = STATE_START; // 绝对路径链接，重启，重新从根目录开始搜寻
+                    // 只清空路径记录，不要动其他元数据，以便出问题时debug起来简单点
+                    memset(searched_record->searched_path, 0, MAX_PATH_LEN);
+                } else {
+                    // 相对路径链接，原地重启解析
+                    // 我们需要把 path_buf 中已经解析掉的部分去掉，换成符号链接解析出来的内容
+                    p = path_buf; 
+                    state = STATE_PARSE_COMPONENT;
+                    // 还需要手动把已经记录在 searched_path 里的符号链接所在位置的符号链接 dir_lnk 给删了
+                    char* last_slash = strrchr(searched_record->searched_path, '/');
+                    if (last_slash) *last_slash = '\0';
+                }
+                break;
+        }
     }
-
-    ASSERT(pathname[0] == '/' && strlen(pathname) < MAX_PATH_LEN);
-
-    // 初始起点，根目录
-    struct inode* curr_inode = inode_open(root_part, root_dir_inode->i_no);
-    char* p = pathname;
-    
-    searched_record->parent_inode = curr_inode;
-    searched_record->file_type = FT_UNKNOWN;
-
-    // 开始迭代解析路径组件
-    while (*p) {
-        // 跳过重复的 '/'
-        while (*p == '/') p++;
-        if (!*p) break; // 路径以 / 结尾，如 "/dev/"
-
-        // 计算当前组件的长度，例如 "/usr/bin" 中的 "usr"
-        char* name_start = p;
-        while (*p && *p != '/') p++;
-        int len = p - name_start;
-
-        // 记录已扫描路径 (用于调试或记录)
-        strcat(searched_record->searched_path, "/");
-        strncat(searched_record->searched_path, name_start, len);
-
-        // 处理 .. 向上穿透 (挂载点)
-        if (len == 2 && memcmp(name_start, "..", 2) == 0) {
-            if (curr_inode->i_no == curr_inode->i_sb->s_root_ino && curr_inode->i_mount_at) {
-                struct inode* old = curr_inode;
-                struct inode* mp = curr_inode->i_mount_at;
-                curr_inode = inode_open(get_part_by_rdev(mp->i_dev), mp->i_no);
-                if (old != root_dir_inode) inode_close(old);
-            }
-        }
-
-        // 调用分层后的 lookup
-        struct inode* next_inode = NULL;
-        int ret = -1;
-
-        if(curr_inode->i_op!=NULL&&curr_inode->i_op->lookup!=NULL){
-            ret = curr_inode->i_op->lookup(curr_inode, name_start, len, &next_inode);
-        }else{
-            PANIC("i_op is NULL!");
-        }
-        
-
-        if (ret != 0) {
-            // 没找到组件，返回 -1。此时 searched_record->parent_inode 仍指向上一级
-            searched_record->parent_inode = curr_inode;
-            searched_record->i_dev = curr_inode->i_dev;
-            return -1; 
-        }
-
-        // 处理向下跳转 (挂载点) 
-        while (next_inode->i_mount != NULL) {
-            struct inode* mounted_root = next_inode->i_mount;
-            inode_open(get_part_by_rdev(mounted_root->i_dev), mounted_root->i_no);
-            inode_close(next_inode);
-            next_inode = mounted_root;
-        }
-
-        // 推进迭代 
-        if (*p == 0) { 
-            // 已经是路径最后一段了
-            searched_record->file_type = next_inode->i_type;
-            uint32_t ino = next_inode->i_no;
-            searched_record->parent_inode = curr_inode; // 保持父目录打开
-            searched_record->i_dev = next_inode->i_dev;
-            inode_close(next_inode); 
-            return ino;
-        } else {
-            // 还没走完，next_inode 成为下一轮的 curr_inode (父目录)
-            if (curr_inode != root_dir_inode) {
-                inode_close(curr_inode);
-            }
-            curr_inode = next_inode;
-            searched_record->parent_inode = curr_inode;
-            searched_record->i_dev = curr_inode->i_dev;
-        }
+    // 处理以 / 结尾的情况
+    if (state == STATE_DONE) {
+        searched_record->i_dev = curr_inode->i_dev;
+        return curr_inode->i_no;
     }
-
-    // 处理 "/usr/" 这种以斜杠结尾的情况
-    searched_record->file_type = FT_DIRECTORY;
-    searched_record->i_dev = curr_inode->i_dev;
-    return curr_inode->i_no;
+    return -ENOENT;
 }
 
 // 将路径转换为绝对路径
@@ -370,8 +476,31 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
 	
 	uint32_t pathname_depth = path_depth_cnt((char*)pathname);
 	
-	int inode_no = search_file(pathname,&searched_record);
-	bool found = inode_no !=-1?true:false;
+	int inode_no = search_file(pathname,&searched_record,true);
+
+    if (inode_no < 0) {
+        // 如果是嵌套过深，直接把这个错误扔给用户态
+        if (inode_no == -ELOOP) {
+            printk("sys_open: symlink ELOOP!\n");
+            inode_close(searched_record.parent_inode);
+            return -ELOOP;
+        }
+
+        // 如果是文件不存在 (ENOENT)，且没有 O_CREATE 标志
+        if (!(flags & O_CREATE)) {
+            printk("in path %s, file %s not exist\n", \
+                   searched_record.searched_path, \
+                   (strrchr(searched_record.searched_path, '/') + 1));
+            inode_close(searched_record.parent_inode);
+            return -ENOENT;
+        }
+        
+        // 如果带了 O_CREATE 且错误是 ENOENT，则继续向下执行创建逻辑
+    }
+
+
+	// 此时，如果 inode_no >= 0，说明文件已存在
+    bool found = (inode_no >= 0);
 
 	// 只有找到了文件，才去校验它是不是目录
 	if (found && searched_record.file_type == FT_DIRECTORY) {
@@ -393,14 +522,14 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
         return -EEXIST;
     }
 
-	uint32_t path_searched_depth = path_depth_cnt(searched_record.searched_path);
-	// to process the situation /a/b/c (/a/b is a regular file or not exists)
-	if(pathname_depth!=path_searched_depth && strcmp(pathname, "/")){
-		printk("sys_open: cannot access %s: Not a directory, subpath %s is't exist\n",\
-		pathname,searched_record.searched_path);
-		inode_close(searched_record.parent_inode);
-		return -ENOENT; // 路径中的某个目录不存在
-	}
+	// uint32_t path_searched_depth = path_depth_cnt(searched_record.searched_path);
+	// // to process the situation /a/b/c (/a/b is a regular file or not exists)
+	// if(pathname_depth!=path_searched_depth && strcmp(pathname, "/")){
+	// 	printk("sys_open: cannot access %s: Not a directory, subpath %s is't exist\n",\
+	// 	pathname,searched_record.searched_path);
+	// 	inode_close(searched_record.parent_inode);
+	// 	return -ENOENT; // 路径中的某个目录不存在
+	// }
 
     
 	if(!found&&!(flags&O_CREATE)){
@@ -649,12 +778,10 @@ int32_t sys_unlink(const char* _pathname) {
     memset(&searched_record, 0, sizeof(struct path_search_record));
     
     // 查找文件
-    int inode_no = search_file(pathname, &searched_record);
-    
-    // 根目录不允许 unlink (inode 0 通常是根目录)
-    ASSERT(inode_no != 0);
-    
-    if (inode_no == -1) {
+    // 用户通常想删除的是符号链接本身，而不是符号链接指向的内容，所以此处传入 false
+    int inode_no = search_file(pathname, &searched_record,false);
+       
+    if (inode_no == -ENOENT) {
         printk("file %s not found!\n", pathname);
         // 如果 search_file 失败，内部可能已经打开了 parent_inode，需要释放
         if (searched_record.parent_inode && searched_record.parent_inode != root_dir_inode) {
@@ -724,10 +851,11 @@ int32_t sys_mkdir(const char* _pathname) {
     memset(&searched_record, 0, sizeof(struct path_search_record));
     
     // 搜索路径
-    int32_t inode_no = search_file(pathname, &searched_record);
+    // 为了检查是否会和链接重名，此处要传入false
+    int32_t inode_no = search_file(pathname, &searched_record,false);
 
     // 校验目录是否已存在
-    if (inode_no != -1) { 
+    if (inode_no >= 0) { 
         printk("sys_mkdir: file or directory %s already exists!\n", pathname);
         goto clean;
     } 
@@ -838,15 +966,17 @@ int32_t sys_rmdir(const char* _pathname) {
     memset(&searched_record, 0, sizeof(struct path_search_record));
     
     // 查找目标目录
-    int inode_no = search_file(pathname, &searched_record);
+    // 删除的是符号链接的目录项本身
+    // 因此传入false
+    int inode_no = search_file(pathname, &searched_record,false);
     
     // 根目录不允许删除
-    if (inode_no == 0) {
+    if (inode_no == get_part_by_rdev(searched_record.i_dev)->sb->s_root_ino) {
         printk("sys_rmdir: root directory cannot be removed!\n");
         goto clean;
     }
     
-    if (inode_no == -1) {
+    if (inode_no == -ENOENT) {
         printk("In %s, sub path %s not exist\n", pathname, searched_record.searched_path);
         // 即便没找到，如果 parent 不是根目录，也要释放 search_file 产生的引用
         goto clean;
@@ -1006,9 +1136,10 @@ int32_t sys_chdir(const char* _pathname) {
     char path[MAX_PATH_LEN] = {0};
     make_abs_pathname(_pathname, path); 
 
-    int inode_no = search_file(path, &record);
+    // 对于符号链接，我们直接进入到其指向处
+    int inode_no = search_file(path, &record,true);
 
-    if (inode_no == -1) {
+    if (inode_no == -ENOENT) {
         printk("sys_chdir: %s not exist\n", path);
         return -1;
     }
@@ -1064,8 +1195,9 @@ int32_t sys_stat(const char* _pathname, struct stat* buf) {
     struct path_search_record searched_record;
     memset(&searched_record, 0, sizeof(struct path_search_record));
     
-    int32_t inode_no = search_file(path, &searched_record);
-    if(inode_no == -1) {
+    // 查看的是目标文集的属性，不是链接本身的属性，如果要查看链接本身的属性，用lstat
+    int32_t inode_no = search_file(path, &searched_record,true);
+    if(inode_no == -ENOENT) {
         // 注意：即使没找到目标，parent_inode 也要关掉（由 search_file 开启）
         inode_close(searched_record.parent_inode);
         return -ENOENT;
@@ -1099,23 +1231,6 @@ int32_t sys_stat(const char* _pathname, struct stat* buf) {
     return -EIO;
 }
 
-static bool check_disk_name(struct dlist_elem* pelem,void* arg){
-	char* part_name = (char*) arg;
-	struct partition* part = member_to_entry(struct partition,part_tag,pelem);
-	if(!strcmp(part_name,part->name)){
-		return true;
-	}
-	return false;
-}
-
-static struct partition* get_part_by_name(char* part_name) {
-    struct dlist_elem* res = dlist_traversal(&partition_list, check_disk_name, (void*)part_name);
-    if (res == NULL) {
-        return NULL;
-    }
-    return member_to_entry(struct partition, part_tag, res);
-}
-
 // 专门用于在路径解析过头（钻进子分区）时，退回到挂载点本身
 static struct inode* back_to_mountpoint(struct inode* inode) {
     if (inode->i_mount == NULL && 
@@ -1134,35 +1249,53 @@ static struct inode* back_to_mountpoint(struct inode* inode) {
 
 int32_t sys_mount(char* dev_path, char* _mount_path, char* type, unsigned long new_flags UNUSED, void * data UNUSED) {
     printk("start mounting...\n");
+
+    // 找到挂载点目录
+    struct path_search_record record;
+    char abs_path[MAX_PATH_LEN];
+    memset(&record, 0, sizeof(record));
+    memset(abs_path, 0, sizeof(char)*MAX_PATH_LEN);
+
+    // 先借用 abs_path 来检查一下设备，之后再复用来检查挂载点
+    make_abs_pathname(dev_path, abs_path);
+
     // 取出设备名
-    char* dev_name = strrchr(dev_path,'/') + 1;
     // 通用 VFS 准备工作
     // 获取设备分区
-    struct partition* part = get_part_by_name(dev_name);
-    if (!part){
-        printk("can't find block dev %s\n",dev_name);
+    // 设备常常会被创建成符号链接，所以要true
+    int32_t dev_ino = search_file(abs_path, &record,true);
+
+    if (dev_ino == -ENOENT){
+        printk("fail to find dev %s\n",abs_path);
         return -1;
     }
 
+    struct inode* dev_inode = inode_open(get_part_by_rdev(record.i_dev), dev_ino);
+
+    if (dev_inode->i_rdev==0){
+        printk("file %s is not a mountable dev!\n",abs_path);
+        inode_close(dev_inode);
+        return -1;
+    }
+    inode_close(dev_inode);
+    struct partition* part =  get_part_by_rdev(dev_inode->i_rdev);
+    
     // 防止一个分区被挂载在多个目录下（现在暂时只支持单分区挂载）
     // 这个操作可以有效防止根文件系统例如sda1被再次挂载的情况
     // 如果根 Inode 已经指向了一个挂载点，说明它真的被挂载了
     if (part->sb != NULL && part->sb->s_root_inode != NULL && part->sb->s_root_inode->i_mount_at != NULL) {
-        printk("VFS: Device %s is already mounted at some directory!\n", dev_path);
+        printk("VFS: Device %s is already mounted at some directory!\n", abs_path);
         return -1;
     }
 
-    // 找到挂载点目录
-    struct path_search_record record;
     memset(&record, 0, sizeof(record));
-    char mount_path[MAX_PATH_LEN] = {0};
-    make_abs_pathname(_mount_path, mount_path); // 统一转成绝对路径
-    // 在这里使用不分区穿透的版本
-    // 不会产生什么问题，因为如果该目录挂载了分区，那么我们就是要不穿透才能进行重复挂载的检查
-    // 如果没有挂载分区，那么 do_search_file 第三个参数即使为true也不会穿透，因此置为false就行
-    int32_t mp_inode_no = search_file(mount_path, &record);
+    memset(abs_path, 0, sizeof(char)*MAX_PATH_LEN);
+    
+    make_abs_pathname(_mount_path, abs_path); // 统一转成绝对路径
+    // 用户有时候可以将目录取别名后挂载，所以此处传入true
+    int32_t mp_inode_no = search_file(abs_path, &record,true);
 
-    if (mp_inode_no == -1){
+    if (mp_inode_no == -ENOENT){
         printk("fail to find mount point\n");
         return -1;
     }
@@ -1176,24 +1309,21 @@ int32_t sys_mount(char* dev_path, char* _mount_path, char* type, unsigned long n
 
     // 如果当前挂载点已经挂载了其他分区，那么拒绝挂载操作
     if (back_mp_inode->i_mount != NULL) {
-        printk("VFS: mount failed! %s is already a mount point for another device.\n", mount_path);
-        inode_close(mp_inode);
-        inode_close(back_mp_inode);
-        return -1;
+        printk("VFS: mount failed! %s is already a mount point for another device.\n", abs_path);
+        goto rollback2;
     }
 
     inode_close(back_mp_inode); 
 
     // 挂载点必须是目录，且没被挂载
     if (mp_inode->i_mount != NULL) {
-        printk("VFS: %s is already a mount point\n", mount_path);
-        inode_close(mp_inode);
-        return -1;
+        printk("VFS: %s is already a mount point\n", abs_path);
+        goto rollback2;
     }
 
     if (mp_inode->i_type != FT_DIRECTORY){
-        printk("VFS: mount target must be a direcotry\n", mount_path);
-        inode_close(mp_inode);
+        printk("VFS: mount target must be a direcotry\n", abs_path);
+
         return -1;
     }
 
@@ -1210,8 +1340,8 @@ int32_t sys_mount(char* dev_path, char* _mount_path, char* type, unsigned long n
         // 获取分区并 read_super
         res = fst->read_super(sb, NULL, 0);
         if(res==NULL){
-            printk("fail to mount %s, you should mkfs first!\n",dev_name);
-            goto rollback;
+            printk("fail to mount %s, you should mkfs first!\n",dev_path);
+            goto rollback1;
         }
 
     }else{
@@ -1230,15 +1360,17 @@ int32_t sys_mount(char* dev_path, char* _mount_path, char* type, unsigned long n
         
         // 挂载成功后，mp_inode 应该保持 open 状态（不被释放出内存）
         // 这样隧道才稳定
-        printk("mount %s as %s done! mount at %s\n",dev_name,type,mount_path);
+        printk("mount %s as %s done! mount at %s\n",dev_path,type,abs_path);
         return 0;
     }
-rollback:
+rollback1:
     // 失败回滚
-    printk("VFS: Failed to mount %s\n", dev_name);
+    printk("VFS: Failed to mount %s\n", dev_path);
     part->sb = NULL; // 清除绑定关系
-    inode_close(mp_inode); // 释放挂载点引用
     kfree(sb); // 释放超级块内存
+rollback2:
+    inode_close(back_mp_inode);
+    inode_close(mp_inode);
     return -1;
 }
 
@@ -1250,8 +1382,8 @@ int32_t sys_umount(const char* _mount_path) {
     char mount_path[MAX_PATH_LEN] = {0};
     make_abs_pathname(_mount_path, mount_path); 
 
-    int32_t mp_inode_no = search_file(mount_path, &record);
-    if (mp_inode_no == -1) {
+    int32_t mp_inode_no = search_file(mount_path, &record,true);
+    if (mp_inode_no == -ENOENT) {
         printk("VFS: umount target %s not found\n", mount_path);
         return -1;
     }
@@ -1349,10 +1481,11 @@ int32_t sys_mknod(const char* _pathname, enum file_types type, uint32_t dev) {
     memset(&searched_record, 0, sizeof(struct path_search_record));
     
     // 查找路径（search_file 内部会 inode_open 父目录）
-    int32_t inode_no = search_file(pathname, &searched_record);
+    // 为了防止和当前目录下的符号链接重名，此处传入false
+    int32_t inode_no = search_file(pathname, &searched_record,false);
 
     // 检查目标是否已存在
-    if (inode_no != -1) {
+    if (inode_no >= 0) {
         printk("sys_mknod: file %s exists! ino:%d\n", pathname, inode_no);
         goto clean;
     }
@@ -1543,8 +1676,9 @@ int32_t sys_rename(const char* _old_path, const char* _new_path) {
     // 解析旧路径
     struct path_search_record old_record;
     memset(&old_record, 0, sizeof(struct path_search_record));
-    int old_ino = search_file(old_pathname, &old_record);
-    if (old_ino == -1) {
+    // 通常rename的是链接本身，因此此处传入false
+    int old_ino = search_file(old_pathname, &old_record,false);
+    if (old_ino == -ENOENT) {
         // 源文件不存在
         printk("sys_rename: source file does not exist\n");
         goto fail;
@@ -1553,7 +1687,9 @@ int32_t sys_rename(const char* _old_path, const char* _new_path) {
     // 解析新路径
     struct path_search_record new_record;
     memset(&new_record, 0, sizeof(struct path_search_record));
-    search_file(new_pathname, &new_record);
+    // rename 的语义包含“如果目标位置已有文件，则覆盖它”。
+    // 如果目标是一个符号链接的话，我们需要覆盖它本身
+    search_file(new_pathname, &new_record,false);
     // new_ino == -1 是正常的，说明目标位置尚未被占用
     // 关键修正：确保新路径所在的父目录是存在的
     if (new_record.parent_inode == NULL) {
@@ -1608,11 +1744,13 @@ int32_t sys_statfs(const char* path, struct statfs* buf) {
     // 查找路径对应的 inode
     struct path_search_record record;
     memset(&record, 0, sizeof(struct path_search_record));
-    int inode_no = search_file(abs_path, &record);
+
+    // 由于可能用符号链接指向，因此传入true
+    int inode_no = search_file(abs_path, &record,true);
 
     // 即使文件没找到，只要父目录在，通常也能定位到文件系统
     // 但最稳妥的是要求路径必须存在
-    if (inode_no == -1) {
+    if (inode_no == -ENOENT) {
         if (record.parent_inode) inode_close(record.parent_inode);
         kfree(abs_path);
         return -ENOENT;
@@ -1776,4 +1914,44 @@ void sys_disk_info() {
     }
     kfree(granulars);
     kfree(div_cnts);
+}
+
+int32_t sys_symlink(const char* target, const char* linkpath) {
+    if (target == NULL || linkpath == NULL) return -EFAULT;
+
+    struct path_search_record record;
+    memset(&record, 0, sizeof(struct path_search_record));
+
+    // 搜索 linkpath。我们期望它“不存在”，但能找到它的父目录
+    // 由于我们需要验证链接本身是否存在，因此此处传入false
+    int32_t inode_no = search_file((char*)linkpath, &record,false);
+
+    // 如果文件已经存在，不能创建同名链接
+    if (inode_no >= 0) {
+        // search_file 找到了文件会增加父目录引用，这里要处理
+        inode_close(record.parent_inode);
+        return -EEXIST; 
+    }
+
+    // 检查父目录是否存在
+    if (record.parent_inode == NULL) {
+        return -ENOENT;
+    }
+
+    // 从 linkpath 中提取出最后一部分作为文件名
+    // 比如 /a/b/c -> c
+    char* name = strrchr(linkpath, '/');
+    if (name == NULL) name = (char*)linkpath;
+    else name++; // 跳过 '/'
+
+    // 调用底层的 Inode 操作集
+    struct inode* dir = record.parent_inode;
+    int32_t retval = -ENOSYS;
+
+    if (dir->i_op && dir->i_op->symlink) {
+        retval = dir->i_op->symlink(dir, name, strlen(name), target);
+    }
+
+    inode_close(dir); // 释放 search_file 占用的父目录 Inode
+    return retval;
 }

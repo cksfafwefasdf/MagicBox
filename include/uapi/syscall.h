@@ -62,6 +62,8 @@
 #define SYS_MMAP 51
 #define SYS_MUNMAP 52
 #define SYS_EXECVE 53
+#define SYS_SYMLINK 54
+#define SYS_READLINK 55
 
 // user interface
 extern uint32_t getpid(void);
@@ -122,4 +124,5 @@ extern void* mmap(void* addr, uint32_t len, uint32_t prot, uint32_t flags, int32
 extern int32_t munmap(void* addr, uint32_t len);
 extern int32_t execve(const char* path, const char* argv[], const char* envp[]);
 extern uint32_t time(void);
+extern int32_t symlink(const char* target, const char* linkpath);
 #endif

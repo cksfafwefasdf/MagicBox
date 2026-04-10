@@ -19,7 +19,7 @@ static const uint8_t ext2_to_linux_dt[] = {
     [FT_BLOCK_SPECIAL] = DT_BLK, 
     [FT_FIFO]          = DT_FIFO, 
     [FT_SOCKET]        = DT_SOCK,
-    [FT_SYMBOLIC_LINK] = DT_LNK, 
+    [FT_SYMLINK] = DT_LNK, 
 };
 
 static uint32_t ext2_mmap_prot_to_vm_flags(uint32_t prot) {

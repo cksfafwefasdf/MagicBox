@@ -37,4 +37,5 @@
 #define	ENAMETOOLONG 36	/* File name too long */
 #define	ENOSYS		38	/* Invalid system call number */
 #define	ENOTEMPTY	39	/* Directory not empty */
+#define	ELOOP		40  /* Too many symbolic links encountered */
 #endif

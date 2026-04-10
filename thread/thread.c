@@ -259,32 +259,9 @@ void thread_yield(void){
 	intr_set_status(old_status);
 }
 
-
-
 pid_t fork_pid(){
 	return allocate_pid();
 }
-
-static void pad_print(char* buf,int32_t buf_len,void* ptr,char format){
-	memset(buf,0,buf_len);
-	uint8_t out_pad_0idx = 0;
-	switch (format){
-		case 's':
-			out_pad_0idx = sprintf(buf,"%s",ptr);
-			break;
-		case 'd':
-			out_pad_0idx = sprintf(buf,"%d",*((int16_t*)ptr));
-		case 'x':
-			out_pad_0idx = sprintf(buf,"%x",*((uint32_t*)ptr));
-	}
-
-	while(out_pad_0idx<buf_len){
-		buf[out_pad_0idx] = ' ';
-		out_pad_0idx++;
-	}	
-	sys_write(stdout_no,buf,buf_len-1);
-}
-
 
 static bool elem2thread_info(struct dlist_elem* pelem,void* arg UNUSED){
 	struct task_struct* pthread = member_to_entry(struct task_struct,all_list_tag,pelem);

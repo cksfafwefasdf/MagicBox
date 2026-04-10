@@ -94,6 +94,7 @@ struct path_search_record{
 	struct inode* parent_inode; // 父目录的inode
 	enum file_types file_type;
     uint32_t i_dev; // 所在设备号
+	int error_code; // 用于记录具体的错误原因
 };
 
 // 用于 vfs，抽象文件操作
@@ -131,8 +132,8 @@ struct inode_operations {
 	// int (*link) (struct inode *,struct inode *,const char *,int); 
 	// 删除文件
 	int (*unlink) (struct inode *,char *,int);
-	// 符号链接
-	// int (*symlink) (struct inode *,char *,int,const char *);
+	// 创建符号链接
+	int (*symlink) (struct inode *,char *,int,const char *);
 	// 创建子目录文件
 	int (*mkdir) (struct inode *,char *,int,int);
 	int (*rmdir) (struct inode *,char *,int);
@@ -144,11 +145,16 @@ struct inode_operations {
 	// 参数里有两个 inode。第一个是源目录，第二个是目标目录。
 	int (*rename) (struct inode *,char *,int,struct inode *,char *,int);
 	// 用户态调用（如 readlink 命令）。它把符号链接文件里的“内容”（即指向的路径字符串）读出来。
-	// int (*readlink) (struct inode *,char *,int);
+	int (*readlink) (struct inode *,char *,int);
 	// 路径解析时调用。
 	// 当访问 /mnt/link_to_a 时，路径解析引擎发现这是一个软链接，就会调用 follow_link。
 	// 它会告诉 VFS 别停下，继续去搜这个软链接指向的那个目标 inode
+
+	// 由于我们的系统中，路径的解析操作主要是一个字符串操作解析操作，在vfs层进行
+	// 而不是像 linux 那样通过 dentry 实现的树状状态机结构，因此我们不需要这个函数
+	// 直接通过 readlink 加上字符串的拼接操作来实现符号链接的转换
 	// int (*follow_link) (struct inode *,struct inode *,int,int,struct inode **);
+
 	// 块映射, 传入文件的逻辑块号（例如：文件的第 0, 1, 2 个块），返回该块在磁盘上的物理扇区号（LBA）。
 	// 最典型的是 Swap（交换分区）。
 	// 当内核需要把内存页换出到文件时，它不能通过文件系统层去写（那太慢且容易死锁）

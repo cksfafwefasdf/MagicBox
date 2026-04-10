@@ -350,7 +350,6 @@ static void ext2_inode_init(struct partition* part, uint32_t inode_no,struct ino
 	new_inode->i_dev = part->i_rdev;
     new_inode->i_sb = part->sb; // 建立归属超级块，以后读写数据块要用到他
     new_inode->write_deny = false;
-    new_inode->i_mode = encode_imode(ft,mode);
 
 	// 初始化ext2专用字段
     new_inode->i_mode = encode_imode(ft,mode);
@@ -382,6 +381,9 @@ static void ext2_inode_init(struct partition* part, uint32_t inode_no,struct ino
             break;
         case FT_BLOCK_SPECIAL:
             new_inode->i_op = &ext2_blkdev_inode_operations;
+            break;
+        case FT_SYMLINK:
+            new_inode->i_op = &ext2_symlink_inode_operations;
             break;
         default:
             new_inode->i_op = NULL;
@@ -1375,6 +1377,120 @@ out:
     return retval;
 }
 
+static int32_t ext2_readlink(struct inode* inode, char* buf, int bufsize) {
+    uint32_t block_size = inode->i_sb->s_block_size;
+    uint32_t path_len = inode->i_size;
+    
+    // 确保不会溢出用户提供的 buf
+    if (path_len > (uint32_t)bufsize) {
+        path_len = bufsize;
+    }
+
+    // 根据 i_blocks 是否为 0 判断是 Fast Symlink 还是 Normal Symlink
+    // 普通符号链接中，如果目标路径（如 /usr/bin/python3）很长，内核会分配一个数据块，把路径存进去。
+    // 快符号链接 (Fast Symlink)中，如果目标路径很短（小于 60 字节）
+    // Ext2 会直接把路径字符串存放在 inode 结构体原本用来存放块地址的 i_block[15] 数组里。
+    // 这么做的好处是不需要分配额外的数据块，节省空间，更重要的是减少了一次磁盘 IO。
+    if (inode->ext2_i.i_blocks == 0) {
+        // 快符号链接，路径直接存在 i_block 数组里
+        memcpy(buf, (char*)inode->ext2_i.i_block, path_len);
+        buf[path_len] = '\0';
+        return path_len;
+    }
+
+    // 处理 Normal Symlink (路径存在外部磁盘块)
+    struct partition* part = get_part_by_rdev(inode->i_dev);
+    void* io_buf = kmalloc(block_size);
+    
+    // 符号链接的目标路径通常不会跨块（谁会写超过 1KB/4KB 的路径呢？况且我们系统限制的最长路径长度只有512字节）
+    // 但为了严谨，我们还是按照逻辑块号来读。由于 i_size 记录了总长度，
+    // 我们这里简单起见读出第一个块即可（对于大部分情况完全足够）。
+    uint32_t phys_block = ext2_bmap(inode, 0);
+    if (phys_block == 0) {
+        kfree(io_buf);
+        return -EIO; // 理论上不应出现
+    }
+
+    partition_read(part, BLOCK_TO_SECTOR(inode->i_sb, phys_block), io_buf, block_size / SECTOR_SIZE);
+    
+    // 将数据拷贝到输出缓冲区
+    memcpy(buf, io_buf, path_len);
+    buf[path_len] = '\0'; // 手动封死字符串 
+    
+    kfree(io_buf);
+    return path_len;
+}
+
+// 创建一个符号链接
+static int32_t ext2_symlink(struct inode* dir, char* name, int len UNUSED, const char* target) {
+    struct super_block* sb = dir->i_sb;
+    struct ext2_sb_info* ext2_info = &sb->ext2_info;
+    struct partition* part = get_part_by_rdev(sb->s_dev);
+    
+    uint32_t target_len = strlen(target);
+    if (target_len >= sb->s_block_size) return -ENAMETOOLONG;
+
+    // 分配 Inode 号
+    uint32_t group = (dir->i_no - 1) / ext2_info->sb_raw.s_inodes_per_group;
+    int32_t inode_no = ext2_resource_alloc(sb, group, EXT2_INODE_BITMAP);
+    if (inode_no == -1) return -ENOSPC;
+
+    // 初始化内存中的 Inode
+    struct inode* new_inode = (struct inode*)kmalloc(sizeof(struct inode));
+    ext2_inode_init(part, inode_no, new_inode, FT_SYMLINK, 0777);
+    
+    uint32_t now = (uint32_t)sys_time();
+    new_inode->i_atime = new_inode->i_mtime = new_inode->i_ctime = now;
+    new_inode->i_size = target_len;
+
+    int32_t phys_block = -1;
+
+    // 区分 Fast 和 Normal
+    if (target_len < FAST_LINK_LIMIT) {
+        // 物理块数为 0，数据存入 i_block
+        new_inode->ext2_i.i_blocks = 0;
+        memcpy((char*)new_inode->ext2_i.i_block, target, target_len);
+    } else {
+        // 分配一个数据块存储路径
+        phys_block = ext2_resource_alloc(sb, group, EXT2_BLOCK_BITMAP);
+        if (phys_block == -1) {
+            // 这里理想状态下要回滚 inode_bitmap，此处先暂略，直接panic
+            PANIC("ext2_symlink: fail to ext2_resource_alloc");
+            kfree(new_inode);
+            return -ENOSPC;
+        }
+        new_inode->ext2_i.i_block[0] = phys_block;
+        new_inode->ext2_i.i_blocks = sb->s_block_size / SECTOR_SIZE;
+
+        // 将路径写入磁盘块
+        void* io_buf = kmalloc(sb->s_block_size);
+        memset(io_buf, 0, sb->s_block_size);
+        memcpy(io_buf, target, target_len);
+        partition_write(part, BLOCK_TO_SECTOR(sb, phys_block), io_buf, sb->s_block_size / SECTOR_SIZE);
+        kfree(io_buf);
+    }
+
+    // 将该链接项添加到父目录
+    if (ext2_add_entry(dir, inode_no, name, FT_SYMLINK) < 0) {
+        ext2_resource_free(sb, inode_no, EXT2_INODE_BITMAP);
+        if (target_len >= 60 && phys_block != -1) {
+            ext2_resource_free(sb, phys_block, EXT2_BLOCK_BITMAP);
+        }
+        kfree(new_inode);
+        return -EIO;
+    }
+
+    // 持久化并同步元数据
+    sb->s_op->write_inode(new_inode);
+    sb->s_op->write_inode(dir);
+    ext2_sync_gdt(sb);
+    sb->s_op->write_super(sb);
+
+    kfree(new_inode);
+    return 0;
+}
+
+
 struct inode_operations ext2_file_inode_operations = {
     .default_file_ops = &ext2_file_file_operations,
     .create     = NULL,
@@ -1386,6 +1502,8 @@ struct inode_operations ext2_file_inode_operations = {
     .rename     = NULL, // rename 涉及到修改目录项，只能放到dir的inode操作里
     .bmap       = ext2_bmap, 
     .truncate   = ext2_truncate,
+    .symlink    = NULL, 
+    .readlink   = NULL,
 };
 
 struct inode_operations ext2_dir_inode_operations = {
@@ -1399,6 +1517,8 @@ struct inode_operations ext2_dir_inode_operations = {
     .rename     = ext2_rename,
     .bmap       = ext2_bmap, 
     .truncate   = ext2_truncate,
+    .symlink    = ext2_symlink, // ext2_symlink 本质上也是一个创建操作，和mknod一样，给目录操作集
+    .readlink   = NULL,
 };
 
 struct inode_operations ext2_chardev_inode_operations = {
@@ -1412,6 +1532,8 @@ struct inode_operations ext2_chardev_inode_operations = {
     .rename     = NULL,
     .bmap       = NULL, 
     .truncate   = NULL,
+    .symlink    = NULL, 
+    .readlink   = NULL,
 };
 
 struct inode_operations ext2_blkdev_inode_operations = {
@@ -1425,4 +1547,22 @@ struct inode_operations ext2_blkdev_inode_operations = {
     .rename     = NULL,
     .bmap       = NULL, 
     .truncate   = NULL,
+    .symlink    = NULL, 
+    .readlink   = NULL,
+};
+
+struct inode_operations ext2_symlink_inode_operations = {
+    .default_file_ops = NULL,
+    // 符号链接通常不允许在该目录下创建东西，所以其他函数为 NULL
+    .create     = NULL,
+    .lookup     = NULL,
+    .unlink     = NULL,
+    .mkdir      = NULL,
+    .rmdir      = NULL,
+    .mknod      = NULL,
+    .rename     = NULL,
+    .bmap       = NULL, 
+    .truncate   = NULL,
+    .symlink    = NULL, 
+    .readlink = ext2_readlink,
 };

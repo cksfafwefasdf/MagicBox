@@ -4,13 +4,24 @@
 #include <stdint.h>
 #include <ext2_sb.h>
 
+#define DIRECT_BLOCK_NR 12
+#define FIRST_LEVEL_INDEX_BLOCK_NR 1
+#define SECOND_LEVEL_INDEX_BLOCK_NR 1
+#define THIRD_LEVEL_INDEX_BLOCK_NR 1
+
+
+#define TOTAL_BLOCKS_NR DIRECT_BLOCK_NR+FIRST_LEVEL_INDEX_BLOCK_NR+SECOND_LEVEL_INDEX_BLOCK_NR+THIRD_LEVEL_INDEX_BLOCK_NR
+
+// 快符号链接中，直接把路径存在i_block中，这个字段一共有15*4=60字节
+#define FAST_LINK_LIMIT TOTAL_BLOCKS_NR*4
+
 struct partition;
 struct inode;
 struct super_block;
 
 struct ext2_inode_info {
     /* 核心指针：12直接, 1一级间接, 1二级间接, 1三级间接 */
-    uint32_t i_block[15]; 
+    uint32_t i_block[TOTAL_BLOCKS_NR]; 
     
     // 硬链接计数
     // 由于 i_mode 是 16 位的，为了凑齐 32 位对齐，我们再把 i_links_count 也加进来
@@ -38,5 +49,6 @@ extern struct inode_operations ext2_file_inode_operations;
 extern struct inode_operations ext2_dir_inode_operations;
 extern struct inode_operations ext2_chardev_inode_operations;
 extern struct inode_operations ext2_blkdev_inode_operations;
+extern struct inode_operations ext2_symlink_inode_operations;
 
 #endif

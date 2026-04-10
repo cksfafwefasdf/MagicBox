@@ -21,7 +21,7 @@ static const uint8_t sifs_to_linux_dt[] = {
     [FT_BLOCK_SPECIAL] = DT_BLK, 
     [FT_FIFO]          = DT_FIFO, 
     [FT_SOCKET]        = DT_SOCK,
-    [FT_SYMBOLIC_LINK] = DT_LNK, 
+    [FT_SYMLINK] = DT_LNK, 
 };
 
 bool sifs_search_dir_entry(struct partition* part, struct inode* dir_inode, const char* name,int len, struct sifs_dir_entry* de) {
@@ -384,6 +384,7 @@ int32_t sifs_readdir(struct inode* inode UNUSED, struct file* file, struct diren
             struct sifs_dir_entry* cur_sifs_de = p_de + offset;
             
             if (cur_sifs_de->f_type != FT_UNKNOWN) {
+                
                 // 将 SIFS 磁盘镜像转为通用 dirent
                 de->d_ino = cur_sifs_de->i_no;
                 de->d_type = sifs_to_linux_dt[cur_sifs_de->f_type];
