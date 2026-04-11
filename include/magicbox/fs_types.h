@@ -129,7 +129,7 @@ struct inode_operations {
 	// VFS 在解析路径 /a/b/c 时，会先拿到 / 的 inode，然后调用 root_inode->i_op->lookup(root, "a", ...) 得到 a 的 inode，如此递归。
 	int (*lookup) (struct inode *,char *,int,struct inode **); 
 	// 硬链接
-	// int (*link) (struct inode *,struct inode *,const char *,int); 
+	int (*link) (struct inode *,struct inode *,const char *,int); 
 	// 删除文件
 	int (*unlink) (struct inode *,char *,int);
 	// 创建符号链接

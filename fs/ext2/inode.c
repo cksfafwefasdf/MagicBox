@@ -1018,7 +1018,7 @@ static int32_t ext2_unlink(struct inode* dir, char* name, int len) {
     // Ext2 的删除需要处理 rec_len 的合并
     if (ext2_remove_entry(dir, name) != 0) {
         inode_close(target_inode);
-        return -1;
+        return -EIO;
     }
 
     dir->i_mtime = (uint32_t)now;
@@ -1490,6 +1490,52 @@ static int32_t ext2_symlink(struct inode* dir, char* name, int len UNUSED, const
     return 0;
 }
 
+// link 就是将不同的目录项指向同一个文件
+// 符号链接可以跨设备，但是硬链接不可以
+// 因为符号链接的唯一标记其实就是一个路径，所以不管跨不跨设备，他只把握这个路径就行了，因此它可以跨设备
+// 但是硬链接它的标记是它指向的 inode，而这个 inode 的 inode 索引在不同分区上可能相同
+// 这导致硬链接如果可以跨分区的话会出现指代模糊的情况
+
+// 文件系统底层不检查文件名是否重复，文件名是否重复是交给vfs层检查的
+static int32_t ext2_link(struct inode* old_inode, struct inode* dir, const char* name, int len) {
+    // 硬链接不能指向目录（Linux 的标准做法，防止文件系统拓扑变成图而不是树）
+    if (old_inode->i_type == FT_DIRECTORY) {
+        return -EPERM; 
+    }
+
+    // 检查是否跨设备（VFS 层通常会处理，但在底层驱动做一次校验更安全）
+    if (old_inode->i_dev != dir->i_dev) {
+        return -EXDEV;
+    }
+
+    // 增加源文件的硬链接计数
+    old_inode->ext2_i.i_links_count++;
+    
+    // 更新 ctime (Inode 状态改变)
+    uint32_t now = (uint32_t)sys_time();
+    old_inode->i_ctime = now;
+
+    // 在目标目录中添加新的目录项
+    // 注意，file_type 应该和源文件保持一致
+    int32_t ret = ext2_add_entry(dir, old_inode->i_no, (char*)name, old_inode->i_type);
+    if (ret < 0) {
+        // 如果添加失败（如磁盘空间不足），需要回滚计数
+        old_inode->ext2_i.i_links_count--;
+        return ret;
+    }
+
+    // 更新目标目录的时间戳
+    dir->i_mtime = now;
+    dir->i_ctime = now;
+
+    // 持久化到磁盘
+    struct super_block* sb = old_inode->i_sb;
+    sb->s_op->write_inode(old_inode); // 更新源文件 Inode (links_count)
+    sb->s_op->write_inode(dir);       // 更新目录 Inode (mtime/ctime)
+
+    return 0;
+}
+
 
 struct inode_operations ext2_file_inode_operations = {
     .default_file_ops = &ext2_file_file_operations,
@@ -1504,6 +1550,7 @@ struct inode_operations ext2_file_inode_operations = {
     .truncate   = ext2_truncate,
     .symlink    = NULL, 
     .readlink   = NULL,
+    .link       = NULL,
 };
 
 struct inode_operations ext2_dir_inode_operations = {
@@ -1519,6 +1566,7 @@ struct inode_operations ext2_dir_inode_operations = {
     .truncate   = ext2_truncate,
     .symlink    = ext2_symlink, // ext2_symlink 本质上也是一个创建操作，和mknod一样，给目录操作集
     .readlink   = NULL,
+    .link       = ext2_link,
 };
 
 struct inode_operations ext2_chardev_inode_operations = {
@@ -1534,6 +1582,7 @@ struct inode_operations ext2_chardev_inode_operations = {
     .truncate   = NULL,
     .symlink    = NULL, 
     .readlink   = NULL,
+    .link       = NULL,
 };
 
 struct inode_operations ext2_blkdev_inode_operations = {
@@ -1549,6 +1598,7 @@ struct inode_operations ext2_blkdev_inode_operations = {
     .truncate   = NULL,
     .symlink    = NULL, 
     .readlink   = NULL,
+    .link       = NULL,
 };
 
 struct inode_operations ext2_symlink_inode_operations = {
@@ -1565,4 +1615,5 @@ struct inode_operations ext2_symlink_inode_operations = {
     .truncate   = NULL,
     .symlink    = NULL, 
     .readlink = ext2_readlink,
+    .link       = NULL,
 };

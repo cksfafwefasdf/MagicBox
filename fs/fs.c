@@ -498,7 +498,6 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
         // 如果带了 O_CREATE 且错误是 ENOENT，则继续向下执行创建逻辑
     }
 
-
 	// 此时，如果 inode_no >= 0，说明文件已存在
     bool found = (inode_no >= 0);
 
@@ -521,16 +520,6 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
         inode_close(searched_record.parent_inode);
         return -EEXIST;
     }
-
-	// uint32_t path_searched_depth = path_depth_cnt(searched_record.searched_path);
-	// // to process the situation /a/b/c (/a/b is a regular file or not exists)
-	// if(pathname_depth!=path_searched_depth && strcmp(pathname, "/")){
-	// 	printk("sys_open: cannot access %s: Not a directory, subpath %s is't exist\n",\
-	// 	pathname,searched_record.searched_path);
-	// 	inode_close(searched_record.parent_inode);
-	// 	return -ENOENT; // 路径中的某个目录不存在
-	// }
-
     
 	if(!found&&!(flags&O_CREATE)){
         // 文件不存在，且没要求创建，则报错
@@ -540,11 +529,6 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
 		inode_close(searched_record.parent_inode);
 		return -ENOENT;
 	}
-    // else if(found && (flags & O_CREATE)){
-	// 	printk("%s has already exist!\n",pathname);
-	// 	inode_close(searched_record.parent_inode);
-	// 	return -1;
-	// }
 
     int32_t final_inode_no = -1;
 
