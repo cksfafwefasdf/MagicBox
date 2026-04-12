@@ -3,6 +3,9 @@
 #include <stdbool.h>
 #include <interrupt.h>
 #include <tty.h>
+#include <console.h>
+#include <device.h>
+#include <stdint.h>
 
 #define COM1 0x3F8
 
@@ -11,6 +14,8 @@ static bool uart_present = false;
 
 static void uart_interrupt_handler(void);
 
+// 串口控制台
+struct console_device console_uartcon;
 
 // 为了简单起见，目前先采用 轮询发送 + 中断接收 的方式
 void uart_init() {
@@ -57,6 +62,18 @@ void uart_init() {
     outb(COM1 + 4, 0x0B);
 
     register_handler(0x24,uart_interrupt_handler);
+
+    if(uart_present){
+            memset(&console_uartcon, 0, sizeof(struct console_device));
+            console_uartcon.put_char = uart_putc;
+            console_uartcon.put_str = uart_puts;
+            // uart 设备不特殊处理 int 输出，实在不行可以先用 itos 处理好后，再调用 uart_puts
+            console_uartcon.put_int = NULL;
+            console_uartcon.rdev = MAKEDEV(TTY_MAJOR, TTYS0_MINOR);
+            memset(console_uartcon.name,0,CONSOLE_DEV_NAME_LEN);
+            strcpy(console_uartcon.name,"ttyS0");
+            console_register(&console_uartcon);
+    }
 }
 
 int is_transmit_empty() {
@@ -66,7 +83,12 @@ int is_transmit_empty() {
 
 void uart_putc(char a) {
     if (!uart_present) return;
-    while (is_transmit_empty() == 0); 
+    // 如果输出的是换行符，先补一个回车符，把光标拉回行首
+    if (a == '\n') {
+        while (is_transmit_empty() == 0); 
+        outb(COM1, '\r');
+    }
+    while (is_transmit_empty() == 0);
     outb(COM1, a);
 }
 
@@ -116,6 +138,8 @@ static void uart_interrupt_handler(void) {
 
         // 直接调 tty 的处理逻辑
         // 它会自动处理回显(ECHO)、退格、信号(SIGINT)等
-        tty_input_handler(c);
+        // 由于目前我们只有一个ttyS0，因此设备号直接硬编码ttyS0了
+        // 先不过度设计了，以后要扩展了再来改吧
+        tty_input_handler(c,MAKEDEV(TTY_MAJOR,TTYS0_MINOR));
     }
 }

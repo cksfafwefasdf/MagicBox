@@ -1,5 +1,5 @@
 #include <debug.h>
-#include <print.h>
+#include <vgacon.h>
 #include <interrupt.h>
 #include <stdio.h>
 #include <syscall.h>
@@ -8,6 +8,10 @@
 
 void panic_spin(char* filename,int line,const char* func,const char* condition){
    	intr_disable();
+
+    // 由于 panic 必须强制向屏幕上输出信息，因此直接绕过所有的包装层
+    // 直接用 put_str 和 uart_puts 强制向屏幕打印错误信息
+
     put_str("\n\n\n!!!!!!!!!! error !!!!!!!!!!\n");
     put_str("filename: ");put_str(filename);put_str("\n");
     put_str("line: 0x");put_int(line);put_str("\n");

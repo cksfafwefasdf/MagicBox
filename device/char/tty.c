@@ -1,5 +1,5 @@
 #include <tty.h>
-#include <print.h>
+#include <vgacon.h>
 #include <ioqueue.h>
 #include <console.h>
 #include <timer.h>
@@ -12,19 +12,38 @@
 #include <fs.h>
 #include <ioctl.h>
 #include <debug.h>
+#include <stdio-kernel.h>
+
+#define TTY_WRITE_BUF_SIZE 128
 
 struct tty_struct console_tty;
 
-int32_t tty_write(char* buf, uint32_t count) {
-    uint32_t i = 0;
-    while (i < count) {
-        console_put_char(buf[i]);
-        i++;
+static int32_t tty_write(struct file* file, char* buf, uint32_t count) {
+    uint32_t bytes_left = count;
+    uint32_t offset = 0;
+    char _buf[TTY_WRITE_BUF_SIZE + 1];
+
+    while (bytes_left > 0) {
+        // 计算本次搬运的长度，不能超过 128 字节
+        uint32_t chunk_size = (bytes_left > TTY_WRITE_BUF_SIZE) ? TTY_WRITE_BUF_SIZE : bytes_left;
+        
+        // 拷贝到内核临时缓冲区
+        memcpy(_buf, buf + offset, chunk_size);
+        _buf[chunk_size] = '\0'; // 确保 put_str 能找到结束符
+
+        // 对这 128 字节（或剩余字节）进行一次性广播
+        // 这样 console_acquire 和 dlist_traversal 的频率比逐字节输出降低了 128 倍
+        console_put_str(_buf,file->fd_inode->i_rdev);
+
+        offset += chunk_size;
+        bytes_left -= chunk_size;
     }
-    return (int32_t)i; // 符合 POSIX，返回写入的字节数
+
+    return (int32_t)count; // 符合 POSIX，返回写入的字节数
 }
 
-void tty_input_handler(char c) {
+// 该函数会被 uart 和键盘的中断程序调用，用于处理输入
+void tty_input_handler(char c, uint32_t rdev) {
     struct termios* term = &console_tty.termios;
 
     // 处理退格 (VERASE)
@@ -38,7 +57,7 @@ void tty_input_handler(char c) {
                 // 我们的 print.s 中会处理 \b 后的光标移动以及空格输出，但是走 uart 时就没法处理了
                 // 因为现代的linux例如ubuntu接收到\b后只会移动光标，不会输出空格
                 // 因此我们在此直接输出一个 "\b \b"，手动把相应的字符删除，让vga和uart都能处理
-                if (term->c_lflag & ECHO) console_put_str("\b \b");
+                if (term->c_lflag & ECHO) console_put_str("\b \b",rdev);
             }
         }
         return;
@@ -61,7 +80,7 @@ void tty_input_handler(char c) {
             uint32_t last_idx = (console_tty.ibuf.head - 1 + BUFSIZE) % BUFSIZE;
             if (console_tty.ibuf.buf[last_idx] == '\n') break;
             ioq_popchar(&console_tty.ibuf);
-            if (term->c_lflag & ECHO) console_put_char('\b');
+            if (term->c_lflag & ECHO) console_put_char('\b',rdev);
         }
         if (c == term->c_cc[VCLR]) {
             ioq_putchar(&console_tty.ibuf, c); // 把 ^L 放进去给 Shell 读
@@ -83,10 +102,10 @@ void tty_input_handler(char c) {
 
     // 普通字符
     ioq_putchar(&console_tty.ibuf, c);
-    if (term->c_lflag & ECHO) console_put_char(c);
+    if (term->c_lflag & ECHO) console_put_char(c,rdev);
 }
 
-int tty_read(char* buf, uint32_t count) {
+static int tty_read(struct file* file, char* buf, uint32_t count) {
     // 首先阻塞在这里，直到 tty_input_handler 释放了一个“行信号”
     sema_wait(&console_tty.line_sem);
 
@@ -100,7 +119,7 @@ int tty_read(char* buf, uint32_t count) {
         // 如果读到的是 ctrl+c 打印相应的操作，但是不要直接将这个转义字符入队
         // 而是入队一个 \n 来作为行结束标志，到时候shell取到的就是空指令了
         if (c == term->c_cc[VINTR]&&(term->c_lflag & ECHO)) {
-            console_put_str("^C");
+            console_put_str("^C",file->fd_inode->i_rdev);
             c = '\n';
         }
 
@@ -109,7 +128,7 @@ int tty_read(char* buf, uint32_t count) {
         // 由消费进程在拿走数据时，同步回显换行
         if (c == '\n') {
             if (term->c_lflag & ECHO) {
-                console_put_char('\n');
+                console_put_char('\n',file->fd_inode->i_rdev);
             }
             break;
         }
@@ -176,19 +195,24 @@ void tty_init() {
     sema_init(&console_tty.line_sem, 0); 
 
     lock_init(&console_tty.tty_lock);
-
 }
 
-// --------------- 以下的代码用于 tty 设备适配虚拟文件系统 ---------------
-
 // 适配 read
-static int32_t tty_dev_read(struct inode* inode UNUSED, struct file* file UNUSED, char* buf, int32_t count) {
-    return tty_read(buf, count); 
+static int32_t tty_dev_read(struct inode* inode UNUSED, struct file* file, char* buf, int32_t count) {
+    if(MAJOR(file->fd_inode->i_rdev) != TTY_MAJOR){
+        printk("tty_dev_read: this file is not a tty!\n");
+        return -EINVAL;
+    }
+    return tty_read(file, buf, count); 
 }
 
 // 适配 write
-static int32_t tty_dev_write(struct inode* inode UNUSED, struct file* file UNUSED, char* buf, int32_t count) {
-    return tty_write(buf, count);
+static int32_t tty_dev_write(struct inode* inode UNUSED, struct file* file, char* buf, int32_t count) {
+    if(MAJOR(file->fd_inode->i_rdev) != TTY_MAJOR){
+        printk("tty_dev_read: this file is not a tty!\n");
+        return -EINVAL;
+    }
+    return tty_write(file, buf, count);
 }
 
 struct file_operations tty_file_operations = {

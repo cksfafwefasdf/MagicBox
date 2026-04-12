@@ -1,6 +1,6 @@
 #include <stdint.h>
 #include <global.h>
-#include <print.h>
+#include <vgacon.h>
 #include <string.h>
 #include <thread.h>
 #include <tss.h>

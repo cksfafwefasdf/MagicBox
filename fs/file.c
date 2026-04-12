@@ -109,7 +109,7 @@ int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
             uint32_t major = MAJOR(file_table[fd_idx].fd_inode->i_rdev);
             if (major == TTY_MAJOR) {
                 file_table[fd_idx].f_op = &tty_file_operations;
-            }else{
+            } else {
 				printk("file_open: this file do not have f_op\n");
 			}
 

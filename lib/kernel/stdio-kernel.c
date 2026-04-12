@@ -9,6 +9,5 @@ void printk(const char* format,...){
 	char buf[PRINT_BUF_SIZE] = {0};
 	vsprintf(buf,format,args);
 	va_end(args);
-
-	console_put_str(buf);
+	console_put_str(buf,BROADCAST_RDEV);
 }

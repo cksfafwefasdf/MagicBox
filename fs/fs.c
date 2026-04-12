@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <ext2_sb.h>
 #include <time.h>
+#include <console.h>
 
 // root_part 用于记录根分区，他是全局唯一的
 struct partition* root_part;
@@ -473,8 +474,6 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
 
 	struct path_search_record searched_record;
 	memset(&searched_record,0,sizeof(struct path_search_record));
-	
-	uint32_t pathname_depth = path_depth_cnt((char*)pathname);
 	
 	int inode_no = search_file(pathname,&searched_record,true);
 
@@ -955,7 +954,7 @@ int32_t sys_rmdir(const char* _pathname) {
     int inode_no = search_file(pathname, &searched_record,false);
     
     // 根目录不允许删除
-    if (inode_no == get_part_by_rdev(searched_record.i_dev)->sb->s_root_ino) {
+    if ((uint32_t)inode_no == get_part_by_rdev(searched_record.i_dev)->sb->s_root_ino) {
         printk("sys_rmdir: root directory cannot be removed!\n");
         goto clean;
     }
@@ -1547,7 +1546,7 @@ int32_t sys_dup2(uint32_t old_local_fd, uint32_t new_local_fd) {
 }
 
 // 遍历分区链表的回调函数，用于创建设备节点
-static bool make_partition_node(struct dlist_elem* pelem, void* arg UNUSED) {
+static bool _cb_make_partition_node(struct dlist_elem* pelem, void* arg UNUSED) {
     struct partition* part = member_to_entry(struct partition, part_tag, pelem);
     
     char dev_path[32] = {0};
@@ -1579,25 +1578,37 @@ static void clear_dev_directory(void) {
     while (sys_readdir(fd, &de) > 0) {
 
         printk("name:%s\n",de.d_name);
-        // 使用 de.d_name 访问文件名
-        if (!strcmp(de.d_name, ".") || !strcmp(de.d_name, "..")) {
-            continue;
-        }
 
-        // 使用 de.d_type 判断文件类型
-        if (de.d_type != FT_DIRECTORY) {
+        // 使用 de.d_type 判断文件类型，将不是目录类型的文件全部删除，这么做可以把 . 和 .. 自然排除在外
+        if (de.d_type != DT_DIR) {
             memset(path, 0, MAX_PATH_LEN);
             sprintf(path, "/dev/%s", de.d_name);
             printk("clear_dev: delete file: %s\n", path);
             
             sys_unlink(path);
-                
         }
     }
 
     sys_close(fd);
 
     printk("/dev directory cleared.\n");
+}
+
+// 回调函数：为每个注册的控制台设备在 /dev 下创建节点
+static bool _cb_make_console_node(struct dlist_elem* elem, void* arg UNUSED) {
+    // 获取 console_device 结构体
+    struct console_device* dev = member_to_entry(struct console_device, dev_tag, elem);
+    
+    // 拼接路径，例如 "tty0" -> "/dev/tty0"
+    char dev_path[CONSOLE_DEV_NAME_LEN + 8]; 
+    sprintf(dev_path, "/dev/%s", dev->name);
+    
+    // 调用系统调用创建节点 (字符设备类型)
+    sys_mknod(dev_path, FT_CHAR_SPECIAL, dev->rdev);
+    
+    printk("Device node %s (rdev:%x) created.\n", dev_path, dev->rdev);
+    
+    return false; // 继续遍历，创建下一个
 }
 
 // 自动化创建所有磁盘设备节点和其他设备节点
@@ -1609,8 +1620,26 @@ void make_dev_nodes(void) {
     clear_dev_directory();
 	
     // 创建核心字符设备 (控制台和终端)
-    sys_mknod("/dev/console", FT_CHAR_SPECIAL, MAKEDEV(CONSOLE_MAJOR, 0));
-    sys_mknod("/dev/tty0", FT_CHAR_SPECIAL, MAKEDEV(TTY_MAJOR, 0));
+    dlist_traversal(&console_devs, _cb_make_console_node, NULL);
+
+
+    // 确定谁是默认控制台
+    if(dlist_empty(&console_devs)){
+        PANIC("make_dev_nodes: don't have available console device!\n");
+    }
+  
+    struct dlist_elem* first = console_devs.head.next;
+    struct console_device* dev = member_to_entry(struct console_device, dev_tag, first);
+    char target[MAX_DEV_NAME_LEN+1];
+    memset(target,0,MAX_DEV_NAME_LEN+1);
+    strcpy(target,"/dev/");strcat(target,dev->name);
+    
+    // 创建软链接，例如 /dev/console -> /dev/ttyS0
+    // init 进程标准输入输出流默认绑定的是 console 设备，在我们的系统里，console 设备是一个符号链接
+    // 指向 tty0 或者 ttyS0 ，主要看谁在控制台设备链表的表头，我们特意将 uart 设备的初始化放在 vga 初始化的前面
+    // 这是因为我们希望默认情况下，有 uart 就指向 uart 设备，没有再指向 vga 设备，这比较符合我们目前的使用场景
+    // 如果后续有进一步的需求了再改
+    sys_symlink(target, "/dev/console");
 
     // 动态创建磁盘母盘节点 (sda, sdb...)
 	uint8_t c,d;
@@ -1627,7 +1656,7 @@ void make_dev_nodes(void) {
     }
 
     // 遍历分区链表，创建分区节点 (sda1, sda5...)
-    dlist_traversal(&partition_list, make_partition_node, NULL);
+    dlist_traversal(&partition_list, _cb_make_partition_node, NULL);
 
     printk("/dev nodes dynamic creation done.\n");
 }

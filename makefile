@@ -15,7 +15,7 @@ OBJDUMP := objdump
 # 自动化目录管理
 # 定义参与内核编译的子目录（白名单）
 # 这里不包含用户程序目录 prog/，因为那里的 main 函数会与内核 main 冲突
-KERNEL_SUBDIRS := kernel device thread userprog fs lib mm lib/kernel lib/user lib/common fs/sifs fs/ext2 glue 
+KERNEL_SUBDIRS := kernel device thread userprog fs lib mm lib/kernel lib/user lib/common fs/sifs fs/ext2 glue device/char device/block
 
 # 自动获取所有 C 和 ASM 源文件
 # 使用 wildcard 查找

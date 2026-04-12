@@ -25,4 +25,8 @@
 #define CONSOLE_MAJOR     5    // 控制台
 #define FB_MAJOR          29   // 帧缓冲 (显卡驱动用)
 
+// TTY 的次设备号定义
+#define TTY0_MINOR        0    // 对应 VGA + Keyboard 的虚拟控制台
+#define TTYS0_MINOR       64   // 对应第一个串口 (Linux 传统习惯从 64 开始)
+
 #endif

@@ -1,5 +1,5 @@
 #include <memory.h>
-#include <print.h>
+#include <vgacon.h>
 #include <debug.h>
 #include <stdint.h>
 #include <string.h>

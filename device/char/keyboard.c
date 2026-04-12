@@ -1,5 +1,5 @@
 #include <keyboard.h>
-#include <print.h>
+#include <vgacon.h>
 #include <interrupt.h>
 #include <io.h>
 #include <global.h>
@@ -168,7 +168,9 @@ static void intr_handler_keyboard(void){
 
 		// check if cur_char is visible
 		if(cur_char){
-			tty_input_handler(cur_char);
+			// 由于目前我们只有一个tty0，因此设备号直接硬编码tty0了
+			// 先不过度设计了，以后要扩展了再来改吧
+			tty_input_handler(cur_char,MAKEDEV(TTY_MAJOR,TTY0_MINOR));
 			return;
 		}
 

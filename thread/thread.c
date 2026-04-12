@@ -6,7 +6,7 @@
 #include <dlist.h>
 #include <interrupt.h>
 #include <debug.h>
-#include <print.h>
+#include <vgacon.h>
 #include <process.h>
 #include <sync.h>
 #include <stdio.h>

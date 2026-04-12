@@ -9,7 +9,7 @@
 #include <global.h>
 #include <interrupt.h>
 #include <dlist.h>
-#include <print.h>
+#include <vgacon.h>
 #include <thread.h>
 #include <ide.h>
 #include <exec.h>
@@ -160,7 +160,7 @@ uint32_t* create_page_dir(void){
 	uint32_t* page_dir_vaddr = get_kernel_pages(1);
 	
 	if(page_dir_vaddr==NULL){
-		console_put_str("create_page_dir: get_kernel_pages failed! ");
+		console_put_str("create_page_dir: get_kernel_pages failed! ",BROADCAST_RDEV);
 		return NULL;
 	}
 	// page_dir_vaddr + 0x300*4 is the 768th item in kernel PDT

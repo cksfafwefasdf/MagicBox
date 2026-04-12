@@ -4,7 +4,7 @@
 #include <fs_types.h>
 #include <errno.h>
 #include <stdio-kernel.h>
-#include <print.h>
+#include <vgacon.h>
 #include <ide.h>
 #include <inode.h>
 #include <debug.h>
@@ -1497,7 +1497,7 @@ static int32_t ext2_symlink(struct inode* dir, char* name, int len UNUSED, const
 // 这导致硬链接如果可以跨分区的话会出现指代模糊的情况
 
 // 文件系统底层不检查文件名是否重复，文件名是否重复是交给vfs层检查的
-static int32_t ext2_link(struct inode* old_inode, struct inode* dir, const char* name, int len) {
+static int32_t ext2_link(struct inode* old_inode, struct inode* dir, const char* name, int len UNUSED) {
     // 硬链接不能指向目录（Linux 的标准做法，防止文件系统拓扑变成图而不是树）
     if (old_inode->i_type == FT_DIRECTORY) {
         return -EPERM; 

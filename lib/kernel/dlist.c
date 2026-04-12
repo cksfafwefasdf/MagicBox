@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <debug.h>
-#include <print.h>
+#include <vgacon.h>
 
 void dlist_init(struct dlist* plist){
 	plist->head.prev = NULL;

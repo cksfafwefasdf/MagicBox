@@ -26,6 +26,7 @@ struct tty_struct {
 	// 但是最好还是预留在这
 	struct lock tty_lock; // 用于防止两个进程同时对tty进行写操作，也就是说这是个写锁，line_sem是个读锁
 	int32_t pgrp; // 记录前台进程组id
+	uint32_t rdev; // 当前 tty 的设备号
 };
 
 
@@ -34,10 +35,8 @@ extern struct tty_struct console_tty;
 // TTY 的操作集
 extern struct file_operations tty_file_operations;
 
-extern int tty_read(char* buf, uint32_t count);
 extern void tty_init(void);
-extern void tty_input_handler(char c);
-extern int tty_write(char* buf, uint32_t count);
+extern void tty_input_handler(char c, uint32_t rdev);
 extern void tty_dev_init(void);
 
 #endif

@@ -7,7 +7,7 @@
 #include <dlist.h>
 #include <fork.h>
 #include <stdio-kernel.h>
-#include <print.h>
+#include <vgacon.h>
 #include <pipe.h>
 #include <vma.h>
 #include <file_table.h>

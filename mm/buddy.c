@@ -1,6 +1,6 @@
 #include <buddy.h>
 #include <debug.h>
-#include <print.h>
+#include <vgacon.h>
 
 // 系统刚起来时，伙伴系统还没起来，global_pages 需要绕过伙伴系统特殊处理来存储
 void buddy_init(struct buddy_pool* bpool, uint32_t start_addr, uint32_t size, struct page* page_base) {

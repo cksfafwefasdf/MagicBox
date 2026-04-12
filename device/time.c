@@ -1,7 +1,7 @@
 #include <time.h>
 #include <io.h>
 #include <interrupt.h>
-#include <print.h>
+#include <vgacon.h>
 #include <timer.h>
 #include <stdint.h>
 #include <stdbool.h>

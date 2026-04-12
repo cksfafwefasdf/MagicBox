@@ -1,7 +1,7 @@
 #include <interrupt.h>
 #include <stdint.h>
 #include <global.h>
-#include <print.h>
+#include <vgacon.h>
 #include <io.h>
 #include <page.h>
 #include <signal.h>

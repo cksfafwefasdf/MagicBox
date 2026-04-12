@@ -200,10 +200,12 @@ Navigate to the `disk_env/` directory. You can choose between a standard run or 
 #### **Standard Run**
 
 ```bash
+# argument “-serial none” will disable the uart device 
 qemu-system-i386 \
   -m 32 \
   -drive file=hd60M.img,format=raw,index=0,media=disk \
-  -drive file=hd80M.img,format=raw,index=1,media=disk
+  -drive file=hd80M.img,format=raw,index=1,media=disk \
+  -serial none
 ```
 
 If you want to use the third disk `sdc`, try:
@@ -213,7 +215,8 @@ qemu-system-i386 \
   -m 32 \
   -drive file=hd60M.img,format=raw,index=0,media=disk \
   -drive file=hd80M.img,format=raw,index=1,media=disk \
-  -drive file=hd20M_share.img,format=raw,index=2,media=disk
+  -drive file=hd20M_share.img,format=raw,index=2,media=disk \
+  -serial none
 ```
 
 If you want to use the UART, try:
@@ -237,6 +240,7 @@ qemu-system-i386 \
   -drive file=hd80M.img,format=raw,index=1,media=disk,cache=directsync \
   -rtc base=localtime,clock=vm \
   -icount shift=auto,sleep=on \
+  -serial none \
   -boot c
 ```
 

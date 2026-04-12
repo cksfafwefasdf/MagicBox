@@ -1,6 +1,6 @@
 #include <init.h>
 #include <interrupt.h>
-#include <print.h>
+#include <vgacon.h>
 #include <timer.h>
 #include <memory.h>
 #include <thread.h>
@@ -39,7 +39,7 @@ struct task_struct* idle_thread;
 
 void init(void) {
     // 先打开一个可读可写的控制台
-    int32_t tty_fd = open("/dev/tty0", O_RDWR);
+    int32_t tty_fd = open("/dev/console", O_RDWR);
     
     // 强制把 console_fd 拷贝到 0, 1, 2 号 FD
     dup2(tty_fd, 0); // stdin
@@ -117,7 +117,7 @@ void print_logo(){
     };
     int i=0;
     for (; i < 7; i++) {
-        console_put_str(jester[i]);console_put_char('\n');
+        console_put_str(jester[i],BROADCAST_RDEV);console_put_char('\n',BROADCAST_RDEV);
     }
 }
 
@@ -134,7 +134,6 @@ static void make_main_thread(void) {
     main_thread = get_kernel_pages(1);
     // 这里面会为main线程申请独立于pcb外的栈空间
     init_thread(main_thread, "main", 5);
-    
     
     // 准备新栈，：将原本要执行的后续代码after_init手动压入新栈
     // uint32_t* esp = (uint32_t*)((uint32_t)main_thread + PG_SIZE);
@@ -183,8 +182,11 @@ static void after_init() {
     // 此时它已经站在全新的、动态分配的 PCB 顶端了
     idle_thread = thread_start("idle",3,idle,NULL);
     timer_init();
-    uart_init();
     console_init();
+    // 串口设备先进行初始化，他的优先级较高
+    // 先初始化的话可以把他挂在表头，直接取首节点就能取到它
+    uart_init();
+    vgacon_init();
     tty_init();
     keyboard_init();
     tss_init();

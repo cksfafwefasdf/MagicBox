@@ -1,4 +1,4 @@
-#include <print.h>
+#include <vgacon.h>
 #include <init.h>
 
 int main(void) {

@@ -1,7 +1,7 @@
 #include <syscall-init.h>
 #include <stdint.h>
 #include <thread.h>
-#include <print.h>
+#include <vgacon.h>
 #include <syscall.h>
 #include <console.h>
 #include <string.h>
