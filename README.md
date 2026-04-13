@@ -51,9 +51,20 @@
 
 - **Resource Recovery**: Implements a two-stage resource reclamation logic. `sys_exit` releases immediate process-private resources (such as FDs), while the destruction of core structures like page directories and kernel stacks is deferred to the parent process during `wait`/`waitpid`. This ensures stable process state synchronization and memory safety.
 
+- **Linux ABI Compatibility**: MagicBox implements a Linux i386 syscall compatibility layer via interrupt `0x80`, specifically targeting the **musl-libc** standard.
+
+  The following environments and tools are currently verified to be functional:
+
+  - **BusyBox:** Supports the **`ash`** shell and a variety of core utilities, including `ls`, `cat`, `grep`, `mkdir`, `mv`, and basic **shell pipes**.
+  - **Tiny C Compiler (TCC):** Capable of running the TCC binary to perform C source code compilation within the MagicBox environment.
+  - **VFS Integration:** Support for various essential filesystem operations including symbolic links, anonymous pipes, and file descriptor control via `fcntl`.
+
+
 
 
 ## 📞 System Calls
+
+MagicBox now reserves interrupt `0x80` as a Linux i386 syscall compatibility entry, while the native MagicBox syscall ABI uses interrupt `0x77`.
 
 **Task Management:**
 
@@ -85,23 +96,6 @@
 - `brk()` / `sbrk()`: Provides user heap growth/shrink support through the VMA-based heap region.
 - `mmap()` / `munmap()`: Supports anonymous private mappings and file-backed private mappings, both handled lazily through the page-fault path.
 - Native user-space `malloc()` / `free()`: Small allocations use `sbrk + arena`; large allocations use `mmap`.
-
-**Linux ABI Compatibility (musl-oriented):**
-
-- MagicBox now reserves interrupt `0x80` as a Linux i386 syscall compatibility entry, while the native MagicBox syscall ABI uses interrupt `0x77`.
-- A compatibility interceptor currently translates the Linux-style syscalls already observed from musl-compiled test programs, including:
-  - `getpid`
-  - `exit` / `exit_group`
-  - `writev`
-  - `ioctl`
-  - `brk`
-  - `mmap2`
-  - `munmap`
-  - `open`
-  - `write`
-  - `read`
-  - `close`
-  - `madvise` *(currently treated as a compatibility hint / no-op)*
 
 **Storage & Recovery:**
 
