@@ -750,6 +750,19 @@ static int32_t do_pipe(struct intr_stack* stack) {
     return res; // 返回具体的负数错误码
 }
 
+static int32_t do_rename(struct intr_stack* stack) {
+    // 从寄存器中提取参数
+    const char* oldpath = (const char*)stack->ebx;
+    const char* newpath = (const char*)stack->ecx;
+
+    // 基本的指针校验
+    if (oldpath == NULL || newpath == NULL) {
+        return -EFAULT;
+    }
+
+    return sys_rename(oldpath, newpath);
+}
+
 void musl_syscall_intrcpt_init(){
     for (int i = 0; i < NR_syscalls; i++) {
         musl_syscall_table[i] = do_default;
@@ -800,8 +813,9 @@ void musl_syscall_intrcpt_init(){
     musl_syscall_table[__NR_symlink] = do_symlink; 
     musl_syscall_table[__NR_readlink] = do_readlink; 
     musl_syscall_table[__NR_access] = do_access; 
-    musl_syscall_table[__NR_rmdir] = do_rmdir; 
-    musl_syscall_table[__NR_pipe] = do_pipe; 
+    musl_syscall_table[__NR_rmdir] = do_rmdir;
+    musl_syscall_table[__NR_pipe] = do_pipe;
+    musl_syscall_table[__NR_rename] = do_rename;
 }
 
 // 根据 i386 Linux ABI:

@@ -137,6 +137,13 @@ sh unbind.sh
 
 现在进入系统，不出意外的话应该使用的 shell 就是 ash 了，而不是我们自己的 mbsh
 
+进入系统以后，可能会看到一个提示 `in path /etc/passwd, file passwd not exist`，这个无伤大雅，因为我们的目录结构不完整，所以出现这个提示是正常的，如果嫌烦可以执行下面的命令创建相应的文件。
+
+```shell
+mkdir /etc
+echo root:x:0:0:root:/root:/bin/sh > /etc/passwd
+```
+
 
 
 ## 注意事项
