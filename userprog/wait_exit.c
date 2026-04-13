@@ -28,7 +28,7 @@ static void release_prog_resource(struct task_struct* release_thread){
 	// mfree_page(PF_KERNEL,user_vaddr_pool_bitmap,bitmap_pg_cnt);
 	uint8_t local_fd = 0;
 	while(local_fd<MAX_FILES_OPEN_PER_PROC){
-		if(release_thread->fd_table[local_fd]!=-1){
+		if(release_thread->fd_table[local_fd].global_fd_idx!=-1){
 			// 无论是不是管道，sys_close都可以统一处理
 			sys_close(local_fd);
 		}

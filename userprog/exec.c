@@ -14,6 +14,7 @@
 #include <process.h>
 #include <wait_exit.h>
 #include <vma.h>
+#include <fcntl.h>
 
 extern void intr_exit;
 
@@ -227,6 +228,15 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
 	// 清理旧的用户空间映射 (0 ~ 3GB)
     // 此时用户栈被销毁，用户态指针 path 和 argv 彻底失效
     user_vaddr_space_clear(cur);
+
+	// 遍历当前进程的所有文件描述符
+    for (int i = 0; i < MAX_FILES_OPEN_PER_PROC; i++) {
+        // 如果 global_fd_idx 有效，且标志位设置了 FD_CLOEXEC 
+        if (cur->fd_table[i].global_fd_idx != -1 && (cur->fd_table[i].flags & FD_CLOEXEC)) {
+            // 调用 sys_close。这会处理全局引用计数 f_count 和 inode 的关闭
+            sys_close(i);
+        }
+    }
 	
 	// 预留 8MB 空间给栈 (0xc0000000 - 8MB 到 0xc0000000)
     // 这样接下来的参数拷贝触发缺页时，find_vma 就能找到它

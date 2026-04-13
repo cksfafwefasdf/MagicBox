@@ -70,6 +70,15 @@ struct thread_stack{
 	void* func_arg;
 };
 
+// FD_CLOEXEC 是 File Descriptor Close-on-Exec 的缩写
+// 表示当进程执行 exec 系列系统调用启动新程序时，自动关闭这个文件描述符
+// 在没有这个标志位之前，我们必须在 fork() 之后、exec() 之前，
+// 手动写一堆 close(fd) 来清理不需要的文件。但这存在竞态条件，用了这个标志就会好很多
+struct fd_entry {
+    int32_t global_fd_idx;  // 指向全局 file_table 的索引
+    uint8_t flags;          // 记录 FD_CLOEXEC 等
+};
+
 struct task_struct{
 	uint32_t* self_kstack; // 动态栈顶（给 switch_to 用）
     void* kstack_pages; // 栈的基地址（给 free 用）
@@ -81,7 +90,7 @@ struct task_struct{
 	uint32_t elapsed_ticks;
 
 	// Per-process Open File Table
-	int32_t fd_table[MAX_FILES_OPEN_PER_PROC];
+	struct fd_entry fd_table[MAX_FILES_OPEN_PER_PROC];
 
 	struct dlist_elem general_tag;
 	struct dlist_elem all_list_tag;
@@ -161,6 +170,7 @@ extern struct task_struct* pid2thread(int32_t pid);
 extern void release_pid(pid_t pid);
 extern pid_t sys_setpgid(pid_t pid, pid_t pgid);
 extern pid_t sys_getpgid(pid_t pid);
+extern pid_t sys_getppid(void);
 
 extern struct dlist thread_ready_list;
 extern struct dlist thread_all_list; // queue of all tasks

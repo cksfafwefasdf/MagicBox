@@ -25,6 +25,7 @@
 #include <ext2_sb.h>
 #include <time.h>
 #include <console.h>
+#include <fcntl.h>
 
 // root_part 用于记录根分区，他是全局唯一的
 struct partition* root_part;
@@ -595,7 +596,7 @@ int32_t sys_open(const char* _pathname,uint8_t flags){
 
     // 处理追加模式
     struct task_struct* cur = get_running_task_struct();
-    struct file* f = &file_table[cur->fd_table[fd]];
+    struct file* f = &file_table[cur->fd_table[fd].global_fd_idx];
     struct inode* inode = f->fd_inode;
 
     if(flags & O_APPEND){
@@ -624,7 +625,7 @@ int32_t sys_close(int32_t fd) {
     }
 
     struct task_struct* cur = get_running_task_struct();
-    int32_t global_fd = cur->fd_table[fd];
+    int32_t global_fd = cur->fd_table[fd].global_fd_idx;
 
     if (global_fd == -1) {
         return -EBADF; // 该 FD 并没有指向任何打开的文件
@@ -650,7 +651,8 @@ int32_t sys_close(int32_t fd) {
     int32_t ret = file_close(file);
 
     // 释放局部资源, 本进程的局部 fd 槽位回收
-    cur->fd_table[fd] = -1;
+    cur->fd_table[fd].global_fd_idx = -1;
+    cur->fd_table[fd].flags = 0;
 
     return ret;
 }
@@ -1156,8 +1158,7 @@ int32_t sys_chdir(const char* _pathname) {
     return 0;
 }
 
-
-int32_t sys_stat(const char* _pathname, struct stat* buf) {
+static int32_t do_stat(const char* _pathname, struct stat* buf, bool follow_link) {
     char path[MAX_PATH_LEN] = {0};
     make_abs_pathname(_pathname, path); 
 
@@ -1179,7 +1180,7 @@ int32_t sys_stat(const char* _pathname, struct stat* buf) {
     memset(&searched_record, 0, sizeof(struct path_search_record));
     
     // 查看的是目标文集的属性，不是链接本身的属性，如果要查看链接本身的属性，用lstat
-    int32_t inode_no = search_file(path, &searched_record,true);
+    int32_t inode_no = search_file(path, &searched_record,follow_link);
     if(inode_no == -ENOENT) {
         // 注意：即使没找到目标，parent_inode 也要关掉（由 search_file 开启）
         inode_close(searched_record.parent_inode);
@@ -1201,7 +1202,7 @@ int32_t sys_stat(const char* _pathname, struct stat* buf) {
         buf->st_filetype = searched_record.file_type;
         buf->st_blksize = root_dir_inode->i_sb->s_block_size;
         
-        buf->st_nlink = 1; // 在实现link操作前，Ext2 默认为 1
+        buf->st_nlink = obj_inode->i_nlink; // 在实现link操作前，Ext2 默认为 1
         buf->st_uid = 0;   // root
         buf->st_gid = 0;   // root
 
@@ -1212,6 +1213,14 @@ int32_t sys_stat(const char* _pathname, struct stat* buf) {
 
     inode_close(searched_record.parent_inode);
     return -EIO;
+}
+
+int32_t sys_stat(const char* _pathname, struct stat* buf) {
+    return do_stat(_pathname,buf,true);
+}
+
+int32_t sys_lstat(const char* _pathname, struct stat* buf) {
+    return do_stat(_pathname,buf,false);
 }
 
 // 专门用于在路径解析过头（钻进子分区）时，退回到挂载点本身
@@ -1508,7 +1517,7 @@ int32_t sys_dup2(uint32_t old_local_fd, uint32_t new_local_fd) {
     struct task_struct* cur = get_running_task_struct();
 
     // 基础校验
-    if (old_local_fd >= MAX_FILES_OPEN_PER_PROC || cur->fd_table[old_local_fd] == -1) {
+    if (old_local_fd >= MAX_FILES_OPEN_PER_PROC || cur->fd_table[old_local_fd].global_fd_idx == -1) {
         return -1;
     }
     if (new_local_fd >= MAX_FILES_OPEN_PER_PROC) return -1;
@@ -1518,14 +1527,17 @@ int32_t sys_dup2(uint32_t old_local_fd, uint32_t new_local_fd) {
 	
 
     // 如果 new_fd 已经指向某个文件，先关闭它
-    if (cur->fd_table[new_local_fd] != -1) {
+    if (cur->fd_table[new_local_fd].global_fd_idx != -1) {
         sys_close(new_local_fd);
     }
 	
 
 	// 将两个局部描述符指向同一个全局描述符
-    uint32_t global_fd = cur->fd_table[old_local_fd];
-    cur->fd_table[new_local_fd] = global_fd;
+    uint32_t global_fd = cur->fd_table[old_local_fd].global_fd_idx;
+    cur->fd_table[new_local_fd].global_fd_idx = global_fd;
+    // 根据标准，dup、dup2 和 fcntl(F_DUPFD) 产生的新文件描述符必须有一套全新的 flags
+    // 因此需要置为 0
+    cur->fd_table[new_local_fd].flags = 0;
 
 	struct file* f = &file_table[global_fd];
 
@@ -1640,6 +1652,8 @@ void make_dev_nodes(void) {
     // 这是因为我们希望默认情况下，有 uart 就指向 uart 设备，没有再指向 vga 设备，这比较符合我们目前的使用场景
     // 如果后续有进一步的需求了再改
     sys_symlink(target, "/dev/console");
+    // busybox 还需要一个 tty 设备，所以我们顺手也建一个
+    sys_symlink(target, "/dev/tty");
 
     // 动态创建磁盘母盘节点 (sda, sdb...)
 	uint8_t c,d;
@@ -1967,4 +1981,117 @@ int32_t sys_symlink(const char* target, const char* linkpath) {
 
     inode_close(dir); // 释放 search_file 占用的父目录 Inode
     return retval;
+}
+
+int32_t sys_fcntl(int32_t fd, uint32_t cmd, uint32_t arg) {
+    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC) return -EBADF;
+    
+    struct task_struct* cur = get_running_task_struct();
+
+    int32_t g_idx = cur->fd_table[fd].global_fd_idx; 
+    
+    if (g_idx == -1) return -EBADF;
+    struct file* file = &file_table[g_idx];
+
+    switch (cmd) {
+        case F_DUPFD: {
+            if (arg >= MAX_FILES_OPEN_PER_PROC) return -EINVAL;
+            // 复制 FD，要求新 FD >= arg
+            int32_t new_fd = arg;
+            while (new_fd < MAX_FILES_OPEN_PER_PROC) {
+                if (cur->fd_table[new_fd].global_fd_idx == -1) break;
+                new_fd++;
+            }
+            if (new_fd >= MAX_FILES_OPEN_PER_PROC) return -EMFILE;
+            
+            cur->fd_table[new_fd].global_fd_idx = g_idx;
+            cur->fd_table[new_fd].flags = 0; // 新复制的 FD 默认不带 CLOEXEC
+            file->f_count++; // 全局引用计数加 1
+            return new_fd;
+        }
+
+        case F_GETFD:
+            return cur->fd_table[fd].flags;
+
+        case F_SETFD:
+            // 确保只保留合法位（目前我们只有第一位，表示FD_CLOEXEC）
+            cur->fd_table[fd].flags = arg & FD_CLOEXEC;
+            return 0;
+
+        case F_GETFL:
+            return file->fd_flag;
+
+        case F_SETFL:
+            // Linux 标准中，F_SETFL 只能修改 O_APPEND, O_NONBLOCK, O_ASYNC 等
+            // 只允许修改指定的位，保留读写模式等关键位
+            uint32_t mask = O_APPEND; 
+            file->fd_flag = (file->fd_flag & ~mask) | (arg & mask);
+            return 0;
+
+        default:
+            printk("fcntl: cmd %d not implemented\n", cmd);
+            return -EINVAL;
+    }
+}
+
+int32_t sys_readlink(const char* path, char* buf, int32_t bufsize) {
+    if (path == NULL || buf == NULL || bufsize <= 0) return -EFAULT;
+
+    struct path_search_record record;
+    memset(&record, 0, sizeof(struct path_search_record));
+
+    // 搜索文件，follow 必须为 false，因为我们要操作链接文件本身
+    int32_t inode_no = search_file((char*)path, &record, false);
+    if (inode_no == -1) {
+        // 没找到文件
+        return -ENOENT;
+    }
+    struct partition* part = get_part_by_rdev(record.i_dev);
+    struct inode* inode = inode_open(part,inode_no);
+    
+    // 权限与类型校验，必须是符号链接
+    if (!S_ISLNK(inode->i_mode)) {
+        inode_close(inode);
+        if (record.parent_inode) inode_close(record.parent_inode);
+        return -EINVAL; // 不是符号链接
+    }
+
+    int32_t retval = -ENOSYS;
+    
+    if (inode->i_op && inode->i_op->readlink) {
+        retval = inode->i_op->readlink(inode, buf, bufsize);
+    } else {
+        printk("sys_readlink: this type of file cannot readlink!\n");
+    }
+
+    // 清理工作
+    inode_close(inode);
+    if (record.parent_inode) {
+        inode_close(record.parent_inode);
+    }
+
+    return retval;
+}
+
+// 由于我们是单用户系统，所以是全员 root
+// 所有文件都有权限
+int32_t sys_access(const char* pathname, int mode) {
+    struct path_search_record record;
+    memset(&record, 0, sizeof(struct path_search_record));
+
+    // access 语义要求必须跟随符号链接 (follow = true)
+    // 只要能找到这个文件，对 Root 来说就是有权限的
+    int32_t inode_no = search_file((char*)pathname, &record, true);
+    
+    if (inode_no == -1) {
+        // 文件真的不存在，返回 ENOENT 是 rm 等工具判断逻辑的关键
+        return -ENOENT; 
+    }
+
+    if (record.parent_inode) {
+        inode_close(record.parent_inode);
+    }
+
+    // 只要文件存在，直接返回 0 (成功)
+    return 0; 
 }

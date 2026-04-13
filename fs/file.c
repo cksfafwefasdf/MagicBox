@@ -78,7 +78,8 @@ int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
 
 	bool *write_deny = &(file_table[fd_idx].fd_inode->write_deny);
 
-	if(flag&O_WRONLY||flag&O_RDWR){
+	// 只有普通文件才不能同时写，设备文件是可以的
+	if((flag & O_WRONLY || flag & O_RDWR) && (file_table[fd_idx].fd_inode->i_type == FT_REGULAR) ){
 		enum intr_status old_status = intr_disable();
 		if(!(*write_deny)){
 			*write_deny = true;

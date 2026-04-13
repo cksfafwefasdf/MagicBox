@@ -117,7 +117,8 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 	// the others set as -1
 	uint8_t fd_idx = 0;
 	while(fd_idx<MAX_FILES_OPEN_PER_PROC){
-		pthread->fd_table[fd_idx] = -1;
+		pthread->fd_table[fd_idx].global_fd_idx = -1;
+		pthread->fd_table[fd_idx].flags = 0;
 		fd_idx++;
 	}
 
@@ -430,4 +431,9 @@ pid_t sys_getpgid(pid_t pid) {
     }
     struct task_struct* pthread = pid2thread(pid);
     return (pthread != NULL) ? pthread->pgrp : -1;
+}
+
+// 获取父进程的 pid
+pid_t sys_getppid() {
+    return get_running_task_struct()->parent_pid;
 }

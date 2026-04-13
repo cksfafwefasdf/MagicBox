@@ -133,6 +133,7 @@ static void ext2_read_inode(struct inode* inode) {
     inode->i_size = ei->i_size;
     inode->i_type = decode_imode(ei->i_mode);
     inode->i_mode = ei->i_mode;
+    inode->i_nlink = ei->i_links_count;
 
     // 填充 Ext2 私有字段 
     memcpy(inode->ext2_i.i_block, ei->i_block, sizeof(uint32_t) * 15);

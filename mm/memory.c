@@ -1084,7 +1084,7 @@ static uint32_t do_mmap(struct task_struct* cur, uint32_t addr, uint32_t len, ui
     if ((offset & (PG_SIZE - 1)) != 0) {
         return (uint32_t)MAP_FAILED;
     }
-    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC || cur->fd_table[fd] == -1) {
+    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC || cur->fd_table[fd].global_fd_idx == -1) {
         return (uint32_t)MAP_FAILED;
     }
 

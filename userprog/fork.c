@@ -94,7 +94,7 @@ static void update_f_cnts(struct task_struct* thread) {
 	// 我们将 console 和 tty 都给文件话了，不能再像原来那样略过它们了
     int32_t local_fd = 0, global_fd = 0; 
     while(local_fd < MAX_FILES_OPEN_PER_PROC) {
-        global_fd = thread->fd_table[local_fd];
+        global_fd = thread->fd_table[local_fd].global_fd_idx;
         if(global_fd != -1) {
             struct file* f = &file_table[global_fd];
             // 必须增加引用计数，否则父子进程共享 FD 会出大问题

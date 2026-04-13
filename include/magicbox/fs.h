@@ -34,6 +34,8 @@ extern int32_t sys_umount(const char* _mount_path);
 extern int32_t sys_rename(const char* _old_path, const char* _new_path);
 extern int32_t sys_statfs(const char* path, struct statfs* buf);
 extern int32_t sys_symlink(const char* target, const char* linkpath);
+extern int32_t sys_lstat(const char* _pathname, struct stat* buf);
+extern int32_t sys_fcntl(int32_t fd, uint32_t cmd, uint32_t arg);
 
 extern struct partition* cur_part;
 extern struct inode* root_dir_inode; 

@@ -66,5 +66,6 @@ extern int sys_sigaction(int sig, const struct sigaction* act, struct sigaction*
 extern int sys_kill(pid_t pid, int sig);
 extern int sys_sigpending(uint32_t* set);
 extern int sys_sigprocmask(int how, const uint32_t* set, uint32_t* oldset);
+extern int32_t sys_rt_sigaction(int sig, const struct sigaction* act, struct sigaction* oact, uint32_t sigsetsize);
 
 #endif

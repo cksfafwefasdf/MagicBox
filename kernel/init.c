@@ -34,6 +34,15 @@ static void recyle_idle(void);
 // linux 标准中，argv 必须以 NULL 结尾
 char* argv[] = {SHELL_PATH,NULL} ;
 
+const char* init_argv[] = {"ash", "-i", NULL};
+const char* init_envp[] = {
+    "PATH=/bin:/",       // 解决 ash 找不到 busybox 的问题
+    "HOME=/", 
+    "TERM=linux",  // 最标准的 Linux 控制台（TTY）模式，支持基本的 8 色和标准的 ANSI 转义序列。
+    "PS1=\\[\\033[01;32m\\]\\u@magic-box\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ", // 修改提示符样式
+    NULL
+};
+
 struct task_struct* main_thread;
 struct task_struct* idle_thread;
 
@@ -64,6 +73,9 @@ void init(void) {
         while (1) {
             child_pid = wait(&status);
             printf("I'm init, my pid is %d, I receive a child, it's pid is %d, status is %d\n",INIT_PID, child_pid, status);
+            if(child_pid < 0){
+                panic("error in init!\n");
+            }
         }
     } else { // 子进程逻辑：启动 Shell
 
@@ -75,29 +87,30 @@ void init(void) {
             mkdir("/mnt");
         }
 
-        
-        // 检查 Shell 是否已经存在于文件系统中
-        if (stat(SHELL_PATH,&st)<0) {
-            // 如果 Shell 不存在，说明是首次启动或文件系统损坏，执行全量恢复
-            printf("init: shell not found. Unpacking system files from LBA 1000...\n");
-            
-            // 执行解压函数
-            // 来自动解析 tar 包，并按需调用 readraw 和 mkdir
-            untar_all(APPS_LBA); 
+        // 先检查是否有 ash，没有就执行自带的shell
+        if(stat("/bin/busybox",&st)>=0) {
+            printf("init: starting shell /bin/busybox...\n");
+            execve("/bin/busybox", init_argv, init_envp);
+        } else {
+            // 检查 Shell 是否已经存在于文件系统中
+            if (stat(SHELL_PATH,&st)<0) {
+                // 如果 Shell 不存在，说明是首次启动或文件系统损坏，执行全量恢复
+                printf("init: shell not found. Unpacking system files from LBA 1000...\n");
+                
+                // 执行解压函数
+                // 来自动解析 tar 包，并按需调用 readraw 和 mkdir
+                untar_all(APPS_LBA); 
 
-            // 解压完成后，再次确认 Shell 是否成功创建
-            int32_t fd = open(SHELL_PATH, O_RDONLY);
-            if (fd < 0) {
-                printf("init: critical error! Shell extraction failed.\n");
-                while(1); // 挂起，以便查看错误日志
+                // 解压完成后，再次确认 Shell 是否成功创建
+                int32_t fd = open(SHELL_PATH, O_RDONLY);
+                if (fd < 0) {
+                    printf("init: critical error! Shell extraction failed.\n");
+                    while(1); // 挂起，以便查看错误日志
+                }
+                close(fd);
             }
-            close(fd);
+            execv(SHELL_PATH, (const char **)argv);
         }
-        
-        // 运行 Shell
-        printf("init: starting shell %s...\n", SHELL_PATH);
-
-        execv(SHELL_PATH, (const char **)argv);
 
         // 如果 execv 返回了，说明执行失败
         panic("init: shell execv failed!");

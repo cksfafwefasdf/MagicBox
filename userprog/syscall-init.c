@@ -82,6 +82,7 @@ void syscall_init(void){
 	syscall_table[SYS_EXECVE] = sys_execve;
 	syscall_table[SYS_TIME] = sys_time;
 	syscall_table[SYS_SYMLINK] = sys_symlink;
+	syscall_table[SYS_LSTAT] = sys_lstat;
 	
 	put_str("syscall_init done\n");
 }

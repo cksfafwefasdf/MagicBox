@@ -16,6 +16,8 @@
 #include <debug.h>
 #include <linux_dirent.h>
 #include <time.h>
+#include <exec.h>
+#include <fork.h>
 
 // 基于 i386 Linux 0x80 中断的参数约定
 // 强制转换成 uint32_t 是为了防止在进行地址运算或逻辑判断时产生符号位扩展的意外。
@@ -45,6 +47,12 @@ struct linux_mmap2_args {
     uint32_t flags;
     int32_t fd;
     uint32_t pgoff;
+};
+
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
 };
 
 static int32_t musl_sys_writev(int32_t fd, const struct linux_iovec* iov, int32_t iovcnt) {
@@ -83,17 +91,24 @@ static uint32_t musl_sys_mmap2(uint32_t addr, uint32_t len, uint32_t prot, uint3
     return sys_mmap_direct(addr, len, prot, flags, fd, pgoff << 12);
 }
 
-static int32_t linux_sys_stat64(const char* pathname, struct linux_stat64* buf) {
+static int32_t linux_sys_stat64(const char* pathname, struct linux_stat64* buf,bool follow_link) {
     struct stat kstat; // MagicBox 内核定义的 stat
-    
+    memset(buf, 0, sizeof(struct stat));
     // 调用 MagicBox 原生的 sys_stat 获取数据
-    int32_t ret = sys_stat(pathname, &kstat);
+    int32_t ret = -ENOENT;
+    if (follow_link) {
+        ret = sys_stat(pathname, &kstat);
+    } else {
+        ret = sys_lstat(pathname, &kstat);
+    }
+    
     if (ret < 0) return ret;
 
     // 格式转换，从 stat (MagicBox) 搬运到 linux_stat64 (Linux ABI)
     memset(buf, 0, sizeof(struct linux_stat64));
-        buf->st_dev = kstat.st_dev;
+    buf->st_dev = kstat.st_dev;
     buf->st_ino = kstat.st_ino; // 低位 Inode
+    buf->__st_ino = kstat.st_ino;
     buf->st_mode = kstat.st_mode;
     buf->st_nlink = kstat.st_nlink;
     buf->st_uid = kstat.st_uid;
@@ -239,7 +254,10 @@ static int32_t do_getpid(struct intr_stack* stack UNUSED){
 // 由于我们现在的用户进程都只对应一个内核线程，因此直接用exit就行
 static int32_t do_exit_default(struct intr_stack* stack){
     // exit(status) 的参数在 ebx 里 
+#ifdef DEBUG_SYSCALL_INTRCPT
     printk("Process %d exiting with status %d\n", get_running_task_struct()->pid, ARG1(stack)); 
+#endif
+
     sys_exit(ARG1(stack));
 
     // 理论上不应该到这
@@ -254,6 +272,8 @@ static int32_t do_writev(struct intr_stack* stack){
 }
 
 static int32_t do_ioctl(struct intr_stack* stack){
+    // uint32_t cmd = ARG2(stack);
+    // printk("do_ioctl: ioctl fd=%d, cmd=0x%x\n", ARG1(stack), cmd);
     return sys_ioctl((int32_t)ARG1(stack),
                     (uint32_t)ARG2(stack),
                     (uint32_t)ARG3(stack));
@@ -310,7 +330,9 @@ static int32_t do_write(struct intr_stack* stack){
 }
 
 static int32_t do_llseek(struct intr_stack* stack){
+#ifdef DEBUG_SYSCALL_INTRCPT
     printk("Intrcpt: warning, use lseek as llseek\n");
+#endif
             int32_t fd = (int32_t)ARG1(stack);
             int32_t offset = (int32_t)ARG3(stack); // 取低32位
             int64_t* res_ptr = (int64_t*)ARG4(stack);
@@ -357,7 +379,7 @@ static int32_t do_stat64(struct intr_stack* stack){
     const char* path = (const char*)ARG1(stack);
     struct linux_stat64* linux_buf = (struct linux_stat64*)ARG2(stack);
     
-    return linux_sys_stat64(path, linux_buf);
+    return linux_sys_stat64(path, linux_buf,true);
 }
 
 static int32_t do_fstat64(struct intr_stack* stack){
@@ -384,6 +406,350 @@ static int32_t do_time(struct intr_stack* stack){
     return now;
 }
 
+static int32_t do_gettimeofday(struct intr_stack* stack) {
+    struct linux_timeval {
+        uint32_t tv_sec;
+        uint32_t tv_usec;
+    } *tv = (struct linux_timeval*)ARG1(stack);
+
+    if (tv) {
+        tv->tv_sec = sys_time(); // 获取内核当前的 Unix 时间戳
+        tv->tv_usec = 0; // 暂时不给微秒级精度没关系
+    }
+    return 0;
+}
+
+// 现代 C 库（例如musl）更倾向于用这个来获取纳秒级的时间。
+// 我们暂时不支持纳秒级时间，所以和do_gettimeofday差不多操作就行
+static int32_t do_clock_gettime(struct intr_stack* stack) {
+    uint32_t clk_id = ARG1(stack); // CLOCK_REALTIME 等
+    struct linux_timespec {
+        uint32_t tv_sec;
+        uint32_t tv_nsec;
+    } *ts = (struct linux_timespec*)ARG2(stack);
+
+    if (ts) {
+        ts->tv_sec = sys_time();
+        ts->tv_nsec = 0;
+    }
+    return 0;
+}
+
+static int32_t do_lstat64(struct intr_stack* stack){
+     // 通过路径来获取文件信息
+    const char* path = (const char*)ARG1(stack);
+    // printk("[SYSCALL lstat64] ash is looking at: %s\n", path);
+    struct linux_stat64* linux_buf = (struct linux_stat64*)ARG2(stack);
+    
+    return linux_sys_stat64(path, linux_buf,false);
+}
+
+static int32_t do_rt_sigaction(struct intr_stack* stack) {
+    return sys_rt_sigaction(
+        (int)ARG1(stack),
+        (const struct sigaction*)ARG2(stack),
+        (struct sigaction*)ARG3(stack),
+        (uint32_t)ARG4(stack)
+    );
+}
+
+static int32_t do_getuid32(struct intr_stack* stack UNUSED) {
+    // 目前我们系统默认都是 root (UID 0)
+    return 0;
+}
+
+static int32_t do_getppid(struct intr_stack* stack UNUSED) {
+    return sys_getppid();
+}
+
+static int32_t do_getcwd(struct intr_stack* stack) {
+    return (int32_t)sys_getcwd(
+        (char*)ARG1(stack),
+        (uint32_t)ARG2(stack)
+    );
+}
+
+static int32_t do_geteuid32(struct intr_stack* stack UNUSED) {
+    // 我们还没实现多用户权限
+    // 默认返回 0 (root) 是最稳妥的，能让 ash 获得最高权限跑起来。
+    return 0;
+}
+static int32_t do_rt_sigprocmask(struct intr_stack* stack) {
+    int how = (int)ARG1(stack);
+    const uint32_t* set = (const uint32_t*)ARG2(stack);
+    uint32_t* oldset = (uint32_t*)ARG3(stack);
+    uint32_t sigsetsize = ARG4(stack);
+
+    // 校验 size (Linux 通常传 8 或 4)
+    if (sigsetsize != 8 && sigsetsize != 4) return -EINVAL;
+
+    return sys_sigprocmask(how, set, oldset);
+}
+
+static int32_t do_fork(struct intr_stack* stack UNUSED) {
+    return sys_fork();
+}
+
+static int32_t do_wait4(struct intr_stack* stack) {
+    pid_t pid      = (pid_t)ARG1(stack);    // 等待的目标 PID
+    int32_t* status = (int32_t*)ARG2(stack); // 存放退出状态的指针
+    int32_t options = (int32_t)ARG3(stack); // 选项，如 WNOHANG
+    // struct rusage* usage = (void*)ARG4(stack); // 资源统计，暂时忽略
+    return sys_waitpid(pid, status, options);
+}
+
+static int32_t do_execve(struct intr_stack* stack) {
+    const char* filename = (const char*)ARG1(stack);
+    const char** argv    = (const char**)ARG2(stack);
+    const char** envp    = (const char**)ARG3(stack);
+    
+    return sys_execve(filename, argv, envp);
+}
+
+static int32_t do_setpgid(struct intr_stack* stack) {
+    pid_t pid  = (pid_t)ARG1(stack);
+    pid_t pgid = (pid_t)ARG2(stack);
+    return sys_setpgid(pid, pgid);
+}
+
+static int32_t do_getpgid(struct intr_stack* stack) {
+    pid_t pid = (pid_t)ARG1(stack);
+    return sys_getpgid(pid);
+}
+
+
+// fcntl64 和 fcntl 用一个处理函数就行
+// fcntl64 出现的历史原因是为了支持 大文件
+// 它的锁结构体和普通版本的不同，当使用 F_GETLK64、F_SETLK64 等涉及文件锁的命令时
+// fcntl 使用的是 struct flock，而 fcntl64 使用的是 struct flock64（其偏移量字段是 64 位的）。
+// 由于我们的 sys_fcntl 目前还没有实现文件锁，仅仅处理了 FD 标志位和重定向
+// 所以这种“结构体对齐”的区别暂时对我们没有影响。
+static int32_t do_fcntl(struct intr_stack* stack) {
+    // 按照 Linux i386 ABI:
+    // ebx (ARG1): fd
+    // ecx (ARG2): cmd
+    // edx (ARG3): arg
+    return sys_fcntl(
+        (int32_t)ARG1(stack),
+        (uint32_t)ARG2(stack),
+        (uint32_t)ARG3(stack)
+    );
+}
+
+static int32_t do_getpgrp(struct intr_stack* stack UNUSED) {
+    // 根据 POSIX 和 Linux i386 标准，getpgrp() 不带参数
+    // 它等价于我们的 sys_getpgid(0)，即获取当前线程的组id
+    return sys_getpgid(0);
+}
+
+static int32_t do_kill(struct intr_stack* stack) {
+    pid_t pid = (pid_t)ARG1(stack);
+    int sig = (int)ARG2(stack);
+
+    // 探测逻辑，Linux 中 sig=0 用于检查进程是否存在或是否有权限
+    if (sig == 0) {
+        struct task_struct* target = pid2thread(pid);
+        return (target != NULL) ? 0 : -ESRCH; // ESRCH: 进程不存在
+    }
+
+    // 进程组逻辑，Linux 中如果 pid < -1，表示向进程组 |pid| 发送信号
+    if (pid < -1) {
+        kill_pgrp(-pid, sig);
+        return 0;
+    }
+
+    // 广播逻辑，pid == -1 通常表示发给除 init 外的所有进程（我们先暂时不管它）
+    // 当前进程组，pid == 0 表示发给调用者所在的进程组
+    if (pid == 0) {
+        kill_pgrp(get_running_task_struct()->pgrp, sig);
+        return 0;
+    }
+
+    // 默认行为，普通的单进程发送
+    int32_t ret = sys_kill(pid, sig);
+    return (ret < 0) ? -ESRCH : 0;
+}
+
+// 我们目前还没有实现select和poll等机制，随便应付一下busybox不报错
+// 但是这有可能会导致 ash 忙轮询，占满cpu
+// 目前先这样过度一下
+// 在有poll的操作系统中，poll 是真正的阻塞点
+// 我们通过内核直接返回 nfds 让进程不阻塞，以为有数据可以读了，直接进入到 read
+// 此时缓冲区可能为空，内核执行 sema_wait，从而在 read 上发生阻塞，实际效果和之前没有poll的时候差不多
+// 但是如果 ash 调用的不是阻塞式的 read，而是设置了 O_NONBLOCK 的非阻塞读取，那么就会出现忙轮询了
+// 但是由于我们默认是阻塞的，因此此时暂时不会出现问题
+
+// 换句话说，正常的 os 是在 poll 发生阻塞的，等到 poll 唤醒后进入 read 一般就不会阻塞了
+// 但是我们现在是直接让他 poll 了以后立马返回，让他到 read 里面阻塞
+// 我们系统里面现在的 read 都是默认阻塞的，因此其实也不会出现忙等待，除非后面实现了O_NONBLOCK
+static int32_t do_poll(struct intr_stack* stack) {
+    // 拿到参数
+    struct pollfd* fds = (struct pollfd*)stack->ebx;
+    uint32_t nfds = (uint32_t)stack->ecx;
+
+    // 检查指针是否合法（防止用户态传个垃圾地址进来让内核崩掉）
+    if (fds == NULL) return -EFAULT;
+
+    // 遍历并设置就绪标志
+    for (uint32_t i = 0; i < nfds; i++) {
+        // fds[i].events 是 ash 关心的事件（比如 POLLIN）
+        // 我们把它拷贝给 fds[i].revents（这是内核返回给应用的“实际发生”事件）
+        // 只对 TTY 描述符（比如 0, 1, 2）返回就绪
+        // 对其他文件描述符返回 0
+        if (fds[i].fd <= 2) {
+            fds[i].revents = fds[i].events;
+        } else {
+            fds[i].revents = 0;
+        }
+    }
+
+    // 返回值必须是就绪的 fd 数量
+    return (int32_t)nfds;
+}
+
+static int32_t do_mkdir(struct intr_stack* stack) {
+    // 按照 Linux i386 约定从寄存器获取参数
+    const char* pathname = (const char*)stack->ebx;
+    uint32_t mode = (uint32_t)stack->ecx;
+
+    // 参数校验
+    if (pathname == NULL) {
+        return -EFAULT;
+    }
+
+    // 我们的 sys_mkdir 权限目前内部写死了 0777，
+    int32_t ret = sys_mkdir(pathname);
+
+    // 如果 sys_mkdir 返回的是负值（错误码），直接返回
+    // 否则返回 0 表示成功
+    return ret;
+}
+
+static int32_t do_dup2(struct intr_stack* stack) {
+    int32_t oldfd = (int32_t)stack->ebx;
+    int32_t newfd = (int32_t)stack->ecx;
+
+    return sys_dup2(oldfd, newfd);
+}
+
+static int32_t musl_sys_readv(int32_t fd, const struct linux_iovec* iov, int32_t iovcnt) {
+    if (iov == NULL || iovcnt < 0) {
+        return -EINVAL;
+    }
+
+    int32_t total = 0;
+    for (int32_t i = 0; i < iovcnt; i++) {
+        uint32_t iov_len = iov[i].iov_len;
+        if (iov_len == 0) {
+            continue;
+        }
+
+        // 依次调用已经实现好的 sys_read
+        int32_t read_bytes = sys_read(fd, iov[i].iov_base, iov_len);
+
+        if (read_bytes < 0) {
+            // 如果已经读到了部分数据，先返回已读到的字节数
+            if (total > 0) {
+                return total;
+            }
+            return read_bytes; // 否则返回错误码
+        }
+
+        total += read_bytes;
+
+        // 如果读到的字节数少于当前 iovec 要求的字节数
+        // 说明数据读完了（EOF）或者目前管道/TTY 没数据了，直接返回
+        if ((uint32_t)read_bytes < iov_len) {
+            break;
+        }
+    }
+
+    return total;
+}
+
+// readv 的作用是：一次性将文件中的数据读取并分发到多个互不连续的内存缓冲区中。
+// readv 和 writev 的好处在于原子性和性能比较好，在某些情况下，多个缓冲区的操作是原子的。
+// 并且可以减少系统调用的次数。比如 ash 想读一个头部信息到一个结构体，读后续数据到另一个缓冲区，用 readv 只需要进出内核一次。
+static int32_t do_readv(struct intr_stack* stack) {
+    return musl_sys_readv((int32_t)ARG1(stack),
+                          (const struct linux_iovec*)ARG2(stack),
+                          (int32_t)ARG3(stack));
+}
+
+static int32_t do_chdir(struct intr_stack* stack) {
+    // 根据 Linux i386 约定，EBX 是路径字符串的指针
+    const char* path = (const char*)stack->ebx;
+
+    if (path == NULL) {
+        return -EFAULT;
+    }
+
+    return sys_chdir(path);
+}
+
+static int32_t do_symlink(struct intr_stack* stack) {
+    // ARG1: target (指向谁), ARG2: linkpath (新生成的链接名)
+    const char* target = (const char*)ARG1(stack);
+    const char* linkpath = (const char*)ARG2(stack);
+
+    if (target == NULL || linkpath == NULL) {
+        return -EFAULT;
+    }
+
+    return sys_symlink(target, linkpath);
+}
+
+static int32_t do_readlink(struct intr_stack* stack) {
+    // ARG1: path, ARG2: buf, ARG3: bufsize
+    const char* path = (const char*)ARG1(stack);
+    char* buf = (char*)ARG2(stack);
+    int32_t bufsize = (int32_t)ARG3(stack);
+
+    if (path == NULL || buf == NULL) {
+        return -EFAULT;
+    }
+
+    return sys_readlink(path, buf, bufsize);
+}
+
+static int32_t do_access(struct intr_stack* stack) {
+    const char* pathname = (const char*)ARG1(stack);
+    // int mode = (int)ARG2(stack); // 虽然我们暂不校验 mode，但参数在这
+
+    if (pathname == NULL) return -EFAULT;
+
+    return sys_access(pathname, 0); // 暂时忽略具体的 R/W/X mode
+}
+
+static int32_t do_rmdir(struct intr_stack* stack) {
+    // 根据 i386 ABI，EBX (ARG1) 是路径字符串指针
+    const char* pathname = (const char*)stack->ebx;
+
+    if (pathname == NULL) {
+        return -EFAULT;
+    }
+
+    return sys_rmdir(pathname);
+}
+
+static int32_t do_pipe(struct intr_stack* stack) {
+    int32_t* user_pipefd = (int32_t*)ARG1(stack);
+    // 必须确保 user_pipefd 在用户空间是可写的，否则会引发内核页错误
+    // 简单的做法是先校验指针
+    if (!user_pipefd) return -EFAULT;
+
+    int32_t temp_fds[2];
+    int32_t res = sys_pipe(temp_fds);
+    
+    if (res == 0) {
+        // 把结果搬运回用户态
+        user_pipefd[0] = temp_fds[0];
+        user_pipefd[1] = temp_fds[1];
+        return 0;
+    }
+    return res; // 返回具体的负数错误码
+}
+
 void musl_syscall_intrcpt_init(){
     for (int i = 0; i < NR_syscalls; i++) {
         musl_syscall_table[i] = do_default;
@@ -408,6 +774,34 @@ void musl_syscall_intrcpt_init(){
     musl_syscall_table[__NR_unlink] = do_unlink;
     musl_syscall_table[__NR_time] = do_time;
     musl_syscall_table[__NR_mmap2] = do_mmap2;
+    musl_syscall_table[__NR_gettimeofday] = do_gettimeofday;
+    musl_syscall_table[__NR_clock_gettime] = do_clock_gettime;
+    musl_syscall_table[__NR_lstat64] = do_lstat64;
+    musl_syscall_table[__NR_rt_sigaction] = do_rt_sigaction; 
+    musl_syscall_table[__NR_getuid32] = do_getuid32;     
+    musl_syscall_table[__NR_getppid] = do_getppid;    
+    musl_syscall_table[__NR_getcwd] = do_getcwd;      
+    musl_syscall_table[__NR_geteuid32] = do_geteuid32;      
+    musl_syscall_table[__NR_rt_sigprocmask] = do_rt_sigprocmask;      
+    musl_syscall_table[__NR_fork] = do_fork;      
+    musl_syscall_table[__NR_wait4] = do_wait4;      
+    musl_syscall_table[__NR_execve] = do_execve;      
+    musl_syscall_table[__NR_setpgid] = do_setpgid;
+    musl_syscall_table[__NR_getpgid] = do_getpgid;
+    musl_syscall_table[__NR_fcntl] = do_fcntl;
+    musl_syscall_table[__NR_fcntl64] = do_fcntl;
+    musl_syscall_table[__NR_getpgrp] = do_getpgrp;
+    musl_syscall_table[__NR_kill] = do_kill;
+    musl_syscall_table[__NR_poll] = do_poll;
+    musl_syscall_table[__NR_mkdir] = do_mkdir;
+    musl_syscall_table[__NR_dup2] = do_dup2;
+    musl_syscall_table[__NR_readv] = do_readv;
+    musl_syscall_table[__NR_chdir] = do_chdir;
+    musl_syscall_table[__NR_symlink] = do_symlink; 
+    musl_syscall_table[__NR_readlink] = do_readlink; 
+    musl_syscall_table[__NR_access] = do_access; 
+    musl_syscall_table[__NR_rmdir] = do_rmdir; 
+    musl_syscall_table[__NR_pipe] = do_pipe; 
 }
 
 // 根据 i386 Linux ABI:
@@ -416,6 +810,7 @@ void musl_syscall_intrcpt_init(){
 void musl_syscall_interceptor(struct intr_stack* stack) {
     uint32_t sc_nr = stack->eax;
     int32_t ret = -ENOSYS; // 默认返回错误码
+
 #ifdef DEBUG_SYSCALL_INTRCPT
     printk("Intrcpt 0x80: Syscall 0x%x from EIP: 0x%x\n", stack->eax, stack->eip);
 #endif
@@ -427,6 +822,7 @@ void musl_syscall_interceptor(struct intr_stack* stack) {
     }
  
     ret = musl_syscall_table[sc_nr](stack);
+
     // 将返回值写入中断栈中的 eax 位置
     // 当汇编执行 popad 时，这个值会被加载到用户的 EAX 寄存器中
     // 按照 ABI 规定，系统调用只允许修改 EAX（作为返回值）

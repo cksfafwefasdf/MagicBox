@@ -317,3 +317,11 @@ uint32_t time(void){
 int32_t symlink(const char* target, const char* linkpath){
 	return _syscall2(SYS_SYMLINK,target,linkpath);
 }
+
+int32_t execve(const char* path, const char* argv[], const char* envp[]){
+	return _syscall3(SYS_EXECVE,path,argv,envp);
+}
+
+int32_t lstat(const char* _pathname, struct stat* buf){
+	return _syscall2(SYS_LSTAT,_pathname,buf);
+}

@@ -27,11 +27,12 @@ int32_t sys_ioctl(int fd, uint32_t cmd, uint32_t arg) {
     
     // 如果是普通文件或目录，它们通常不支持 ioctl
     // 这里静默返回 ENOTTY，避免 printk 刷屏
-    if (file->fd_inode->i_type == FT_REGULAR || file->fd_inode->i_type == FT_DIRECTORY) {
-        return -ENOTTY; 
+    if (file->fd_inode->i_type != FT_REGULAR && 
+        file->fd_inode->i_type != FT_DIRECTORY &&
+        file->fd_inode->i_type != FT_PIPE) {
+        // 只有在遇到“本该支持却没支持”的设备时才打印错误，比如 TTY
+        printk("sys_ioctl: type 0x%x does not support ioctl\n", file->fd_inode->i_type);
     }
 
-    // 其他情况（如未实现的设备类型）再报错
-    printk("sys_ioctl: unknown op for type 0x%x\n", file->fd_inode->i_type);
-    return -EINVAL;
+    return -ENOTTY;
 }

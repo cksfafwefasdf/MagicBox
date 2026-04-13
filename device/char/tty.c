@@ -148,10 +148,10 @@ static int tty_read(struct file* file, char* buf, uint32_t count) {
             break;
         }
 
-        // 一旦读到行结束符，就结束本次 read
-        if (c == term->c_cc[VCLR]) {
-            break;
-        }
+        // // 一旦读到行结束符，就结束本次 read
+        // if (c == term->c_cc[VCLR]) {
+        //     break;
+        // }
     }
     
     return i;
@@ -179,10 +179,18 @@ static int32_t tty_ioctl(struct inode* inode, struct file* file, uint32_t cmd, u
             memcpy(&tty->termios, (void*)arg, sizeof(struct termios));
             return 0;
         case TIOCGPGRP: // Get foreground process group
+            printk("TIOCGPGRP: cur_pid=%d, cur_pgid=%d, tty_pgrp=%d\n", 
+            get_running_task_struct()->pid, get_running_task_struct()->pgrp, tty->pgrp);
             *(pid_t*)arg = tty->pgrp;
             return 0;
         case TIOCSPGRP: // Set foreground process group
             tty->pgrp = *(pid_t*)arg;
+            return 0;
+        case TIOCGWINSZ:
+            // 告诉 shell 这是一个 80x25 的标准 VGA 屏幕
+            struct { uint16_t row, col, xpixel, ypixel; } *ws = (void*)arg;
+            ws->row = NUM_FULL_SCREEN_LINE;
+            ws->col = NUM_FULL_LINE_CH;
             return 0;
         default:
             return -ENOTTY;
@@ -200,9 +208,10 @@ void tty_init() {
     console_tty.termios.c_cc[VINTR] = 'c' - 'a' + 1;  // 0x03, SIGINT
     console_tty.termios.c_cc[VKILL] = 'u' - 'a' + 1;  // 0x15, 清除当前行
     // 虽然内核只是把 ctrl+l 转义后放进缓冲区，但定义好它的值可以方便以后维护
-    console_tty.termios.c_cc[VCLR]  = 'l' - 'a' + 1;  // 0x0C, 清屏
+    // console_tty.termios.c_cc[VCLR]  = 'l' - 'a' + 1;  // 0x0C, 清屏
     console_tty.termios.c_cc[VEOF]  = 'd' - 'a' + 1;  // 0x04, 产生 EOF
     console_tty.termios.c_cc[VERASE] = 'h' - 'a' + 1; // 即 ^H，擦除字符
+    console_tty.termios.c_cc[VTIME] = 0; 
     // 默认开启：信号处理 | 规范模式 | 回显
     console_tty.termios.c_lflag = ISIG | ICANON | ECHO;
     

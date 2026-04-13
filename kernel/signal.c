@@ -387,3 +387,16 @@ int sys_sigpending(uint32_t* set) {
     }
     return -EFAULT;
 }
+
+int32_t sys_rt_sigaction(int sig, const struct sigaction* act, struct sigaction* oact, uint32_t sigsetsize) {
+    // Linux 内核会校验 sigsetsize 是否符合内核定义的信号位图大小
+    // 对于 32 位系统，如果 sigsetsize != 8 (64位信号集) 或者 != 4 (32位信号集)，通常会返回 EINVAL
+    // 在我们的系统中，我们目前使用的是 32 位位图 (uint32_t)，所以 size 应该是 4
+    // 但很多 libc (如 musl/glibc) 默认按 64 位信号集传 8。
+    if (sigsetsize != 8 && sigsetsize != 4) {
+        return -EINVAL;
+    }
+
+    // 核心的东西直接复用写好 sys_sigaction
+    return sys_sigaction(sig, act, oact);
+}

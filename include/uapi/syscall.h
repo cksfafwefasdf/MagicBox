@@ -64,6 +64,7 @@
 #define SYS_EXECVE 53
 #define SYS_SYMLINK 54
 #define SYS_READLINK 55
+#define SYS_LSTAT 56
 
 // user interface
 extern uint32_t getpid(void);
@@ -125,4 +126,5 @@ extern int32_t munmap(void* addr, uint32_t len);
 extern int32_t execve(const char* path, const char* argv[], const char* envp[]);
 extern uint32_t time(void);
 extern int32_t symlink(const char* target, const char* linkpath);
+extern int32_t lstat(const char* _pathname, struct stat* buf);
 #endif

@@ -29,8 +29,9 @@ int32_t pcb_fd_install(int32_t global_fd_idx){
 
 	uint8_t local_fd_idx = 0;
 	while(local_fd_idx<MAX_FILES_OPEN_PER_PROC){
-		if(cur->fd_table[local_fd_idx]==-1){
-			cur->fd_table[local_fd_idx]=global_fd_idx;
+		if(cur->fd_table[local_fd_idx].global_fd_idx==-1){
+			cur->fd_table[local_fd_idx].global_fd_idx = global_fd_idx;
+			cur->fd_table[local_fd_idx].flags = 0;
 			break;
 		}
 		local_fd_idx++;
@@ -44,7 +45,7 @@ int32_t pcb_fd_install(int32_t global_fd_idx){
 }
 
 uint32_t fd_local2global(struct task_struct* task , uint32_t local_fd){
-	int32_t global_fd = task->fd_table[local_fd];
+	int32_t global_fd = task->fd_table[local_fd].global_fd_idx;
 	ASSERT(global_fd>=0&&global_fd<MAX_FILE_OPEN_IN_SYSTEM);
 	return (uint32_t)global_fd;
 }

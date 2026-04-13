@@ -40,13 +40,17 @@
 // TTY 子系统的幻数定义为 'T'
 #define TTY_MAGIC 'T' // 即 0x54
 
-// 模仿 Linux 的定义方式
-#define TCGETS      _IOR(TTY_MAGIC, 0x01, struct termios) // 0x5401 获取 termios
-#define TCSETS      _IOW(TTY_MAGIC, 0x02, struct termios) // 0x5402 设置 termios
+// i386 通常不使用上面那种复杂的定义方式，我们直接硬编码吧
+// 磁盘操作的暂时不修改了，之后出问题了再改
+#define TCGETS      0x5401
+#define TCSETS      0x5402
+#define TCSETSW     0x5403
+#define TCSETSF     0x5404
 
-// 进程组相关
-#define TIOCGPGRP   _IOR(TTY_MAGIC, 0x0F, pid_t) // 0x540F 获取前台进程组
-#define TIOCSPGRP   _IOW(TTY_MAGIC, 0x10, pid_t) // 0x5410 设置前台进程组
+#define TIOCGPGRP   0x540F
+#define TIOCSPGRP   0x5410
+
+#define TIOCGWINSZ  0x5413 // 获取窗口大小，ash 有时也会查这个
 
 extern int32_t sys_ioctl(int fd, uint32_t cmd, uint32_t arg);
 

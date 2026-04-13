@@ -154,7 +154,7 @@ void buildin_ls(uint32_t argc, char** argv) {
     }
 
     // 获取目标路径的状态
-    if (stat(pathname, &file_stat) < 0) {
+    if (lstat(pathname, &file_stat) < 0) {
         printf("ls: cannot access %s: No such file or directory\n", pathname);
         return;
     }
@@ -190,7 +190,7 @@ void buildin_ls(uint32_t argc, char** argv) {
                 
                 strcat(sub_pathname, dir_e.d_name);
                 memset(&file_stat, 0, sizeof(struct stat));
-                if (stat(sub_pathname, &file_stat) < 0) {
+                if (lstat(sub_pathname, &file_stat) < 0) {
                     printf("ls: cannot access %s\n", dir_e.d_name);
                     close(fd);
                     return;

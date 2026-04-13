@@ -49,6 +49,7 @@ struct inode{
 	uint32_t i_rdev; // 这个 inode 表示哪一个设备（针对设备inode使用，存储该 inode 代表的设备号，r 表示 raw，即原始设备）
 	uint32_t i_no;
 	uint32_t i_dev; // 这个 inode 存在哪个持久化设备上
+	uint32_t i_nlink;
 	// 有多少个全局打开文件表项指向这个inode
 	uint32_t i_open_cnts;
 	// write operation will cause concurrent safty problem
