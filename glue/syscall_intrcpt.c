@@ -422,7 +422,7 @@ static int32_t do_gettimeofday(struct intr_stack* stack) {
 // 现代 C 库（例如musl）更倾向于用这个来获取纳秒级的时间。
 // 我们暂时不支持纳秒级时间，所以和do_gettimeofday差不多操作就行
 static int32_t do_clock_gettime(struct intr_stack* stack) {
-    uint32_t clk_id = ARG1(stack); // CLOCK_REALTIME 等
+    // uint32_t clk_id = ARG1(stack); // CLOCK_REALTIME 等
     struct linux_timespec {
         uint32_t tv_sec;
         uint32_t tv_nsec;
@@ -610,7 +610,7 @@ static int32_t do_poll(struct intr_stack* stack) {
 static int32_t do_mkdir(struct intr_stack* stack) {
     // 按照 Linux i386 约定从寄存器获取参数
     const char* pathname = (const char*)stack->ebx;
-    uint32_t mode = (uint32_t)stack->ecx;
+    // uint32_t mode = (uint32_t)stack->ecx;
 
     // 参数校验
     if (pathname == NULL) {
