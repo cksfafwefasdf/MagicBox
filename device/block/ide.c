@@ -10,7 +10,6 @@
 #include <global.h>
 #include <unitype.h>
 #include <device.h>
-#include <block_dev.h>
 #include <fs.h>
 #include <errno.h>
 #include <ioctl.h>

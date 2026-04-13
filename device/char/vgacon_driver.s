@@ -135,6 +135,16 @@ put_char: ; write a char that from the stack to the position of cursor
     cmp cl, 'J'
     jz .handle_J_command
 
+	; 判断是否为方向键
+	cmp cl, 'A'
+    jz .handle_move_up
+    cmp cl, 'B'
+    jz .handle_move_down
+    cmp cl, 'C'
+    jz .handle_move_right
+    cmp cl, 'D'
+    jz .handle_move_left
+
     ; 判断是否是分号 ';' (多参数分隔符，为以后可能的多参数扩展预留)
     cmp cl, ';'
     jz .handle_semicolon
@@ -162,6 +172,73 @@ put_char: ; write a char that from the stack to the position of cursor
     pop edx
     pop eax
     jmp .put_char_done     ; 解析完一位数字，等待下一个字符
+
+.handle_move_up:
+    call .get_param_1          ; 如果参数是0，改为1
+    .loop_up:
+        cmp bx, NUM_FULL_LINE_CH
+        jl .move_done          ; 到顶了，别移了
+        sub bx, NUM_FULL_LINE_CH
+        dec ax
+        jnz .loop_up
+    jmp .move_done
+
+.handle_move_down:
+    call .get_param_1 ; ax = 移动行数
+	.loop_down:
+		push ax ; 备份剩余移动行数
+		
+		; 计算当前光标在第几行
+		mov ax, bx
+		xor dx, dx
+		mov si, NUM_FULL_LINE_CH ; 80
+		div si ; ax = 当前行号 (0-24)
+
+		cmp ax, 24 ; 检查是否已经在最后一行
+		pop ax ; 恢复移动行数
+		jge .move_done ; 如果已经在最后一行（或异常超过），停止移动
+
+		add bx, NUM_FULL_LINE_CH ; 安全向下移动一行
+		dec ax
+		jnz .loop_down
+		jmp .move_done
+
+.handle_move_right:
+    call .get_param_1
+    .loop_right:
+        inc bx
+        cmp bx, NUM_FULL_SCREEN_CH
+        jge .force_last_pos    ; 溢出了
+        dec ax
+        jnz .loop_right
+    jmp .move_done
+    .force_last_pos:
+        mov bx, NUM_FULL_SCREEN_CH - 1
+        jmp .move_done
+
+.handle_move_left:
+    call .get_param_1
+    .loop_left:
+        cmp bx, 0
+        jz .move_done          ; 到最左上角了
+        dec bx
+        dec ax
+        jnz .loop_left
+    jmp .move_done
+
+.move_done:
+    mov word [ansi_param_val], 0
+    mov byte [out_status], 0
+    jmp .set_cursor           ; 移动完 bx，必须跳转到 set_cursor 更新硬件光标
+
+; 辅助函数：获取参数，如果参数为0则默认为1
+.get_param_1:
+    mov ax, [ansi_param_val]
+    cmp ax, 0
+    jne .param_ok
+    mov ax, 1
+.param_ok:
+    ret
 
 .handle_J_command:
     ; ANSI 标准中，[2J 表示清空全屏
@@ -340,15 +417,15 @@ put_char: ; write a char that from the stack to the position of cursor
 
 .set_cursor:
 	; set high 8 bit
-	mov dx,0x03d4 ;CRT Controller addr reg
-	mov al,0x0e ;cursor-location-high
-	out dx,al ;index the port
-	mov dx,0x03d5 ;CRT Controller data reg
+	mov dx,0x03d4 ; CRT Controller addr reg
+	mov al,0x0e ; cursor-location-high
+	out dx,al ; index the port
+	mov dx,0x03d5 ; CRT Controller data reg
 	mov al,bh
 	out dx,al
-	;set low 8 bit
+	; set low 8 bit
 	mov dx,0x3d4
-	mov al,0x0f ;cursor-location-low
+	mov al,0x0f ; cursor-location-low
 	out dx,al
 	mov dx,0x3d5
 	mov al,bl

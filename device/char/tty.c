@@ -3,7 +3,6 @@
 #include <ioqueue.h>
 #include <console.h>
 #include <timer.h>
-#include <char_dev.h>
 #include <device.h>
 #include <signal.h>
 #include <termios.h>
@@ -46,63 +45,79 @@ static int32_t tty_write(struct file* file, char* buf, uint32_t count) {
 void tty_input_handler(char c, uint32_t rdev) {
     struct termios* term = &console_tty.termios;
 
-    // 处理退格 (VERASE)
-    if ((term->c_lflag & ICANON) && (c == term->c_cc[VERASE] || c == '\b')) {
-        if (!ioq_empty(&console_tty.ibuf)) {
-            uint32_t last_idx = (console_tty.ibuf.head - 1 + BUFSIZE) % BUFSIZE;
-            if (console_tty.ibuf.buf[last_idx] != '\n') {
-                ioq_popchar(&console_tty.ibuf);
-                // if (term->c_lflag & ECHO) console_put_char('\b');
-
-                // 我们的 print.s 中会处理 \b 后的光标移动以及空格输出，但是走 uart 时就没法处理了
-                // 因为现代的linux例如ubuntu接收到\b后只会移动光标，不会输出空格
-                // 因此我们在此直接输出一个 "\b \b"，手动把相应的字符删除，让vga和uart都能处理
-                if (term->c_lflag & ECHO) console_put_str("\b \b",rdev);
-            }
-        }
-        return;
-    }
-
     // 处理信号 (ISIG + VINTR)
+    // 信号通常需要优先处理，无论在什么模式下
     if ((term->c_lflag & ISIG) && (c == term->c_cc[VINTR])) {
         // printk("front %d\n",console_tty.pgrp);
         ioq_putchar(&console_tty.ibuf, c);
         if(console_tty.pgrp!=0){
             kill_pgrp(console_tty.pgrp, SIGINT);
         }
+        // 信号发生时，必须唤醒正在等待输入的进程
         sema_signal(&console_tty.line_sem);
         return;
     }
 
-    // 处理清行/清屏 (VKILL / VCLR)
-    if (c == term->c_cc[VKILL] || c == term->c_cc[VCLR]) {
-        while (!ioq_empty(&console_tty.ibuf)) {
-            uint32_t last_idx = (console_tty.ibuf.head - 1 + BUFSIZE) % BUFSIZE;
-            if (console_tty.ibuf.buf[last_idx] == '\n') break;
-            ioq_popchar(&console_tty.ibuf);
-            if (term->c_lflag & ECHO) console_put_char('\b',rdev);
+    // 规范模式 (ICANON) 的特殊行编辑处理
+    if (term->c_lflag & ICANON) {
+        // 处理退格 (VERASE)
+        if (c == term->c_cc[VERASE] || c == '\b') {
+            if (!ioq_empty(&console_tty.ibuf)) {
+                uint32_t last_idx = (console_tty.ibuf.head - 1 + BUFSIZE) % BUFSIZE;
+                // 规范模式下，退格不能删掉上一行的换行符
+                if (console_tty.ibuf.buf[last_idx] != '\n') {
+                    ioq_popchar(&console_tty.ibuf);
+                    // 我们的 print.s 中会处理 \b 后的光标移动以及空格输出，但是走 uart 时就没法处理了
+                    // 因为现代的linux例如ubuntu接收到\b后只会移动光标，不会输出空格
+                    // 因此我们在此直接输出一个 "\b \b"，手动把相应的字符删除，让vga和uart都能处理
+                    if (term->c_lflag & ECHO) {
+                        console_put_str("\b \b", rdev);
+                    }
+                }
+            }
+            return;
         }
-        if (c == term->c_cc[VCLR]) {
-            ioq_putchar(&console_tty.ibuf, c); // 把 ^L 放进去给 Shell 读
+
+        // 处理清行，清屏幕操作不在标准中，因此我们不处理
+        if (c == term->c_cc[VKILL]) {
+            while (!ioq_empty(&console_tty.ibuf)) {
+                uint32_t last_idx = (console_tty.ibuf.head - 1 + BUFSIZE) % BUFSIZE;
+                if (console_tty.ibuf.buf[last_idx] == '\n') break;
+                ioq_popchar(&console_tty.ibuf);
+                if (term->c_lflag & ECHO) console_put_char('\b',rdev);
+            }
+            
+            return;
+        }
+
+        // 处理回车
+        if (c == '\n' || c == '\r') {
+            // 回显换行的逻辑不要放在这里！不然会引发一些竞态问题很难处理！
+            // 比如会将多个prompt打印在同一行上
+            // 换行的回显应该在 tty_read 里处理
+            // 这样可以确保每次读取一行时，TTY 都会处理好换行和提示符的打印，时序可以得到很好的保证
+            ioq_putchar(&console_tty.ibuf, '\n');
+            // 只有收到回车，规范模式的 read 才会返回
+            sema_signal(&console_tty.line_sem);
+            return;
+        }
+    }
+    
+    // 普通字符入队逻辑 (涵盖非规范模式) 
+    // 检查缓冲区是否已满，防止溢出
+    if (!ioq_full(&console_tty.ibuf)) {
+        ioq_putchar(&console_tty.ibuf, c);
+        
+        // 回显处理
+        if (term->c_lflag & ECHO) {
+            console_put_char(c, rdev);
+        }
+
+        // 非规范模式，只要有字符进来，就释放信号量唤醒 read
+        if (!(term->c_lflag & ICANON)) {
             sema_signal(&console_tty.line_sem);
         }
-        return;
     }
-
-    // 处理回车
-    if (c == '\n' || c == '\r') {
-        // 回显换行的逻辑不要放在这里！不然会引发一些竞态问题很难处理！
-        // 比如会将多个prompt打印在同一行上
-        // 换行的回显应该在 tty_read 里处理
-        // 这样可以确保每次读取一行时，TTY 都会处理好换行和提示符的打印，时序可以得到很好的保证
-        ioq_putchar(&console_tty.ibuf, '\n');
-        sema_signal(&console_tty.line_sem);
-        return;
-    }
-
-    // 普通字符
-    ioq_putchar(&console_tty.ibuf, c);
-    if (term->c_lflag & ECHO) console_put_char(c,rdev);
 }
 
 static int tty_read(struct file* file, char* buf, uint32_t count) {

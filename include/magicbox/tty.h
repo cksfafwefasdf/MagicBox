@@ -26,7 +26,6 @@ struct tty_struct {
 	// 但是最好还是预留在这
 	struct lock tty_lock; // 用于防止两个进程同时对tty进行写操作，也就是说这是个写锁，line_sem是个读锁
 	int32_t pgrp; // 记录前台进程组id
-	uint32_t rdev; // 当前 tty 的设备号
 };
 
 

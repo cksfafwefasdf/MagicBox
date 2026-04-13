@@ -3,7 +3,6 @@
 #include <sync.h>
 #include <thread.h>
 #include <device.h>
-#include <char_dev.h>
 #include <fs_types.h>
 #include <dlist.h>
 #include <errno.h>

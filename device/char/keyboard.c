@@ -23,6 +23,7 @@
 #define alt_r_char char_invisible
 #define caps_lock_char char_invisible
 
+// 扫描码定义
 #define shift_l_make 0x2a
 #define shift_r_make 0x36
 #define alt_l_make 0x38
@@ -35,7 +36,18 @@
 
 // use to check if the key is pressed
 // use [ext_scancode] to check if makecode is begin with 0xe0
+// 状态变量
 static bool ctrl_status,shift_status,alt_status,capslock_status,ext_scancode;
+
+// 扩展键 Makecode (带 0xe0 前缀处理后的值)
+// 主要是上下左右方向键
+// 这些按键我们只需要处理通码，不需要处理断码
+#define KBD_UP    0xe048
+#define KBD_DOWN  0xe050
+#define KBD_LEFT  0xe04b
+#define KBD_RIGHT 0xe04d
+
+#define AVAILABLE_EXT_MAKE_CODE(c) ((c)==alt_r_make||(c)==ctrl_r_make||(c)==KBD_UP||(c)==KBD_DOWN||(c)==KBD_LEFT||(c)==KBD_RIGHT)
 
 // use makecode to index the array
 char keymap[][2] = {
@@ -107,20 +119,26 @@ static void intr_handler_keyboard(void){
 	
 	// CPU read output from 8042
 	uint16_t scancode = inb(KBD_BUF_PORT);
+	// 处理扩展前缀
 	if(scancode==0xe0){
 		ext_scancode = true;
-		// we don't handle the ext_code
+		// we don't handle the ext_code prefix
 		return;
 	}
 
+	// 合并扩展扫描码
 	if(ext_scancode){
 		scancode = ((0xe000)|scancode);
 		ext_scancode = false;
 	}
 
+	// 处理断码 (Break Code)
 	bool is_break_code = ((scancode&0x0080)!=0); // check if it is break_code
+
 	if(is_break_code){
 
+		// 提取通码，但是这种提取方法对方向键无效，只能对 ctrl 这些键有用
+		// 这一点需要注意
 		uint16_t make_code = (scancode&=0xff7f);
 		if(make_code==ctrl_l_make||make_code==ctrl_r_make){
 			ctrl_status = false;
@@ -132,11 +150,28 @@ static void intr_handler_keyboard(void){
 		
 		return;
 
-	}else if((scancode>0x00&&scancode<0x3b)||(scancode==alt_r_make||scancode==ctrl_r_make)){
+	}
+	
+	if ((scancode>0x00&&scancode<0x3b) || AVAILABLE_EXT_MAKE_CODE(scancode)) {
+
+		// 处理方向键，不走keymap
+		char* res = NULL;
+		switch (scancode) {
+            case KBD_UP:    res = "\033[A"; break;
+            case KBD_DOWN:  res = "\033[B"; break;
+            case KBD_RIGHT: res = "\033[C"; break;
+            case KBD_LEFT:  res = "\033[D"; break;
+        }
+
+		if (res) {
+            while (*res) {
+                tty_input_handler(*res++, MAKEDEV(TTY_MAJOR, TTY0_MINOR));
+            }
+            return;
+        }
+
 		// if it is makecode
 		// we only handle alt_right, ctrl and the character defined by keymap 
-
-
 		// check whether combine with shift
 		bool is_upper_case = false;
 
@@ -157,8 +192,8 @@ static void intr_handler_keyboard(void){
 			}
 		}
 			
-
-		uint8_t index = (scancode &= 0x00ff);
+		// 处理在 keymap 范围内的普通按键
+		uint8_t index = (scancode & 0x00ff);
 		char cur_char = keymap[index][is_upper_case];
 
 		// 原本只支持 ctrl+l 和 ctrl+u，现在添加多种快捷键支持
