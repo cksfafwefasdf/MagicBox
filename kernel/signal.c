@@ -244,13 +244,12 @@ void do_signal(struct intr_stack* stack) {
     // 只有 handler 存在且 restorer 存在时才进行栈重构
     // setup_frame 会将返回地址直接改成sa_handler，因此setup_frame函数不会返回到后续逻辑了
     if (sa->sa_handler != SIG_IGN && sa->sa_handler != SIG_DFL) {
-        // 安全检查：如果 restorer 为空，说明用户没设置，或者没用 Libc 封装
-        // 如果你没有全局默认 restorer，这里可能需要强制 sys_exit 或者打印警告
+        // 如果 restorer 为空，说明用户没设置，或者没用 Libc 封装
+        // 此时直接执行默认的杀死行为
         if (sa->sa_restorer == NULL) {
-             printk("Error: Signal %d handler has no restorer!\n", sig);
-             PANIC("sa->sa_restorer == NULL !!!");
-             // sys_exit(-sig);
-             // return;
+             printk("do_signal: Signal %d handler has no restorer!\n", sig);
+            //  PANIC("sa->sa_restorer == NULL !!!");
+             sys_exit(-sig);
         }
         // 备份原本的屏蔽位图，以便在sys_sigreturn中恢复
         uint32_t old_blocked = cur->blocked;

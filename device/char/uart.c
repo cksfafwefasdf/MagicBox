@@ -44,8 +44,8 @@ void uart_init() {
     // 开启 DLAB (设置波特率)
     outb(COM1 + 3, 0x80); 
     
-    // 设置波特率为 38400 (115200 / 3 = 38400)
-    outb(COM1 + 0, 0x03); // 低 8 位
+    // 设置波特率为 115200 (115200 / 1 = 115200)
+    outb(COM1 + 0, 0x01); // 低 8 位
     outb(COM1 + 1, 0x00); // 高 8 位
     
     // 8位数据, 无校验, 1位停止位 (同时关闭了 DLAB)
@@ -123,23 +123,25 @@ bool is_uart_present() {
 }
 
 static void uart_interrupt_handler(void) {
-    // 检查 Line Status Register，确认确实有数据可读
     while (inb(COM1 + 5) & 1) {
         uint8_t c = inb(COM1);
-        
-        // 串口传来的回车通常是 \r (13)，
-        // 而我们的 tty_input_handler 预期的是 \n 或处理 \r
-        // 如果发现敲回车没反应，可以在这里做个简单的转换
-        if (c == '\r') c = '\n'; 
-        
-        // 强制把 DEL 映射为 Backspace
-        // 防止按下删除键 Backspace 没反应
-        if (c == 0x7F) c = '\b'; 
 
+        struct termios* term = &console_tty.termios;
+
+        // 只在 canonical 模式下转换
+        if (term->c_lflag & ICANON) {
+            // 串口传来的回车通常是 \r (13)，
+            // 而我们的 tty_input_handler 预期的是 \n 或处理 \r
+            // 如果发现敲回车没反应，可以在这里做个简单的转换
+            if (c == '\r') c = '\n';
+            // 强制把 DEL 映射为 Backspace
+            // 防止按下删除键 Backspace 没反应
+            if (c == 0x7F) c = '\b';
+        }
         // 直接调 tty 的处理逻辑
         // 它会自动处理回显(ECHO)、退格、信号(SIGINT)等
         // 由于目前我们只有一个ttyS0，因此设备号直接硬编码ttyS0了
         // 先不过度设计了，以后要扩展了再来改吧
-        tty_input_handler(c,MAKEDEV(TTY_MAJOR,TTYS0_MINOR));
+        tty_input_handler(c, MAKEDEV(TTY_MAJOR, TTYS0_MINOR));
     }
 }

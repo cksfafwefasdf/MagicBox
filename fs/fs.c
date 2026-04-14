@@ -268,6 +268,10 @@ int32_t path_depth_cnt(char* pathname){
 // 消费型函数 (open, stat, mount, chdir)：通常传入 true，因为它们关心路径指向的那个“实体内容”。
 // 管理型/创建型函数 (mknod, mkdir, symlink, unlink, rename)：必须传入 false，因为它们操作的是目录里的那个“名字（Entry）”本身。
 static int32_t search_file(char* pathname, struct path_search_record* searched_record, bool follow_link) {
+
+    // search_file 接收到的必须是绝对地址
+    ASSERT(pathname[0] == '/');
+
     char path_buf[MAX_PATH_LEN];
     memset(searched_record, 0, sizeof(struct path_search_record));
     memcpy(path_buf, pathname, MAX_PATH_LEN);
@@ -421,6 +425,7 @@ static int32_t search_file(char* pathname, struct path_search_record* searched_r
                 // 如访问 /dir/link1/file1 ，link1指向 dir2/dir （相对路径） 时，我们最终会拼接成 /dir/dir2/dir/file1
                 // 如访问 /dir/link1/file1 ，link1指向 /dir2/dir （绝对路径）时，我们会拼接成 /dir2/dir/file1，最开始已经解析完了的上下文会被丢弃，然后我们必须从头开始解析
                 sprintf(temp, "%s%s%s", link_target, sep, p);
+
                 memcpy(path_buf, temp, MAX_PATH_LEN);
 
                 if (link_target[0] == '/') {
@@ -466,6 +471,12 @@ static void make_abs_pathname(const char* pathname, char* abs_path) {
 
 int32_t sys_open(const char* _pathname,uint8_t flags){
 	// printk("sys_open:::pathname: %s\n",pathname);
+
+    // ASSERT(_pathname!=NULL);
+    if (_pathname == NULL) {
+        printk("sys_open: request denied (pathname is NULL)\n");
+        return -EFAULT; 
+    }
 
 	char pathname[MAX_PATH_LEN] = {0};
     make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
@@ -1141,8 +1152,6 @@ int32_t sys_chdir(const char* _pathname) {
     // 打开目标目录的 Inode (增加引用计数)
     // 如果是穿透挂载点，search_file 返回的是子分区根编号
     struct inode* new_pwd = inode_open(get_part_by_rdev(record.i_dev), inode_no);
-
-    // printk("CHDIR_FINAL: Going to Dev %x, Ino %d\n", record.i_dev, inode_no);
 
     // 释放旧的当前目录 (减少引用计数)
     if (cur->pwd != NULL) {
@@ -1949,9 +1958,12 @@ int32_t sys_symlink(const char* target, const char* linkpath) {
     struct path_search_record record;
     memset(&record, 0, sizeof(struct path_search_record));
 
+    char abs_path[MAX_PATH_LEN] = {0};
+    make_abs_pathname(linkpath, abs_path); // 统一转成绝对路径
+
     // 搜索 linkpath。我们期望它“不存在”，但能找到它的父目录
     // 由于我们需要验证链接本身是否存在，因此此处传入false
-    int32_t inode_no = search_file((char*)linkpath, &record,false);
+    int32_t inode_no = search_file((char*)abs_path, &record,false);
 
     // 如果文件已经存在，不能创建同名链接
     if (inode_no >= 0) {
@@ -2034,11 +2046,14 @@ int32_t sys_fcntl(int32_t fd, uint32_t cmd, uint32_t arg) {
     }
 }
 
-int32_t sys_readlink(const char* path, char* buf, int32_t bufsize) {
-    if (path == NULL || buf == NULL || bufsize <= 0) return -EFAULT;
+int32_t sys_readlink(const char* _path, char* buf, int32_t bufsize) {
+    if (_path == NULL || buf == NULL || bufsize <= 0) return -EFAULT;
 
     struct path_search_record record;
     memset(&record, 0, sizeof(struct path_search_record));
+
+    char path[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_path, path); // 统一转成绝对路径
 
     // 搜索文件，follow 必须为 false，因为我们要操作链接文件本身
     int32_t inode_no = search_file((char*)path, &record, false);
@@ -2070,14 +2085,19 @@ int32_t sys_readlink(const char* path, char* buf, int32_t bufsize) {
         inode_close(record.parent_inode);
     }
 
+    // printk("symlink content: %s\n", link_buf);
+
     return retval;
 }
 
 // 由于我们是单用户系统，所以是全员 root
 // 所有文件都有权限
-int32_t sys_access(const char* pathname, int mode) {
+int32_t sys_access(const char* _pathname, int mode) {
     struct path_search_record record;
     memset(&record, 0, sizeof(struct path_search_record));
+    
+    char pathname[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, pathname); // 统一转成绝对路径
 
     // access 语义要求必须跟随符号链接 (follow = true)
     // 只要能找到这个文件，对 Root 来说就是有权限的

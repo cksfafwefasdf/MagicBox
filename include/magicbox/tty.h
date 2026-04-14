@@ -28,8 +28,6 @@ struct tty_struct {
 	int32_t pgrp; // 记录前台进程组id
 };
 
-
-
 extern struct tty_struct console_tty;
 // TTY 的操作集
 extern struct file_operations tty_file_operations;
