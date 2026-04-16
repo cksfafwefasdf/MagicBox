@@ -582,29 +582,38 @@ static int32_t do_kill(struct intr_stack* stack) {
 // 换句话说，正常的 os 是在 poll 发生阻塞的，等到 poll 唤醒后进入 read 一般就不会阻塞了
 // 但是我们现在是直接让他 poll 了以后立马返回，让他到 read 里面阻塞
 // 我们系统里面现在的 read 都是默认阻塞的，因此其实也不会出现忙等待，除非后面实现了O_NONBLOCK
+#define POLLIN     0x0001
 static int32_t do_poll(struct intr_stack* stack) {
-    // 拿到参数
     struct pollfd* fds = (struct pollfd*)stack->ebx;
     uint32_t nfds = (uint32_t)stack->ecx;
+    int32_t timeout = (int32_t)stack->edx; // 拿到 timeout 参数！
 
-    // 检查指针是否合法（防止用户态传个垃圾地址进来让内核崩掉）
     if (fds == NULL) return -EFAULT;
 
-    // 遍历并设置就绪标志
+    uint32_t ready_count = 0;
+
     for (uint32_t i = 0; i < nfds; i++) {
-        // fds[i].events 是 ash 关心的事件（比如 POLLIN）
-        // 我们把它拷贝给 fds[i].revents（这是内核返回给应用的“实际发生”事件）
-        // 只对 TTY 描述符（比如 0, 1, 2）返回就绪
-        // 对其他文件描述符返回 0
+        fds[i].revents = 0;
+
         if (fds[i].fd <= 2) {
-            fds[i].revents = fds[i].events;
-        } else {
-            fds[i].revents = 0;
+            // 如果 timeout == 0，说明这是类似 vi 的非阻塞轮询检查
+            // 此时我们为了让 vi 刷新屏幕，故意返回 0 (不就绪)
+            if (timeout == 0) {
+                fds[i].revents = 0; 
+            } else {
+                // 如果 timeout != 0，说明是 ash 在正经等输入
+                // 我们维持原状，给它 POLLIN | POLLOUT
+                fds[i].revents = fds[i].events;
+            }
+
+            if (fds[i].revents != 0) {
+                ready_count++;
+            }
         }
     }
 
-    // 返回值必须是就绪的 fd 数量
-    return (int32_t)nfds;
+    // 如果 timeout == 0 且我们想骗 vi，ready_count 就会是 0
+    return (int32_t)ready_count;
 }
 
 static int32_t do_mkdir(struct intr_stack* stack) {

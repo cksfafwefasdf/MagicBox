@@ -117,7 +117,6 @@ static void ide_set_multiple_mode(struct disk* hd, uint8_t sec_per_block) {
         uint8_t err = inb(reg_error(hd->my_channel));
         printk("Warning: disk %s Multiple Mode Fail. Err:0x%x\n", hd->name, err);
     } else {
-        // 打印成功信息，让你调试时心里有底
         printk("Disk %s: Multiple Mode enabled, %d sectors per block.\n", hd->name, sec_per_block);
     }
 }
@@ -312,24 +311,6 @@ static void write2sector(struct disk* hd,void* buf,uint8_t sec_cnt){
 	}
 	outsw(reg_data(hd->my_channel),buf,size_in_byte/2);
 }
-
-// busy wati 30 seconds
-// static bool busy_wait(struct disk* hd){
-// 	struct ide_channel* channel = hd->my_channel;
-// 	uint16_t time_limit = BUSY_WAIT_TIME_LIMIT;
-// 	while(time_limit-=10>0){
-// 		if(!(inb(reg_status(channel))&BIT_ALT_STAT_BSY)){
-// 			// DRQ is 1 means disk is ready to read or write
-// 			return (inb(reg_status(channel))&BIF_ALT_STAT_DRQ);
-// 		}else{
-// 			mtime_sleep(10); //sleep 10ms, this thread will yield the CPU
-// 		}
-// 	}
-// 	// All actions required in this state shall be completed within 31 s
-// 	// if the disk fails to complete the operation within 30 seconds
-// 	// return false
-// 	return false;
-// }
 
 static bool busy_wait(struct disk* hd) {
     struct ide_channel* channel = hd->my_channel;
@@ -702,7 +683,7 @@ static int32_t ide_dev_write(struct inode* inode, struct file* file, char* buf, 
             uint32_t chunk_size = (bytes_left < left_in_sec) ? bytes_left : left_in_sec;
             memcpy(io_buf + offset_in_sec, src, chunk_size);
 
-            // Write，写回整扇区 (利用你的 bwrite_multi 物理写 + 缓存更新)
+            // Write，写回整扇区
             bwrite_multi(part->my_disk, lba, io_buf, 1);
 
             file->fd_pos += chunk_size;

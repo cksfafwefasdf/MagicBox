@@ -5,6 +5,8 @@
 #include <debug.h>
 #include <vgacon.h>
 
+#define TIMEOUT_CNT 100000000
+
 void dlist_init(struct dlist* plist){
 	plist->head.prev = NULL;
 	plist->head.next = &plist->tail;
@@ -39,6 +41,9 @@ void dlist_remove(struct dlist_elem* pelem){
 	pelem->prev->next = pelem->next;
 	pelem->next->prev = pelem->prev;
 
+	pelem->next = NULL;
+	pelem->prev = NULL;
+
 	intr_set_status(old_status);
 }
 
@@ -58,9 +63,9 @@ bool dlist_find(struct dlist* plist,struct dlist_elem* obj_elem){
 	return false;
 }
 
-bool dlist_empty(struct dlist* plist){
-	return (plist->head.next==&plist->tail?true:false);
-}
+// bool dlist_empty(struct dlist* plist){
+// 	return (plist->head.next==&plist->tail?true:false);
+// }
 
 uint32_t dlist_len(struct dlist* plist){
 	struct dlist_elem* elem = plist->head.next;
@@ -80,9 +85,8 @@ struct dlist_elem* dlist_traversal(struct dlist* plist,func_condition condition,
 	}
 	while(elem!=&plist->tail){
 
-		if (count++ > 100000000) { 
+		if (count++ > TIMEOUT_CNT) { 
             put_str("\n!!!! DEAD LOOP DETECTED !!!!\n");
-			// 假设你的 buffer_head 很大，我们看看 elem 附近的内存
 			uint32_t* fault_ptr = (uint32_t*)elem;
 			put_str("Memory at elem: ");
 			for(int i=0; i<4; i++) {

@@ -94,6 +94,8 @@ struct task_struct{
 
 	struct dlist_elem general_tag;
 	struct dlist_elem all_list_tag;
+	struct dlist_elem timer_tag;
+	struct dlist_elem alarm_tag;
 
 	pid_t pgrp; // 进程组id，初始情况下进程的组id就是自己的pid
 
@@ -118,6 +120,7 @@ struct task_struct{
     struct sigaction sigactions[SIG_NR]; // 信号执行属性结构，对应信号将要执行的操作和标志信息。 
 
 	uint32_t alarm; // 报警定时值（滴答数），用于定时发送 SIGALRM 信号
+	uint32_t wait_until; // 用于 sleep 或者 poll 等操作，该操作不会涉及到信号的操作
 
 	// 内存布局边界
 	// 保护模式下，暴露给用户的地址都是虚拟地址，因此这里用的也都是虚拟地址

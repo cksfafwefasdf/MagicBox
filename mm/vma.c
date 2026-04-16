@@ -168,7 +168,6 @@ void clear_vma_list(struct task_struct* task) {
         // 必须先记住下一个元素，因为 remove_vma 会把当前 elem 释放掉
         struct dlist_elem* next_elem = elem->next;
 
-        // 使用你的 member_to_entry 宏找到 VMA 结构体
         struct vm_area* vma = member_to_entry(struct vm_area, vma_tag, elem);
         
         // 核心释放逻辑

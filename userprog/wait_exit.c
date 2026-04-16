@@ -74,14 +74,15 @@ pid_t sys_wait(int32_t* status){
 		if(child_elem!=NULL){
 			struct task_struct* child_thread = member_to_entry(struct task_struct,all_list_tag,child_elem);
 			if(status!=NULL){
-				// *status = child_thread->exit_status;
-				// printk("Writing exit_status to vaddr: %x\n", status);
         		*status = child_thread->exit_status;
 			}
 
 			// 检查此时的栈顶数据是否合法
     		// struct intr_stack* is = (struct intr_stack*)((uint32_t)get_running_task_struct()->kstack_pages + KERNEL_THREAD_STACK - sizeof(struct intr_stack));
     		// printk("IRET check: CS=%x, EIP=%x, ESP=%x\n", is->cs, is->eip, is->esp);
+#ifdef DEBUG_TASK_RECYCLE
+			printk("sys_wait: %s recycling %s child status:%d\n",parent_thread->name,child_thread->name,child_thread->exit_status);
+#endif
 
 			uint16_t child_pid = child_thread->pid;
 			release_pg_table(child_thread);
@@ -103,6 +104,11 @@ pid_t sys_wait(int32_t* status){
 void sys_exit(int32_t status){
 	struct task_struct* child_thread = get_running_task_struct();
 	child_thread->exit_status = status;
+	
+#ifdef DEBUG_TASK_RECYCLE
+			printk("sys_exit: recycling %s status: %d\n",child_thread->name,status);
+#endif
+	
 	if(child_thread->parent_pid == -1){
 		PANIC("sys_exit: child_thread->parent_pid is -1\n");
 	}
@@ -114,7 +120,7 @@ void sys_exit(int32_t status){
 	struct task_struct* parent_thread = pid2thread(child_thread->parent_pid);
 
 	// 发送信号，实现异步回收
-	// 如果没有信号的话，在先前的实现中，只有父进程调用wait了，他才能去回收子进程
+	// 如果没有信号的话，在先前的实现中，只有父进程调用 wait 了，他才能去回收子进程
 	// 但是现在加入了信号，即使父进程没有wait，它只要收到信号了，在信号处理的过程中也会去回收子进程
 	send_signal(parent_thread, SIGCHLD);
 
@@ -139,6 +145,7 @@ void sys_exit(int32_t status){
 
 	thread_block(TASK_HANGING);
 }
+
 
 
 static bool find_specific_child(struct dlist_elem* pelem, void* arg) {
@@ -185,6 +192,11 @@ pid_t sys_waitpid(pid_t pid, int32_t* status, int32_t options) {
         if (child_elem != NULL) {
             struct task_struct* child_thread = member_to_entry(struct task_struct, all_list_tag, child_elem);
             if (status != NULL) *status = child_thread->exit_status;
+
+#ifdef DEBUG_TASK_RECYCLE
+			printk("sys_waitpid: %s recycling %s child status:%d\n",parent_thread->name,child_thread->name,child_thread->exit_status);
+#endif
+
             uint16_t child_pid = child_thread->pid;
 			release_pg_table(child_thread); // 释放页表
 			release_pg_dir(child_thread); // 释放页目录表

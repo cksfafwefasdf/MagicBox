@@ -65,6 +65,7 @@
 #define SYS_SYMLINK 54
 #define SYS_READLINK 55
 #define SYS_LSTAT 56
+#define SYS_MILSLEEP 57
 
 // user interface
 extern uint32_t getpid(void);
@@ -107,7 +108,7 @@ extern pid_t setpgid(pid_t pid, pid_t pgid);
 extern pid_t getpgid(pid_t pid);
 extern int32_t ioctl(int fd, uint32_t cmd, uint32_t arg);
 extern void* signal(int sig, void* handler);
-extern uint32_t alarm(uint32_t seconds);
+extern int32_t alarm(uint32_t seconds);
 extern int pause(void);
 extern int sigaction(int sig, struct sigaction* act, struct sigaction* oact);
 extern pid_t waitpid(pid_t pid, int32_t* status, int32_t options);
@@ -127,4 +128,6 @@ extern int32_t execve(const char* path, const char* argv[], const char* envp[]);
 extern uint32_t time(void);
 extern int32_t symlink(const char* target, const char* linkpath);
 extern int32_t lstat(const char* _pathname, struct stat* buf);
+extern int32_t msleep(uint32_t mil_seconds);
+
 #endif

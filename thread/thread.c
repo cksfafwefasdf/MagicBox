@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <stdio-kernel.h>
 #include <tss.h>
+#include <timer.h>
 
 // max number of pid is 128*8=1024
 // use bitmap to check if the pid is in used
@@ -69,7 +70,7 @@ static void kernel_thread(thread_func* function,void* func_arg){
 void init_thread(struct task_struct* pthread,char* name,int prio){
 	// pthread is task_struct*
 	// so *pthread is task_struct
-	memset(pthread,0,sizeof(*pthread));
+	memset(pthread,0,PG_SIZE);
 
 	pthread->pid = allocate_pid();
 
@@ -159,7 +160,6 @@ struct task_struct* thread_start(char* name,int prio,thread_func function,void* 
 	return thread;
 }
 
-
 void schedule(){
     // scheduling process must be conducted in INTR_OFF 
     ASSERT(intr_get_status()==INTR_OFF);
@@ -182,7 +182,6 @@ void schedule(){
 	if(dlist_empty(&thread_ready_list)){
 		thread_unblock(idle_thread);
 	}
-
 
 	thread_tag = NULL; // clear tag
 	thread_tag = dlist_pop_front(&thread_ready_list);
@@ -214,12 +213,24 @@ void thread_environment_init(void){
 	put_str("thread_environment_init done\n");
 }
 
+// block 和 unblock 只负责处理具体的挂起和唤醒操作
+// 不会去操作阻塞队列，因为阻塞队列的种类非常多，每个信号量都有一个阻塞队列
+// 这个函数是没办法管理这些的，因此这两个函数的职责比较简单
+// 只负责操作进程状态和操作全局队列例如 thread_ready_list
+// 不操作阻塞队列
 // block thread itself 
 // and set status as [stat]
 void thread_block(enum task_status stat){
 	ASSERT((stat==TASK_BLOCKED)||(stat==TASK_WAITING)||(stat==TASK_HANGING));
 	enum intr_status old_stat = intr_disable();
 	struct task_struct* cur_thread = get_running_task_struct();
+
+	// 被阻塞的进程不能在就绪队列中
+	// 每个进程在运行之前都会在 schedule 函数中
+	// 通过 thread_tag = dlist_pop_front(&thread_ready_list); 操作从就绪队列中弹出来
+	// 因此按理说正在运行的进程进程调用 thread_block 阻塞自己时，自己不应该在就绪队列中
+	ASSERT(!dlist_find(&thread_ready_list,&cur_thread->general_tag));
+
 	cur_thread->status = stat;
 	schedule();
 	intr_set_status(old_stat);
@@ -229,7 +240,6 @@ void thread_unblock(struct task_struct* pthread){
 	enum intr_status old_stat = intr_disable();
 	ASSERT((pthread->status==TASK_BLOCKED)||(pthread->status==TASK_WAITING)||(pthread->status==TASK_HANGING));
 	if(pthread->status!=TASK_READY){
-		// ASSERT(!dlist_find(&thread_ready_list,&pthread->general_tag));
 		if(dlist_find(&thread_ready_list,&pthread->general_tag)){
 			PANIC("thread_unblock: blocked thread in ready list\n");
 		}
@@ -354,6 +364,15 @@ void thread_exit(struct task_struct* thread_over,bool need_schedule){
 	if(dlist_find(&thread_ready_list,&thread_over->general_tag)){
 		dlist_remove(&thread_over->general_tag);
 	}
+
+	// 确保当前进程不在等待队列中了
+	if (dlist_is_linked(&thread_over->timer_tag)) {
+        dlist_remove(&thread_over->timer_tag);
+    }
+
+	if (dlist_is_linked(&thread_over->alarm_tag)) {
+        dlist_remove(&thread_over->alarm_tag);
+    }
 
 	// wati-exit.c 中的 release_pg_table 函数中已经释放过页表了，不用再释放了
 	// if(thread_over->pgdir){

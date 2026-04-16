@@ -137,7 +137,6 @@ void print_logo(){
 // run the idle thread when system is not busy 
 static void idle(void *arg UNUSED){
 	while (1){
-
 		thread_block(TASK_BLOCKED);
 		asm volatile("sti;hlt":::"memory");
 	}

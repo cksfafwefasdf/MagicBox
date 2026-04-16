@@ -243,7 +243,7 @@ int pause(void){
 	return _syscall0(SYS_PAUSE);
 }
 
-uint32_t alarm(uint32_t seconds){
+int32_t alarm(uint32_t seconds){
 	return _syscall1(SYS_ALARM,seconds);
 }
 
@@ -324,4 +324,8 @@ int32_t execve(const char* path, const char* argv[], const char* envp[]){
 
 int32_t lstat(const char* _pathname, struct stat* buf){
 	return _syscall2(SYS_LSTAT,_pathname,buf);
+}
+
+int32_t msleep(uint32_t mil_seconds){
+	return _syscall1(SYS_MILSLEEP,mil_seconds);
 }

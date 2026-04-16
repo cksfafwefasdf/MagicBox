@@ -11,6 +11,14 @@
 #define member_to_entry(struct_type,member_name,member_ptr) (struct_type*)((int)member_ptr-offset(struct_type,member_name))
 #define elem2entry(type,elem_ptr) (type*)(0xfffff000&(int)elem_ptr)
 
+#define dlist_empty(plist) ((plist)->head.next == &(plist)->tail)
+// 检查一个节点是否在链表中
+#define dlist_is_linked(pelem) \
+    ((pelem)->prev != NULL && \
+     (pelem)->next != NULL && \
+     (pelem)->prev->next == (pelem) && \
+     (pelem)->next->prev == (pelem))
+
 struct dlist_elem{
 	struct dlist_elem* prev;
 	struct dlist_elem* next;
@@ -34,7 +42,7 @@ void dlist_push_back(struct dlist* plist,struct dlist_elem* elem);
 // remove [pelem] from the dlist,this operation will not release the space
 void dlist_remove(struct dlist_elem* pelem);
 struct dlist_elem* dlist_pop_front(struct dlist* plist);
-bool dlist_empty(struct dlist* plist);
+//  bool dlist_empty(struct dlist* plist);
 uint32_t dlist_len(struct dlist* plist);
 bool dlist_find(struct dlist* plist,struct dlist_elem* obj_elem);
 // traverse the dlist and check if each element satisfies the condition provided by [condition] 

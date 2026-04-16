@@ -159,7 +159,6 @@ struct inode* inode_open(struct partition* part,uint32_t inode_no){
     if (de != NULL) {
         inode_found = member_to_entry(struct inode, hash_tag, de);
 
-        // 如果这里崩了，说明你的缓存里可能存进了脏东西！
         // 用于诊断缓存不一致的问题
         ASSERT(inode_found->i_no == inode_no && inode_found->i_dev == part->i_rdev);
 

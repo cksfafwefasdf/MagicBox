@@ -1,8 +1,9 @@
 #ifndef __INCLUDE_MAGICBOX_TIMER_H
 #define __INCLUDE_MAGICBOX_TIMER_H
 #include <stdint.h>
+#include <dlist.h>
 
-#define IRQ0_FREQUENCY 100 //intr freq is 100 times/s
+#define IRQ0_FREQUENCY 200 //intr freq is 100 times/s
 #define INPUT_FREQUENCY 1193180
 #define COUNT0_INIT_COUNT_VALUE INPUT_FREQUENCY/IRQ0_FREQUENCY
 #define COUNT0_PORT 0x40 
@@ -15,11 +16,13 @@
 #define mil_seconds_per_intr (1000/IRQ0_FREQUENCY)
 
 extern void timer_init(void);
-// sleep is measured in mil-second
-extern void mtime_sleep(uint32_t m_seconds);
 
+// sleep is measured in mil-second
+extern int32_t sys_milsleep(uint32_t mil_seconds);
+extern int32_t sys_alarm(uint32_t seconds);
 extern int sys_pause(void);
-extern uint32_t sys_alarm(uint32_t seconds);
 
 extern uint32_t ticks;
+extern struct dlist timer_list;
+extern struct dlist alarm_list;
 #endif

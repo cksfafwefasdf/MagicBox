@@ -83,6 +83,7 @@ void syscall_init(void){
 	syscall_table[SYS_TIME] = sys_time;
 	syscall_table[SYS_SYMLINK] = sys_symlink;
 	syscall_table[SYS_LSTAT] = sys_lstat;
+	syscall_table[SYS_MILSLEEP] = sys_milsleep;
 	
 	put_str("syscall_init done\n");
 }
