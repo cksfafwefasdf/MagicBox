@@ -30,6 +30,8 @@
 
 #define SECTOR_SIZE 512
 
+struct poll_table;
+
 // 内存inode
 // VFS 直接操作的inode 对象
 struct inode{
@@ -80,7 +82,7 @@ struct inode{
 
 struct file{
 	uint32_t fd_pos;
-	uint32_t fd_flag;
+	int32_t fd_flag;
 	struct inode* fd_inode;
 	// enum file_types f_type;
 	// f_count 用于表示有多少局部FD指向此全局表中的 file，主要用于处理fork和dup2
@@ -106,6 +108,7 @@ struct file_operations {
 	int (*write) (struct inode *, struct file *, char *, int);
 	int (*readdir) (struct inode *, struct file *, struct dirent *, int);
 	// int (*select) (struct inode *, struct file *, int, select_table *);
+	uint32_t (*poll) (struct file *, struct poll_table *);
 	int (*ioctl) (struct inode *, struct file *, uint32_t, uint32_t);
 	int (*mmap) (struct inode *, struct file *, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 	int (*open) (struct inode *, struct file *);

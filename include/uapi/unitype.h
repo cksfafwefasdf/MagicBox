@@ -75,6 +75,7 @@ enum oflags{ // operation flags
 	// 排他性创建，O_CREATE操作是文件不存在则创建，存在则打开
 	// 加上O_EXCL则是只有在不存在时才创建，存在时报错不打开
 	O_EXCL = 64, 
+    O_NONBLOCK = 128,
 };
 
 enum whence{

@@ -18,6 +18,9 @@
 #include <time.h>
 #include <exec.h>
 #include <fork.h>
+#include <unitype.h>
+#include <fcntl.h>
+#include <poll.h>
 
 // 基于 i386 Linux 0x80 中断的参数约定
 // 强制转换成 uint32_t 是为了防止在进行地址运算或逻辑判断时产生符号位扩展的意外。
@@ -47,12 +50,6 @@ struct linux_mmap2_args {
     uint32_t flags;
     int32_t fd;
     uint32_t pgoff;
-};
-
-struct pollfd {
-    int fd;
-    short events;
-    short revents;
 };
 
 static int32_t musl_sys_writev(int32_t fd, const struct linux_iovec* iov, int32_t iovcnt) {
@@ -318,6 +315,7 @@ static int32_t do_open(struct intr_stack* stack){
     if (linux_flags & 0x80) kernel_flags |= O_EXCL; // Linux 0x80 ->  64
     if (linux_flags & 0x200) kernel_flags |= O_TRUNC;  // Linux 0x200 -> 16
     if (linux_flags & 0x400) kernel_flags |= O_APPEND; // Linux 0x400 -> 32
+    if (linux_flags & 0x800)  kernel_flags |= O_NONBLOCK; // 
 
     return sys_open(path, kernel_flags);
 }
@@ -525,15 +523,46 @@ static int32_t do_getpgid(struct intr_stack* stack) {
 // 由于我们的 sys_fcntl 目前还没有实现文件锁，仅仅处理了 FD 标志位和重定向
 // 所以这种“结构体对齐”的区别暂时对我们没有影响。
 static int32_t do_fcntl(struct intr_stack* stack) {
-    // 按照 Linux i386 ABI:
-    // ebx (ARG1): fd
-    // ecx (ARG2): cmd
-    // edx (ARG3): arg
-    return sys_fcntl(
-        (int32_t)ARG1(stack),
-        (uint32_t)ARG2(stack),
-        (uint32_t)ARG3(stack)
-    );
+    int32_t fd = (int32_t)ARG1(stack);
+    uint32_t cmd = (uint32_t)ARG2(stack);
+    uint32_t arg = (uint32_t)ARG3(stack);
+
+    switch (cmd) {
+        case F_SETFL: {
+            uint32_t kernel_arg = 0;
+            // Linux i386: O_APPEND = 0x400, O_NONBLOCK = 0x800
+            if (arg & 0x400) kernel_arg |= O_APPEND;   // 转为内置的 O_APPEND
+            if (arg & 0x800) kernel_arg |= O_NONBLOCK; // 转为内置的 O_NONBLOCK
+            
+            // F_SETFL 只允许修改状态标志，读写模式是在 open 时确定的
+            return sys_fcntl(fd, cmd, kernel_arg);
+        }
+
+        case F_GETFL: {
+            // 调用内核获取当前的内核格式标志
+            int32_t kflags = sys_fcntl(fd, cmd, arg);
+            if (kflags < 0) return kflags; // 错误直接返回
+
+            uint32_t linux_flags = 0;
+            // 将内核标志转回 Linux 格式供用户态程序识别
+            // 读写模式转换
+            if (kflags & O_RDONLY) linux_flags |= 0;    // Linux O_RDONLY 是 0
+            if (kflags & O_WRONLY) linux_flags |= 1; 
+            if (kflags & O_RDWR)   linux_flags |= 2;
+
+            // 状态标志转换
+            if (kflags & O_APPEND)   linux_flags |= 0x400;
+            if (kflags & O_NONBLOCK) linux_flags |= 0x800;
+            if (kflags & O_CREATE)   linux_flags |= 0x40;
+            if (kflags & O_TRUNC)    linux_flags |= 0x200;
+
+            return (int32_t)linux_flags;
+        }
+
+        default:
+            // 其他命令（如 F_DUPFD, F_GETFD 等）通常不涉及标志位转换，直接透传
+            return sys_fcntl(fd, cmd, arg);
+    }
 }
 
 static int32_t do_getpgrp(struct intr_stack* stack UNUSED) {
@@ -570,50 +599,13 @@ static int32_t do_kill(struct intr_stack* stack) {
     return (ret < 0) ? -ESRCH : 0;
 }
 
-// 我们目前还没有实现select和poll等机制，随便应付一下busybox不报错
-// 但是这有可能会导致 ash 忙轮询，占满cpu
-// 目前先这样过度一下
-// 在有poll的操作系统中，poll 是真正的阻塞点
-// 我们通过内核直接返回 nfds 让进程不阻塞，以为有数据可以读了，直接进入到 read
-// 此时缓冲区可能为空，内核执行 sema_wait，从而在 read 上发生阻塞，实际效果和之前没有poll的时候差不多
-// 但是如果 ash 调用的不是阻塞式的 read，而是设置了 O_NONBLOCK 的非阻塞读取，那么就会出现忙轮询了
-// 但是由于我们默认是阻塞的，因此此时暂时不会出现问题
-
-// 换句话说，正常的 os 是在 poll 发生阻塞的，等到 poll 唤醒后进入 read 一般就不会阻塞了
-// 但是我们现在是直接让他 poll 了以后立马返回，让他到 read 里面阻塞
-// 我们系统里面现在的 read 都是默认阻塞的，因此其实也不会出现忙等待，除非后面实现了O_NONBLOCK
-#define POLLIN     0x0001
 static int32_t do_poll(struct intr_stack* stack) {
-    struct pollfd* fds = (struct pollfd*)stack->ebx;
-    uint32_t nfds = (uint32_t)stack->ecx;
-    int32_t timeout = (int32_t)stack->edx; // 拿到 timeout 参数！
+    struct pollfd* fds = (struct pollfd*)ARG1(stack);
+    uint32_t nfds = (uint32_t)ARG2(stack);
+    int32_t timeout_ms = (int32_t)ARG3(stack);
 
-    if (fds == NULL) return -EFAULT;
-
-    uint32_t ready_count = 0;
-
-    for (uint32_t i = 0; i < nfds; i++) {
-        fds[i].revents = 0;
-
-        if (fds[i].fd <= 2) {
-            // 如果 timeout == 0，说明这是类似 vi 的非阻塞轮询检查
-            // 此时我们为了让 vi 刷新屏幕，故意返回 0 (不就绪)
-            if (timeout == 0) {
-                fds[i].revents = 0; 
-            } else {
-                // 如果 timeout != 0，说明是 ash 在正经等输入
-                // 我们维持原状，给它 POLLIN | POLLOUT
-                fds[i].revents = fds[i].events;
-            }
-
-            if (fds[i].revents != 0) {
-                ready_count++;
-            }
-        }
-    }
-
-    // 如果 timeout == 0 且我们想骗 vi，ready_count 就会是 0
-    return (int32_t)ready_count;
+    // 调用你之前写好的那个核心逻辑函数
+    return sys_poll(fds, nfds, timeout_ms);
 }
 
 static int32_t do_mkdir(struct intr_stack* stack) {

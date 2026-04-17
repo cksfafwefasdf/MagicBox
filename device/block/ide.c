@@ -794,5 +794,6 @@ struct file_operations ide_file_operations = {
 	.ioctl 		= ide_ioctl,
 	.open 		= NULL,
 	.release 	= NULL,
-	.mmap		= NULL
+	.mmap		= NULL,
+	.poll		= NULL
 };

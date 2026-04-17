@@ -312,16 +312,20 @@ void send_signal(struct task_struct* target, int sig) {
     // 修改目标进程的信号位图
     enum intr_status old_status = intr_disable();
     target->signal |= sigmask(sig);
-    intr_set_status(old_status);
-
+    
     // 唤醒目标进程
     // 如果目标进程正在不可中断的睡眠中（比如等待 IO，此时为 block），我们通常不唤醒。
-    // 但如果它正在 TASK_WAITING 状态，此时它正在等信号，必须拉它一把
+    // 但如果它正在 TASK_WAITING 状态，此时它正在等信号或者其他的可中断状态，必须拉它一把
     // 这样它才能回到 do_signal 的检查点。
-    if (target->status == TASK_WAITING) {
-        // 如果它在等待信号，就让它进入就绪队列
-        thread_unblock(target); 
+    // 检查信号是否被屏蔽。如果没被屏蔽，且进程正在“睡觉”，就叫醒它。
+    // 在 poll/read 等系统调用中，进程通常处于 TASK_WAITTING。
+    if (!(target->blocked & sigmask(sig))) {
+        if (target->status == TASK_WAITING) {
+            thread_unblock(target); 
+        }
     }
+    intr_set_status(old_status);
+
 }
 
 int sys_kill(pid_t pid, int sig) {

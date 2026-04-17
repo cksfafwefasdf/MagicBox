@@ -133,5 +133,6 @@ struct file_operations console_file_operations = {
 	.ioctl 		= NULL,
 	.open 		= NULL,
 	.release 	= NULL,
-	.mmap		= NULL
+	.mmap		= NULL,
+    .poll		= NULL
 };

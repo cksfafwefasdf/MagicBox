@@ -172,20 +172,27 @@ int32_t sys_milsleep(uint32_t mil_seconds) {
     enum intr_status old_status = intr_disable();
 
     uint32_t expire_ticks = ticks + sleep_ticks;
+    
+    // 溢出检查，如果加完之后比现在的 ticks 还小，说明溢出了
+    if (expire_ticks < ticks) {
+        expire_ticks = 0xFFFFFFFF; // 强行拉到最远
+    }
     cur->wait_until = expire_ticks;
     
     // 放入排序后的时间队列
     list_insert_ascend(cur,&timer_list);
     
     // 阻塞自己，等待时钟中断将其拉回就绪队列
-    thread_block(TASK_BLOCKED); 
+    // 由于我们的 sys_milsleep 是可中断的，因此是 TASK_WAITING
+    thread_block(TASK_WAITING); 
 
     // 醒来后的处理
     uint32_t remaining_ms = 0;
 
     // 兜底逻辑，醒来后检查是不是因为“还没到期”就被信号提前唤醒
     // 如果是正常时间到了被唤醒的，tag 会在时钟中断程序中被摘除
-    // 但是如果是被信号量或者其他东西强制唤醒的，不会走到时钟中断里面的那个逻辑
+    // 但是如果是被信号或者其他东西（例如 do_poll 函数）强制唤醒的
+    // 不会走到时钟中断里面的那个逻辑，因此需要我们手动回收
     if (dlist_is_linked(&cur->timer_tag)) {
         if (expire_ticks > ticks) {
             remaining_ms = (expire_ticks - ticks) * mil_seconds_per_intr;
@@ -202,7 +209,7 @@ int32_t sys_milsleep(uint32_t mil_seconds) {
 int sys_pause(void) {
     // 将自己设为阻塞状态，等待信号唤醒
     // 进程不再处于 ready_list 中
-    thread_block(TASK_BLOCKED); 
+    thread_block(TASK_WAITING); 
     
     // 当进程被唤醒
     // schedule() 返回后会执行到这里

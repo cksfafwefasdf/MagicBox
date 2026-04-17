@@ -72,5 +72,6 @@ struct file_operations fifo_file_operations = {
 	.ioctl 		= NULL,
 	.open 		= fifo_open,
 	.release 	= fifo_release,
-	.mmap		= NULL
+	.mmap		= NULL,
+	.poll		= NULL
 };

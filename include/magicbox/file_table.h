@@ -14,7 +14,7 @@
     抽离出来后，现在这些文件只需要包含和 VFS 相关的 fs_types 以及和具体文件系统无关的 file_table.h 即可
 */ 
 
-#define MAX_FILE_OPEN_IN_SYSTEM 32
+#define MAX_FILE_OPEN_IN_SYSTEM 64
 
 struct task_struct;
 

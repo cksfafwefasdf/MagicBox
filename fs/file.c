@@ -62,7 +62,7 @@ int32_t file_close(struct file* file){
 	return 0;
 }
 
-int32_t file_open(struct partition* part, uint32_t inode_no,uint8_t flag){
+int32_t file_open(struct partition* part, uint32_t inode_no,int32_t flag){
 	int32_t fd_idx = get_free_slot_in_global();
 	if(fd_idx==-1){
 		printk("exceed max open files\n");

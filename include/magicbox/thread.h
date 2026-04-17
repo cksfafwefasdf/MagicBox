@@ -28,8 +28,8 @@ typedef void thread_func(void*);
 enum task_status{
 	TASK_RUNNING,
 	TASK_READY,
-	TASK_BLOCKED,
-	TASK_WAITING,
+	TASK_BLOCKED, // 不可中断阻塞，给磁盘 io 等操作使用
+	TASK_WAITING, // 可中断阻塞，给 wait poll read 等函数使用
 	TASK_HANGING,
 	TASK_DIED
 };

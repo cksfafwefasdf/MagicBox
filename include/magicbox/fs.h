@@ -5,7 +5,7 @@
 #include <unitype.h>
 
 extern void filesys_init(void);
-extern int32_t sys_open(const char* pathname,uint8_t flags);
+extern int32_t sys_open(const char* _pathname,int32_t flags);
 extern int32_t path_depth_cnt(char* pathname);
 extern int32_t sys_write(int32_t fd,void* buf,uint32_t count);
 extern int32_t sys_close(int32_t fd);

@@ -354,7 +354,8 @@ struct file_operations sifs_file_file_operations = {
 	.ioctl 		= NULL,
 	.open 		= NULL,
 	.release 	= NULL,
-	.mmap		= NULL
+	.mmap		= NULL,
+	.poll		= NULL
 };
 
 struct file_operations sifs_dir_file_operations = {
@@ -367,5 +368,6 @@ struct file_operations sifs_dir_file_operations = {
 	.ioctl 		= NULL,
 	.open 		= NULL,
 	.release 	= NULL,
-	.mmap		= NULL
+	.mmap		= NULL,
+	.poll		= NULL
 };

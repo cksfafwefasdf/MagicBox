@@ -372,7 +372,8 @@ struct file_operations ext2_file_file_operations = {
 	.ioctl 		= NULL,
 	.open 		= NULL,
 	.release 	= NULL,
-    .mmap		= ext2_file_mmap
+    .mmap		= ext2_file_mmap,
+    .poll		= NULL
 };
 
 struct file_operations ext2_dir_file_operations = {
@@ -383,5 +384,6 @@ struct file_operations ext2_dir_file_operations = {
 	.ioctl 		= NULL,
 	.open 		= NULL,
 	.release 	= NULL,
-    .mmap		= NULL
+    .mmap		= NULL,
+    .poll		= NULL
 };

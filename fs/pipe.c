@@ -223,5 +223,6 @@ struct file_operations pipe_file_operations = {
 	.ioctl 		= NULL,
 	.open 		= NULL, // 匿名管道在文件系统上没有实体，所以没有open
 	.release 	= pipe_release,
-    .mmap		= NULL
+    .mmap		= NULL,
+    .poll		= NULL
 };

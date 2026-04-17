@@ -469,7 +469,7 @@ static void make_abs_pathname(const char* pathname, char* abs_path) {
     }
 }
 
-int32_t sys_open(const char* _pathname,uint8_t flags){
+int32_t sys_open(const char* _pathname,int32_t flags){
 	// printk("sys_open:::pathname: %s\n",pathname);
 
     // ASSERT(_pathname!=NULL);
@@ -739,7 +739,6 @@ int32_t sys_read(int32_t fd, void* buf, uint32_t count) {
         // atime 的修改通常只停留在内存中，
         // 等到 inode 周期性同步或者文件关闭时再写回磁盘。
         inode->i_atime = (uint32_t)sys_time();
-
         return rd_file->f_op->read(rd_file->fd_inode,rd_file,buf,count);
     }else{
         printk("sys_write: type %x cannot write!\n", type);
@@ -2036,7 +2035,10 @@ int32_t sys_fcntl(int32_t fd, uint32_t cmd, uint32_t arg) {
         case F_SETFL:
             // Linux 标准中，F_SETFL 只能修改 O_APPEND, O_NONBLOCK, O_ASYNC 等
             // 只允许修改指定的位，保留读写模式等关键位
-            uint32_t mask = O_APPEND; 
+            uint32_t mask = O_APPEND | O_NONBLOCK; 
+            
+            // 保留原本不能修改的位（如 O_RDONLY, O_RDWR, O_CREATE 等）
+            // 将用户传入的新标志位按 mask 覆盖进去
             file->fd_flag = (file->fd_flag & ~mask) | (arg & mask);
             return 0;
 
@@ -2092,7 +2094,7 @@ int32_t sys_readlink(const char* _path, char* buf, int32_t bufsize) {
 
 // 由于我们是单用户系统，所以是全员 root
 // 所有文件都有权限
-int32_t sys_access(const char* _pathname, int mode) {
+int32_t sys_access(const char* _pathname, int mode UNUSED) {
     struct path_search_record record;
     memset(&record, 0, sizeof(struct path_search_record));
     

@@ -64,3 +64,15 @@ void lock_release(struct lock* plock){
 	plock->holder_repeat_nr = 0;
 	sema_signal(&plock->semaphore);
 }
+
+// 尝试获取信号量，如果拿不到，立刻返回 false，不阻塞
+bool sema_try_wait(struct semaphore* psema) {
+    enum intr_status old_status = intr_disable();
+    if (psema->value > 0) {
+        psema->value--;
+        intr_set_status(old_status);
+        return true;
+    }
+    intr_set_status(old_status);
+    return false;
+}

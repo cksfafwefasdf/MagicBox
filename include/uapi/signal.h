@@ -44,6 +44,8 @@ struct intr_stack;
 
 // 信号 1-32 映射到信号位图的 0-31 位
 #define sigmask(sig) (1 << ((sig) - 1))
+// 检查是否有待处理的信号
+#define signal_pending(t) ((t)->signal & ~(t)->blocked)
 
 // 定义信号的默认行为类型（内部使用）
 enum sig_action_type {

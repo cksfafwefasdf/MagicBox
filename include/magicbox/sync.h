@@ -19,6 +19,7 @@ extern void sema_init(struct semaphore* psema,uint8_t value);
 extern void lock_init(struct lock* plock);
 extern void sema_wait(struct semaphore* psema);
 extern void sema_signal(struct semaphore* psema);
+extern bool sema_try_wait(struct semaphore* psema);
 extern void lock_acquire(struct lock* plock);
 extern void lock_release(struct lock* plock);
 #endif

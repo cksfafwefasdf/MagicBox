@@ -33,8 +33,8 @@ static void after_init(void);
 static void recyle_idle(void);
 // linux 标准中，argv 必须以 NULL 结尾
 char* argv[] = {SHELL_PATH,NULL} ;
-
-const char* init_argv[] = {"ash", "-i", NULL};
+// 带 -i 才能进行行编辑
+const char* init_argv[] = {"ash", "-i", "-s", NULL};
 const char* init_envp[] = {
     "PATH=/bin:/",       // 解决 ash 找不到 busybox 的问题
     "HOME=/", 

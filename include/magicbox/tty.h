@@ -26,6 +26,11 @@ struct tty_struct {
 	// 但是最好还是预留在这
 	struct lock tty_lock; // 用于防止两个进程同时对tty进行写操作，也就是说这是个写锁，line_sem是个读锁
 	int32_t pgrp; // 记录前台进程组id
+
+	// line_sem 负责管理那些因为 read 没数据而阻塞的进程
+	// poll_entry_list 负责管理那些只是来看看有没有数据的进程
+	// 用于存放所有正在 poll 本 TTY 的进程分身，这是一个 poll_table_entry 的队列
+	struct dlist poll_entry_list; 
 };
 
 extern struct tty_struct console_tty;
