@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# 使用方法：使用 sh install_apps.sh 只打包核心程序 
+# 使用方法：使用 sh install_apps.sh test 同时打包核心程序和测试程序 
+
 # 配置路径
 ROOT_DIR=$(pwd)
 BUILD_DIR="./build/prog"
@@ -24,7 +27,26 @@ nasm ./prog/start.s -f elf -o "$BUILD_DIR/start.o"
 
 # 定义目标程序
 # 格式: "程序名,源文件"
-TARGETS="mb_cat,prog/prog/cat.c mb_echo,prog/prog/echo.c mbsh,prog/shell/shell.c hd,prog/prog/hexdump.c mkfs_sifs,prog/prog/mkfs_sifs.c mkfs_ext2,prog/prog/mkfs_ext2.c test_sig,prog/native_test/test_sig.c test_fifo,prog/native_test/test_fifo.c test_malloc,prog/native_test/test_malloc.c test_kmalloc,prog/native_test/test_kmalloc.c test_mmap,prog/native_test/test_mmap.c test_mmap_file,prog/native_test/test_mmap_file.c test_symlink,prog/native_test/test_symlink.c test_rawtty,prog/native_test/test_raw_tty.c test_timer,prog/native_test/test_timer.c"
+# 定义核心程序 (mbbox, mbsh)
+CORE_TARGETS="mbbox,prog/prog/mbbox.c mbsh,prog/shell/shell.c"
+
+# 定义测试程序 (test_*)
+TEST_TARGETS="test_sig,prog/native_test/test_sig.c test_fifo,prog/native_test/test_fifo.c \
+test_malloc,prog/native_test/test_malloc.c test_kmalloc,prog/native_test/test_kmalloc.c \
+test_mmap,prog/native_test/test_mmap.c test_mmap_file,prog/native_test/test_mmap_file.c \
+test_symlink,prog/native_test/test_symlink.c test_rawtty,prog/native_test/test_raw_tty.c \
+test_timer,prog/native_test/test_timer.c"
+
+# 根据参数决定最终编译列表
+# $1 表示脚本收到的第一个参数
+if [ "$1" = "test" ]; then
+    echo "Mode: Full Build (Core + Tests)"
+    TARGETS="$CORE_TARGETS $TEST_TARGETS"
+else
+    echo "Mode: Minimal Build (Core only)"
+    echo "Hint: Run './script.sh test' to include test programs."
+    TARGETS="$CORE_TARGETS"
+fi
 
 # 循环编译
 BIN_LIST="" # 用于记录编译成功的二进制文件名
@@ -65,10 +87,11 @@ rm -f "$BUILD_DIR"/*.o
 echo "---------------------------------------"
 echo "Creating directory structure and tar archive..."
 
-# 在 build 目录下创建一个临时 bin 目录
+# 先删除旧的 bin 目录，确保它是干净的
+rm -rf "$BUILD_DIR/bin"
 mkdir -p "$BUILD_DIR/bin"
 
-# 将编译好的二进制文件移动或链接到 bin 目录下
+# 将编译好的二进制文件移动到 bin 目录下
 for BIN in $BIN_LIST; do
     mv "$BUILD_DIR/$BIN" "$BUILD_DIR/bin/"
 done

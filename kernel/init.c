@@ -87,28 +87,30 @@ void init(void) {
             mkdir("/mnt");
         }
 
+        // 检查 Shell 等内置软件是否已经存在于文件系统中
+        if (stat(SHELL_PATH,&st)<0) {
+            // 如果 Shell 不存在，说明是首次启动或文件系统损坏，执行全量恢复
+            printf("init: mbsh not found. Unpacking system files from LBA 1000...\n");
+            
+            // 执行解压函数
+            // 来自动解析 tar 包，并按需调用 readraw 和 mkdir
+            untar_all(APPS_LBA); 
+
+            // 解压完成后，再次确认 Shell 是否成功创建
+            int32_t fd = open(SHELL_PATH, O_RDONLY);
+            if (fd < 0) {
+                printf("init: critical error! Shell extraction failed.\n");
+                while(1); // 挂起，以便查看错误日志
+            }
+            close(fd);
+        }
+
         // 先检查是否有 ash，没有就执行自带的shell
         if(stat("/bin/busybox",&st)>=0) {
-            printf("init: starting shell /bin/busybox...\n");
+            printf("init: starting shell /bin/ash...\n");
             execve("/bin/busybox", init_argv, init_envp);
         } else {
-            // 检查 Shell 是否已经存在于文件系统中
-            if (stat(SHELL_PATH,&st)<0) {
-                // 如果 Shell 不存在，说明是首次启动或文件系统损坏，执行全量恢复
-                printf("init: shell not found. Unpacking system files from LBA 1000...\n");
-                
-                // 执行解压函数
-                // 来自动解析 tar 包，并按需调用 readraw 和 mkdir
-                untar_all(APPS_LBA); 
-
-                // 解压完成后，再次确认 Shell 是否成功创建
-                int32_t fd = open(SHELL_PATH, O_RDONLY);
-                if (fd < 0) {
-                    printf("init: critical error! Shell extraction failed.\n");
-                    while(1); // 挂起，以便查看错误日志
-                }
-                close(fd);
-            }
+            printf("init: starting shell /bin/mbsh...\n");
             execv(SHELL_PATH, (const char **)argv);
         }
 
@@ -137,7 +139,7 @@ void print_logo(){
 // run the idle thread when system is not busy 
 static void idle(void *arg UNUSED){
 	while (1){
-		thread_block(TASK_BLOCKED);
+		thread_block(TASK_WAITING);
 		asm volatile("sti;hlt":::"memory");
 	}
 }
