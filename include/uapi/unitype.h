@@ -36,6 +36,24 @@
 #define DT_SOCK  12 // FT_SOCKET
 #define DT_LNK 10 // FT_SYMBOLIC_LINK 
 
+// 和 shell 有关的宏
+#define CMD_LEN 128
+#define MAX_ARG_NR 16
+#define CMD_NUM 64
+
+// 和 poll 有关的宏
+#define POLLIN      0x0001  // 有数据可读
+#define POLLPRI     0x0002  // 有紧急数据可读
+#define POLLOUT     0x0004  // 写数据不会阻塞
+#define POLLERR     0x0008  // 指定的 FD 发生错误
+#define POLLHUP     0x0010  // 指定的 FD 被挂断（如管道对端关闭）
+#define POLLNVAL    0x0020  // 指定的 FD 无效
+
+# define POLLRDNORM	0x040		/* Normal data may be read.  */
+# define POLLRDBAND	0x080		/* Priority data may be read.  */
+# define POLLWRNORM	0x100		/* Writing now will not block.  */
+# define POLLWRBAND	0x200		/* Priority data may be written.  */
+
 // mmap 函数的参数包
 struct mmap_args {
     uint32_t addr;
@@ -46,10 +64,6 @@ struct mmap_args {
     uint32_t offset;
 };
 
-// 和 shell 有关的宏
-#define CMD_LEN 128
-#define MAX_ARG_NR 16
-#define CMD_NUM 64
 
 // 该类型定义和linux目录项中的完全一致，不需要特别转化
 // 除了FT_PIPE，由于他不需要存储在硬盘上，因此linux没有定义它
@@ -120,12 +134,6 @@ enum std_fd{
 	stderr_no
 };
 
-// struct stat{
-// 	uint32_t st_ino;
-// 	uint32_t st_size;
-// 	enum file_types st_filetype;
-// };
-
 struct stat {
     uint64_t st_dev;      // 文件所在设备 ID
     uint32_t st_ino;      // Inode 编号
@@ -145,6 +153,15 @@ struct stat {
     
     // 内部快捷访问字段
     enum file_types st_filetype; 
+};
+
+struct pollfd {
+    int32_t fd;
+    // events 用于存储用户关心的事件
+    int16_t events;
+    // r 代表 returned
+    // 表示用户关系的事件中，哪些真的发生了
+    int16_t revents;
 };
 
 #endif

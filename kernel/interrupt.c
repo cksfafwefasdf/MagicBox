@@ -103,7 +103,8 @@ static void pic_init(void){
 
     // Slave IMR，允许 14, 15 (即 Bit 6, 7)
     // ~(0x40 | 0x80) = 0x3F
-    outb(PIC_S_DATA, ~(IRQ14_ATA1 | IRQ15_ATA2));
+    // outb(PIC_S_DATA, ~(IRQ14_ATA1 | IRQ15_ATA2));
+    outb(PIC_S_DATA, (uint8_t)~(IRQ14_ATA1 | IRQ15_ATA2));
 
     put_str("init pic done\n");
 }

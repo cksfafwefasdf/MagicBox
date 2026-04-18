@@ -2,7 +2,6 @@
 #define __INCLUDE_UAPI_SYSCALL_H
 #include <stdint.h>
 #include <unitype.h>
-#include <poll.h>
 
 // syscall.h includes interface for user
 
