@@ -17,6 +17,7 @@
 #include <signal.h>
 #include <ioctl.h>
 #include <time.h>
+#include <poll.h>
 
 #define SYSCALL_NR 64
 typedef void* syscall_func;
@@ -84,6 +85,11 @@ void syscall_init(void){
 	syscall_table[SYS_SYMLINK] = sys_symlink;
 	syscall_table[SYS_LSTAT] = sys_lstat;
 	syscall_table[SYS_MILSLEEP] = sys_milsleep;
+	syscall_table[SYS_FCNTL] = sys_fcntl;
+	syscall_table[SYS_READLINK] = sys_readlink;
+	syscall_table[SYS_POLL] = sys_poll;
+	syscall_table[SYS_RT_SIGACTION] = sys_rt_sigaction;
+	syscall_table[SYS_GETPPID] = sys_getppid;
 	
 	put_str("syscall_init done\n");
 }

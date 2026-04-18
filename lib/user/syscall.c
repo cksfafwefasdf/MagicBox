@@ -3,6 +3,7 @@
 #include <unitype.h>
 #include <string.h>
 #include <stdint.h>
+#include <poll.h>
 
 // 该 syscall 文件主要是由用户程序包含的
 // 而我们的所有用户程序都要链接运行时库 start.s
@@ -328,4 +329,24 @@ int32_t lstat(const char* _pathname, struct stat* buf){
 
 int32_t msleep(uint32_t mil_seconds){
 	return _syscall1(SYS_MILSLEEP,mil_seconds);
+}
+
+int32_t fcntl(int32_t fd, uint32_t cmd, uint32_t arg){
+	return _syscall3(SYS_FCNTL, fd, cmd, arg);
+}
+
+int32_t readlink(const char* _path, char* buf, int32_t bufsize){
+	return _syscall3(SYS_READLINK, _path, buf, bufsize);
+}
+
+int32_t poll(struct pollfd* fds, uint32_t nfds, int32_t timeout_ms){
+	return _syscall3(SYS_POLL, fds, nfds, timeout_ms);
+}
+
+int32_t rt_sigaction(int sig, const struct sigaction* act, struct sigaction* oact, uint32_t sigsetsize){
+	return _syscall4(SYS_RT_SIGACTION, sig, act, oact, sigsetsize);
+}
+
+pid_t getppid(){
+	return _syscall0(SYS_GETPPID);
 }

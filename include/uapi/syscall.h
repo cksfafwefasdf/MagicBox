@@ -2,6 +2,7 @@
 #define __INCLUDE_UAPI_SYSCALL_H
 #include <stdint.h>
 #include <unitype.h>
+#include <poll.h>
 
 // syscall.h includes interface for user
 
@@ -66,6 +67,10 @@
 #define SYS_READLINK 55
 #define SYS_LSTAT 56
 #define SYS_MILSLEEP 57
+#define SYS_FCNTL 58
+#define SYS_POLL 59
+#define SYS_RT_SIGACTION 60
+#define SYS_GETPPID 61
 
 // user interface
 extern uint32_t getpid(void);
@@ -121,7 +126,6 @@ extern int32_t rename(const char* _old_path, const char* _new_path);
 extern int32_t statfs(const char* path, struct statfs* buf);
 extern void* calloc(uint32_t nmemb, uint32_t size); 
 extern void* brk(void* addr);
-extern void* sbrk(int32_t increment);
 extern void* mmap(void* addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset);
 extern int32_t munmap(void* addr, uint32_t len);
 extern int32_t execve(const char* path, const char* argv[], const char* envp[]);
@@ -129,5 +133,11 @@ extern uint32_t time(void);
 extern int32_t symlink(const char* target, const char* linkpath);
 extern int32_t lstat(const char* _pathname, struct stat* buf);
 extern int32_t msleep(uint32_t mil_seconds);
+extern int32_t fcntl(int32_t fd, uint32_t cmd, uint32_t arg);
+extern int32_t readlink(const char* _path, char* buf, int32_t bufsize);
+extern int32_t poll(struct pollfd* fds, uint32_t nfds, int32_t timeout_ms);
+extern int32_t rt_sigaction(int sig, const struct sigaction* act, struct sigaction* oact, uint32_t sigsetsize);
+extern pid_t getppid(void);
+extern void* sbrk(int32_t increment);
 
 #endif
