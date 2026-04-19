@@ -45,7 +45,7 @@ int main() {
                 printf("[%s] Got it! Content: %s", pid == 0 ? "Son" : "Father", buf);
             } else if (n < 0) {
                 if (errno == EAGAIN) {
-                    // 这种情况就是你担心的：被另一个进程抢先读走了！
+                    // 测试数据被另一个进程抢先读走了
                     printf("[%s] Ah! Someone else took the data! (EAGAIN)\n", 
                            pid == 0 ? "Son" : "Father");
                 } else {

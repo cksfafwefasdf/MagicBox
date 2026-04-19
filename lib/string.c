@@ -2,17 +2,50 @@
 #include <stdint.h>
 #include <assert.h>
 
-void memset(void* dst_,uint8_t value,uint32_t size){
-	assert(dst_!=NULL);
-	uint8_t* dst = (uint8_t *)dst_;
-	while(size-->0) *dst++=value;
+// 使用 rep （类似于循环展开，一次展开四字节，而不再是逐字节）
+void memset(void* dst, uint8_t value, uint32_t size) {
+    assert(dst != NULL);
+
+    uint32_t value32 = (uint32_t)value | ((uint32_t)value << 8) | 
+                       ((uint32_t)value << 16) | ((uint32_t)value << 24);
+    uint32_t dwords = size / 4;
+    uint32_t bytes = size % 4;
+
+    asm volatile (
+        "rep; stosl"  // 填充 4 字节块
+        : "+D"(dst), "+c"(dwords)
+        : "a"(value32)
+        : "memory"
+    );
+
+    asm volatile (
+        "rep; stosb"  // 填充剩下的字节
+        : "+D"(dst), "+c"(bytes)
+        : "a"((uint32_t)value)
+        : "memory"
+    );
 }
 
-void memcpy(void* dst_,const void* src_,uint32_t size){
-	assert((dst_!=NULL)&&(src_!=NULL));
-	uint8_t* dst = dst_;
-	const uint8_t* src = src_;
-	while (size-->0) *dst++ = *src++;
+void memcpy(void* dst, const void* src, uint32_t size) {
+    assert((dst != NULL) && (src != NULL));
+    
+    // 分成两部分，先拷贝 4 字节块，剩下的逐字节拷贝
+    uint32_t dwords = size / 4;
+    uint32_t bytes = size % 4;
+
+    // 利用内联汇编调用 rep movsd 来进行 4 字节的拷贝
+    asm volatile (
+        "rep; movsl"
+        : "+D"(dst), "+S"(src), "+c"(dwords)
+        : : "memory"
+    );
+
+    // 拷贝剩下的不足 4 字节的部分
+    asm volatile (
+        "rep; movsb"
+        : "+D"(dst), "+S"(src), "+c"(bytes)
+        : : "memory"
+    );
 }
 
 int8_t memcmp(const void* a_,const void* b_,uint32_t size){

@@ -72,9 +72,9 @@
 #define PG_SIZE 4096 // size each page
 
 
-#define NUM_FULL_LINE_CH 80
-#define NUM_FULL_SCREEN_LINE 25
-#define NUM_FULL_SCREEN_CH NUM_FULL_SCREEN_LINE*NUM_FULL_LINE_CH
+#define SCREEN_WIDTH 80
+#define SCREEN_HEIGHT 25
+#define NUM_FULL_SCREEN_CH SCREEN_HEIGHT*SCREEN_WIDTH
 
 #define EFLAGS_MBS (1<<1) // must set this bit
 #define EFLAGS_IF_1 (1<<9)

@@ -33,6 +33,7 @@ Busybox Settings -> General Configuration -> Enable Linux-specific applets and f
 
 ```shell
 Busybox Settings -> General Configuration -> Don't use /usr 
+Busybox Settings -> General Configuration -> Support for --long-options
 Busybox Settings -> Build Options ->  Build BusyBox as a static binary (no shared libs)
 Busybox Settings -> Busybox Library Tuning -> Command line editing # 只有开启此参数才能启用行编辑
 

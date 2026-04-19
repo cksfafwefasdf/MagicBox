@@ -325,7 +325,7 @@ static int32_t ext2_file_write(struct inode* inode, struct file* file,char* buf,
             }
         }
 
-        PUTS("write at: ",phys_block);
+        // PUTS("write at: ",phys_block);
         // 读-改-写逻辑
 
         memcpy(io_buf + offset_in_block, src, chunk_size);
@@ -345,12 +345,6 @@ static int32_t ext2_file_write(struct inode* inode, struct file* file,char* buf,
         size_left -= chunk_size;
 
     }
-
-    // if (bytes_written > 0) {
-    //     uint32_t now = (uint32_t)sys_time();
-    //     inode->i_mtime = now;
-    //     inode->i_ctime = now;
-    // }
 
     // 持久化 Inode
     // 由于 sb 和 块组描述符里面都维护了很多实时信息，所以都要更新

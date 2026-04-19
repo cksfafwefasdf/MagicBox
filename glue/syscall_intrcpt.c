@@ -604,7 +604,6 @@ static int32_t do_poll(struct intr_stack* stack) {
     uint32_t nfds = (uint32_t)ARG2(stack);
     int32_t timeout_ms = (int32_t)ARG3(stack);
 
-    // 调用你之前写好的那个核心逻辑函数
     return sys_poll(fds, nfds, timeout_ms);
 }
 

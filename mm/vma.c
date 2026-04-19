@@ -69,7 +69,7 @@ void add_vma_sorted(struct dlist* plist, uint32_t start, uint32_t end,
     // 此外，对于非匿名映射（绑定了文件的映射），还要检查段在文件中的偏移量是否连续
     // 比如假设程序先 mmap 了文件的 0-4KB 到地址 A，紧接着又 mmap 了同一个文件的 1MB-1.004MB 到地址 A+4KB。
     // 此时地址相接，inode 相同，权限相同。
-    // 如果合并了：当访问 A+4KB 时，swap_page 会计算偏移量，误以为你要读取文件 4KB-8KB 的内容，从而导致读取数据错误。
+    // 如果合并了：当访问 A+4KB 时，swap_page 会计算偏移量，误以为要读取文件 4KB-8KB 的内容，从而导致读取数据错误。
     if (prev_vma && prev_vma->vma_end == start && 
         prev_vma->vma_flags == flags && prev_vma->vma_inode == inode &&
         (inode == NULL || prev_vma->vma_pgoff + (prev_vma->vma_end - prev_vma->vma_start) / PG_SIZE == pgoff)) {

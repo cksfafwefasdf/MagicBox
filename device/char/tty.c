@@ -73,9 +73,10 @@ void tty_input_handler(char c, uint32_t rdev) {
                 // 规范模式下，退格不能删掉上一行的换行符
                 if (console_tty.ibuf.buf[last_idx] != '\n') {
                     ioq_popchar(&console_tty.ibuf);
-                    // 我们的 print.s 中会处理 \b 后的光标移动以及空格输出，但是走 uart 时就没法处理了
-                    // 因为现代的linux例如ubuntu接收到\b后只会移动光标，不会输出空格
+                    // 我们原本的 print.s 中会处理 \b 后的光标移动以及空格输出，但是走 uart 时就没法处理了
+                    // 因为现代的 linux 例如ubuntu接收到 \b 后只会移动光标，不会输出空格，shell 在删除数据时会输出一个 "\b \b" 序列
                     // 因此我们在此直接输出一个 "\b \b"，手动把相应的字符删除，让vga和uart都能处理
+
                     if (term->c_lflag & ECHO) {
                         console_put_str("\b \b", rdev);
                     }
@@ -214,8 +215,8 @@ static int32_t tty_ioctl(struct inode* inode, struct file* file, uint32_t cmd, u
         case TIOCGWINSZ:
             // 告诉 shell 这是一个 80x25 的标准 VGA 屏幕
             struct { uint16_t row, col, xpixel, ypixel; } *ws = (void*)arg;
-            ws->row = NUM_FULL_SCREEN_LINE;
-            ws->col = NUM_FULL_LINE_CH;
+            ws->row = SCREEN_HEIGHT;
+            ws->col = SCREEN_WIDTH;
             return 0;
         default:
             printk("tty_ioctl: unknown cmd:0x%x\n",cmd);
