@@ -8,6 +8,9 @@
 #define ICANON 0x0002 // 启用规范模式（按行缓冲，允许退格编辑）
 #define ECHO 0x0008 // 启用输入回显
 
+#define OPOST  0x00000001  // 开启输出加工
+#define ONLCR  0x00000004  // 将 \n 映射为 \r\n
+
 // c_cc 数组的索引（控制字符） 
 #define VINTR 0 // c_cc[0] 对应 Ctrl+C (SIGINT)
 #define VQUIT 1 // c_cc[1] 对应 Ctrl+\ (SIGQUIT)

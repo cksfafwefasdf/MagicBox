@@ -93,10 +93,13 @@ void put_char(char char_ascii) {
                 param_idx = 0;
                 ansi_params[0] = ansi_params[1] = 0;
                 break;
+            // 回车操作只回车，不换行
             case '\r': // Carriage Return
                 cursor_pos -= (cursor_pos % SCREEN_WIDTH);
                 break;
+            // 为了简单起见，换行操作即回车又换行
             case '\n': // Line Feed
+                cursor_pos -= (cursor_pos % SCREEN_WIDTH);
                 cursor_pos += SCREEN_WIDTH;
                 break;
             case '\b': // Backspace

@@ -752,8 +752,8 @@ static int32_t do_pipe(struct intr_stack* stack) {
 
 static int32_t do_rename(struct intr_stack* stack) {
     // 从寄存器中提取参数
-    const char* oldpath = (const char*)stack->ebx;
-    const char* newpath = (const char*)stack->ecx;
+    const char* oldpath = (const char*)ARG1(stack);
+    const char* newpath = (const char*)ARG2(stack);
 
     // 基本的指针校验
     if (oldpath == NULL || newpath == NULL) {
@@ -761,6 +761,33 @@ static int32_t do_rename(struct intr_stack* stack) {
     }
 
     return sys_rename(oldpath, newpath);
+}
+
+// 这个函数对于太大的文件可能会产生潜在的溢出
+// 这个函数对于太大的文件可能会产生潜在的溢出
+// 这个函数对于太大的文件可能会产生潜在的溢出
+static int32_t do_truncate64(struct intr_stack* stack) {
+    const char* path = (const char*) ARG1(stack);
+    int64_t length = (int64_t)ARG2(stack) | ((int64_t)ARG3(stack) << 32);
+
+    if (path == NULL) return -EFAULT;
+
+    return sys_truncate(path, (int32_t)length);     
+}
+
+// 这个函数对于太大的文件可能会产生潜在的溢出
+// 这个函数对于太大的文件可能会产生潜在的溢出
+// 这个函数对于太大的文件可能会产生潜在的溢出
+static int32_t do_ftruncate64(struct intr_stack* stack) {
+    // ebx: fd (32位)
+    // ecx: length 的低 32 位 (Low)
+    // edx: length 的高 32 位 (High)
+    // ebx: fd
+    int32_t fd = (int32_t)ARG1(stack);
+    
+    // ecx: length 低 32 位, edx: length 高 32 位
+    int64_t length = (int64_t)ARG2(stack) | ((int64_t)ARG3(stack) << 32);
+    return sys_ftruncate(fd, (int32_t)length);   
 }
 
 void musl_syscall_intrcpt_init(){
@@ -816,6 +843,8 @@ void musl_syscall_intrcpt_init(){
     musl_syscall_table[__NR_rmdir] = do_rmdir;
     musl_syscall_table[__NR_pipe] = do_pipe;
     musl_syscall_table[__NR_rename] = do_rename;
+    musl_syscall_table[__NR_truncate64] = do_truncate64;
+    musl_syscall_table[__NR_ftruncate64] = do_ftruncate64;
 }
 
 // 根据 i386 Linux ABI:

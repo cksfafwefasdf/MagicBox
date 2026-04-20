@@ -576,16 +576,33 @@ int32_t sys_open(const char* _pathname,int32_t flags){
             struct partition* part = get_part_by_rdev(searched_record.i_dev);
             struct inode* inode = inode_open(part, final_inode_no);
             
+            // 权限校验，只读模式下 O_TRUNC 无效且报错
+            if (!(flags & (O_WRONLY | O_RDWR))) {
+                inode_close(inode);
+                inode_close(searched_record.parent_inode);
+                return -EINVAL; 
+            }
+
+            // 类型校验，目录不允许截断
+            if (inode->i_type == FT_DIRECTORY) {
+                inode_close(inode);
+                inode_close(searched_record.parent_inode);
+                return -EISDIR;
+            }
             // 只有普通文件才允许截断
             // 按理说，我们只会给普通文件的inode操作集里面放上 truncate
             // 因此我们只要判断 truncate 不为空就行
+            // truncate和什么都不加的区别就是
+            // truncate会把文件给清空再从头写
+            // 但是什么都不加不会不清空文件，而是直接从头覆盖
             if (inode->i_op && inode->i_op->truncate) {
-                // truncate和什么都不加的区别就是
-                // truncate会把文件给清空再从头写
-                // 但是什么都不加不会不清空文件，而是直接从头覆盖
+                // 重置大小并释放块
+                inode->i_size = 0; 
+                // 更新时间戳
+                inode->i_mtime = inode->i_ctime = (uint32_t)sys_time();
                 inode->i_op->truncate(inode);
             }
-            inode_close(inode); 
+            inode_close(inode);
         }
     }
 
@@ -1175,6 +1192,7 @@ static int32_t do_stat(const char* _pathname, struct stat* buf, bool follow_link
         buf->st_filetype = FT_DIRECTORY;
         buf->st_ino = root_dir_inode->i_no;
         buf->st_size = root_dir_inode->i_size;
+        buf->st_blocks = root_dir_inode->i_blocks;
         buf->st_atime = root_dir_inode->i_atime;
         buf->st_mtime = root_dir_inode->i_mtime;
         buf->st_ctime = root_dir_inode->i_ctime;
@@ -1201,6 +1219,7 @@ static int32_t do_stat(const char* _pathname, struct stat* buf, bool follow_link
     if(obj_inode) {
         // 先填充数据，再关闭句柄
         buf->st_size = obj_inode->i_size;
+        buf->st_blocks = obj_inode->i_blocks;
         buf->st_ino = inode_no;
         buf->st_atime = obj_inode->i_atime;
         buf->st_mtime = obj_inode->i_mtime;
@@ -2116,4 +2135,91 @@ int32_t sys_access(const char* _pathname, int mode UNUSED) {
 
     // 只要文件存在，直接返回 0 (成功)
     return 0; 
+}
+
+// 我们是可以将文件的大小裁剪到 0 的
+// 这么做的话文件的目录项是存在的，但是只有一个空壳文件了，等我们 rm 它
+// length 的大小是可以大于原本的 i_size 的，这时会使得该文件变成一个稀疏文件
+// 我们只扩展 i_size 但是不进行任何处理
+static int32_t do_truncate(struct inode* inode , int32_t length){
+    // 先检查是否能 truncate
+    // truncate 的目标只能是普通文件，由于我们会follow_link，因此如果 path 是个指向普通文件的符号链接的话
+    if (inode->i_type == FT_DIRECTORY) return -EISDIR;
+    if (!inode->i_op || !inode->i_op->truncate) return -EINVAL;
+
+    // 执行截断
+    // 先更新内存中 inode 的大小，ext2_truncate 会依据这个值来裁剪块
+    inode->i_size = length;
+
+    // 更新时间戳
+    // truncate 里面会同步 inode，因此我们在此处先修改时间
+    uint32_t now = (uint32_t)sys_time();
+    inode->i_mtime = now;
+    inode->i_ctime = now;
+    
+    inode->i_op->truncate(inode);
+
+    return 0;
+}
+
+// sys_truncate 按路径截断文件
+int32_t sys_truncate(const char* path, int32_t length) {
+    if (length < 0) return -EINVAL;
+
+    int ret = -ENOENT;
+
+    // 路径解析：找到目标文件的 inode
+    struct path_search_record record;
+    memset(&record, 0, sizeof(struct path_search_record));
+
+    char abs_path[MAX_PATH_LEN] = {0};
+    make_abs_pathname(path, abs_path); // 统一转成绝对路径
+    
+    int inode_no = search_file(abs_path, &record,true);
+    if (inode_no == -1) {
+        // 文件不存在
+        ret = -ENOENT;
+        goto out; 
+    }
+
+    struct partition* part = get_part_by_rdev(record.parent_inode->i_dev);
+    struct inode* inode = inode_open(part, inode_no);
+    if (!inode) {
+        ret = -EIO;
+        goto out;
+    }
+
+    ret = do_truncate(inode, length);
+
+    // 清理并返回
+    inode_close(inode);
+out:
+    inode_close(record.parent_inode);
+    return ret;
+}
+
+int32_t sys_ftruncate(int32_t fd, int32_t length) {
+    if (length < 0) return -EINVAL;
+
+    // 检查 fd 合法性
+    struct task_struct* cur = get_running_task_struct();
+    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC || cur->fd_table[fd].global_fd_idx == -1) {
+        printk("sys_ftruncate: bad fd (0x%x)\n",fd);
+        return -EBADF;
+    }
+
+    // 获取全局文件结构和 inode
+    uint32_t global_idx = cur->fd_table[fd].global_fd_idx;
+    struct file* f = &file_table[global_idx];
+    struct inode* inode = f->fd_inode;
+    // 必须是以写模式打开的文件才能 truncate
+    if (!(f->fd_flag & (O_WRONLY | O_RDWR))) {
+        return -EINVAL; // 或者返回 -EACCES
+    }
+
+    // 只有普通文件能 truncate
+    if (inode->i_type == FT_DIRECTORY) {
+        return -EISDIR;
+    }
+    return do_truncate(inode, length);
 }

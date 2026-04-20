@@ -90,6 +90,8 @@ void syscall_init(void){
 	syscall_table[SYS_POLL] = sys_poll;
 	syscall_table[SYS_RT_SIGACTION] = sys_rt_sigaction;
 	syscall_table[SYS_GETPPID] = sys_getppid;
+	syscall_table[SYS_TRUNCATE] = sys_truncate;
+	syscall_table[SYS_TRUNCATE] = sys_ftruncate;
 	
 	put_str("syscall_init done\n");
 }

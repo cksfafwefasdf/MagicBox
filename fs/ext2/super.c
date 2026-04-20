@@ -138,8 +138,7 @@ static void ext2_read_inode(struct inode* inode) {
     // 填充 Ext2 私有字段 
     memcpy(inode->ext2_i.i_block, ei->i_block, sizeof(uint32_t) * 15);
     inode->ext2_i.i_links_count = ei->i_links_count;
-    inode->ext2_i.i_blocks = ei->i_blocks;
-    inode->ext2_i.i_size = ei->i_size; // 记录原始大小
+    inode->i_blocks = ei->i_blocks;
 
     inode->i_atime = ei->i_atime;
     inode->i_mtime = ei->i_mtime;
@@ -215,7 +214,7 @@ static void ext2_write_inode(struct inode* inode) {
     ei->i_mode = inode->i_mode; // 包含文件类型和权限
     ei->i_size = inode->i_size;
     ei->i_links_count = inode->ext2_i.i_links_count;
-    ei->i_blocks = inode->ext2_i.i_blocks; // 这是以 512 字节为单位的计数，而不是真的按 block 计数
+    ei->i_blocks = inode->i_blocks; // 这是以 512 字节为单位的计数，而不是真的按 block 计数
     
     // 拷贝块寻址数组 (i_block[15])
     memcpy(ei->i_block, inode->ext2_i.i_block, sizeof(uint32_t) * 15);

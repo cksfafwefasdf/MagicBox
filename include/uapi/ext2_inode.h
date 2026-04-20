@@ -28,11 +28,6 @@ struct ext2_inode_info {
     // 这样也便于之后实现硬链接
     uint16_t i_links_count;
 
-    // 占用块数（512B 扇区为单位）
-    uint32_t i_blocks;
-
-    uint32_t i_size;
-
     // dtime 主要是用来进行文件恢复的，它是ext2专有的，其他文件系统不一定有，所以放在info里
     // 如果误删了文件，i_dtime 可以告诉数据恢复工具这个文件是什么时候被释放的。
     uint32_t i_dtime; // 删除时间 

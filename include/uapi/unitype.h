@@ -142,6 +142,7 @@ struct stat {
     uint32_t st_uid;      // 用户 ID (暂时填 0 也行)
     uint32_t st_gid;      // 组 ID
     uint64_t st_rdev;     // 若为特殊设备文件，其设备 ID
+    uint32_t st_blocks;   // 512 字节扇区数
     int64_t  st_size;     // 文件大小 (用 int64 预防大文件)
     
     // 时间戳

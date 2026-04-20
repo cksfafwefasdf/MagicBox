@@ -349,3 +349,11 @@ int32_t rt_sigaction(int sig, const struct sigaction* act, struct sigaction* oac
 pid_t getppid(){
 	return _syscall0(SYS_GETPPID);
 }
+
+int32_t truncate(const char* path, int32_t length) {
+	return _syscall2(SYS_TRUNCATE, path, length);
+}
+
+int32_t ftruncate(int32_t fd, int32_t length) {
+	return _syscall2(SYS_FTRUNCATE, fd, length);
+}

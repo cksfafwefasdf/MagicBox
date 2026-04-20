@@ -10,7 +10,7 @@
 // 2/3 号槽位曾用于旧的用户态直接经内核分配的 malloc/free。
 // 现在用户态内存分配已经改为 libc malloc/free + brk/sbrk，
 // 这两个编号仅保留为历史兼容槽位，避免整体 syscall ABI 重排。
-#define	SYS_RESERVED_2 2
+#define	SYS_GETPPID 2
 #define	SYS_RESERVED_3 3
 #define	SYS_FORK 4
 #define	SYS_READ 5
@@ -69,7 +69,8 @@
 #define SYS_FCNTL 58
 #define SYS_POLL 59
 #define SYS_RT_SIGACTION 60
-#define SYS_GETPPID 61
+#define SYS_TRUNCATE 61
+#define SYS_FTRUNCATE 62
 
 // user interface
 extern uint32_t getpid(void);
@@ -138,5 +139,7 @@ extern int32_t poll(struct pollfd* fds, uint32_t nfds, int32_t timeout_ms);
 extern int32_t rt_sigaction(int sig, const struct sigaction* act, struct sigaction* oact, uint32_t sigsetsize);
 extern pid_t getppid(void);
 extern void* sbrk(int32_t increment);
+extern int32_t truncate(const char* path, int32_t length);
+extern int32_t ftruncate(int32_t fd, int32_t length);
 
 #endif

@@ -125,7 +125,7 @@ int32_t ext2_append_block_to_inode(struct inode* inode, uint32_t phys_block) {
         bool is_new;
         int32_t idx_block = get_or_alloc_index(sb, &inode->ext2_i.i_block[12], &is_new);
         if (idx_block == -1) { status = -ENOSPC; goto out; }
-        if (is_new) inode->ext2_i.i_blocks += (bsize / SECTOR_SIZE);
+        if (is_new) inode->i_blocks += (bsize / SECTOR_SIZE);
 
         partition_read(part, BLOCK_TO_SECTOR(sb, idx_block), buf, bsize / SECTOR_SIZE);
         buf[logical_idx - 12] = phys_block;
@@ -139,14 +139,14 @@ int32_t ext2_append_block_to_inode(struct inode* inode, uint32_t phys_block) {
         bool is_new;
         int32_t top_idx = get_or_alloc_index(sb, &inode->ext2_i.i_block[13], &is_new);
         if (top_idx == -1) { status = -ENOSPC; goto out; }
-        if (is_new) inode->ext2_i.i_blocks += (bsize / SECTOR_SIZE);
+        if (is_new) inode->i_blocks += (bsize / SECTOR_SIZE);
 
         // 获取/分配第二级索引块
         partition_read(part, BLOCK_TO_SECTOR(sb, top_idx), buf, bsize / SECTOR_SIZE);
         int32_t sec_idx = get_or_alloc_index(sb, &buf[level1_idx], &is_new);
         if (sec_idx == -1) { status = -ENOSPC; goto out; }
         if (is_new) {
-            inode->ext2_i.i_blocks += (bsize / SECTOR_SIZE);
+            inode->i_blocks += (bsize / SECTOR_SIZE);
             partition_write(part, BLOCK_TO_SECTOR(sb, top_idx), buf, bsize / SECTOR_SIZE); // 更新顶级块里的指针
         }
 
@@ -166,14 +166,14 @@ int32_t ext2_append_block_to_inode(struct inode* inode, uint32_t phys_block) {
         // 获取/分配顶级块 (i_block[14])
         int32_t top_idx = get_or_alloc_index(sb, &inode->ext2_i.i_block[14], &is_new);
         if (top_idx == -1) { status = -ENOSPC; goto out; }
-        if (is_new) inode->ext2_i.i_blocks += (bsize / SECTOR_SIZE);
+        if (is_new) inode->i_blocks += (bsize / SECTOR_SIZE);
 
         // 获取/分配二级块
         partition_read(part, BLOCK_TO_SECTOR(sb, top_idx), buf, bsize / SECTOR_SIZE);
         int32_t mid_idx = get_or_alloc_index(sb, &buf[level1_idx], &is_new);
         if (mid_idx == -1) { status = -ENOSPC; goto out; }
         if (is_new) {
-            inode->ext2_i.i_blocks += (bsize / SECTOR_SIZE);
+            inode->i_blocks += (bsize / SECTOR_SIZE);
             partition_write(part, BLOCK_TO_SECTOR(sb, top_idx), buf, bsize / SECTOR_SIZE);
         }
 
@@ -182,7 +182,7 @@ int32_t ext2_append_block_to_inode(struct inode* inode, uint32_t phys_block) {
         int32_t bot_idx = get_or_alloc_index(sb, &buf[level2_idx], &is_new);
         if (bot_idx == -1) { status = -ENOSPC; goto out; }
         if (is_new) {
-            inode->ext2_i.i_blocks += (bsize / SECTOR_SIZE);
+            inode->i_blocks += (bsize / SECTOR_SIZE);
             partition_write(part, BLOCK_TO_SECTOR(sb, mid_idx), buf, bsize / SECTOR_SIZE);
         }
 
@@ -201,7 +201,7 @@ int32_t ext2_append_block_to_inode(struct inode* inode, uint32_t phys_block) {
         // 但是由于我们还没有write数据，因此i_size不更新
         // i_size交给write和mkdir等上层操作来更新
         // inode->i_size += bsize;
-        inode->ext2_i.i_blocks += (bsize / SECTOR_SIZE);
+        inode->i_blocks += (bsize / SECTOR_SIZE);
     }
 
 out:
@@ -360,13 +360,13 @@ static void ext2_inode_init(struct partition* part, uint32_t inode_no,struct ino
         // 只有目录创建时会默认分配一个块，所以 size 是 block_size
         new_inode->i_size = part->sb->s_block_size;
         // 与 i_size 保持一致，只不过单位是扇区数
-        new_inode->ext2_i.i_blocks = part->sb->s_block_size / SECTOR_SIZE;
+        new_inode->i_blocks = part->sb->s_block_size / SECTOR_SIZE;
     }else{
         // 其他文件由于没有指向自己的 .
         // 因此结果是 1
         new_inode->ext2_i.i_links_count = 1;
         new_inode->i_size = 0;
-        new_inode->ext2_i.i_blocks = 0; // 普通文件或设备文件初始没数据块
+        new_inode->i_blocks = 0; // 普通文件或设备文件初始没数据块
     }
 
     switch (ft) {
@@ -739,7 +739,7 @@ static int32_t ext2_mknod(struct inode* dir, char* name, int len, int type, int 
 
     // 设备号存储
     new_inode->i_size = 0;           // 设备文件逻辑大小为 0
-    new_inode->ext2_i.i_blocks = 0;   // 不占用数据块
+    new_inode->i_blocks = 0;   // 不占用数据块
     new_inode->i_rdev = dev;         // 内存结构中的设备号
     
     // 在 Ext2 磁盘结构中，通常将设备号存放在 i_block[0]
@@ -843,11 +843,15 @@ static void ext2_resource_free(struct super_block *sb, uint32_t index, enum ext2
 // recursive_free_blocks 用于递归释放索引块
 // level 是块层级，0-数据块, 1-一级间接, 2-二级, 3-三级
 // phys_block 是当前处理的物理块号
-static void recursive_free_blocks(struct super_block *sb, uint32_t phys_block, uint8_t level) {
+// first_logic_idx 是当前处理的物理块在文件里对应的第一个逻辑块号
+// free_start_idx 是用户要求从哪个逻辑块号开始真正释放
+static void recursive_free_blocks(struct inode *inode, uint32_t phys_block, uint8_t level, uint32_t first_logic_idx, uint32_t free_start_idx) {
     if (phys_block == 0) return;
 
+    struct super_block* sb = inode->i_sb;
     struct partition *part = get_part_by_rdev(sb->s_dev);
     uint32_t bsize = sb->s_block_size;
+    uint32_t pnts = bsize / 4;
 
     if (level > 0) {
         uint32_t *buf = kmalloc(bsize);
@@ -857,64 +861,129 @@ static void recursive_free_blocks(struct super_block *sb, uint32_t phys_block, u
         } 
 
         partition_read(part, BLOCK_TO_SECTOR(sb, phys_block), buf, bsize / SECTOR_SIZE);
-        uint32_t pnts = bsize / 4;
 
         for (uint32_t i = 0; i < pnts; i++) {
             if (buf[i] != 0) {
-                recursive_free_blocks(sb, buf[i], level - 1);
+                // 计算子块的逻辑起始编号
+                // level 1 (一级间接): 每个子块就是 1 个逻辑块
+                // level 2 (二级间接): 每个子块代表 pnts 个逻辑块
+                // level 3 (二级间接): 每个子块代表 pnts*pnts 个逻辑块
+                uint32_t child_step = 1;
+                for(int l=0; l < level-1; l++) child_step *= pnts;
+                
+                uint32_t child_logic_idx = first_logic_idx + i * child_step;
+                
+                // 只有当这个子块覆盖的范围可能超过 free_start_idx 时才递归
+                if (child_logic_idx + child_step > free_start_idx) {
+                    recursive_free_blocks(inode, buf[i], level - 1, child_logic_idx, free_start_idx);
+                    
+                    // 如果整个子块范围都被释放了，清理索引项
+                    if (child_logic_idx >= free_start_idx) {
+                        buf[i] = 0;
+                    }
+                }
             }
         }
+        // 如果是间接块自己也要释放（前提是它的逻辑范围全在 free_start_idx 之后）
+        // 如果该索引块负责的所有内容都被删了，这里写回 0
+        partition_write(part, BLOCK_TO_SECTOR(sb, phys_block), buf, bsize / SECTOR_SIZE);
         kfree(buf);
     }
 
-    // 释放当前块（无论是数据块还是索引块）
-    ext2_resource_free(sb, phys_block, EXT2_BLOCK_BITMAP);
+    // 释放物理块的条件, 它的逻辑起始编号 >= 截断点
+    // 如果是间接块(level > 0)，释放前提是它下面的内容全被清空了
+    if (first_logic_idx >= free_start_idx) {
+        ext2_resource_free(sb, phys_block, EXT2_BLOCK_BITMAP);
+        // 修改 inode 的块统计信息
+        // Ext2 中 i_blocks 的单位是 512B 扇区
+        uint32_t sectors_per_block = bsize / SECTOR_SIZE;
+        if (inode->i_blocks >= sectors_per_block) {
+            inode->i_blocks -= sectors_per_block;
+        } else {
+            inode->i_blocks = 0;
+        }
+    }
 }
 
+// 根据传入进来的 inode 的大小 i_size 进行裁剪
+// 就把大小裁剪到 i_size
 static void ext2_truncate(struct inode *inode) {
     struct super_block *sb = inode->i_sb;
-    // printk("truncate i_no 0x%x start...\n",inode->i_no);
+    uint32_t bsize = sb->s_block_size;
+    uint32_t pnts = bsize / 4; // 一个块可以存储几个块号
 
-    // 处理直接块 [0-11]
-    for (int i = 0; i < 12; i++) {
-        if (inode->ext2_i.i_block[i] != 0) {
-            recursive_free_blocks(sb, inode->ext2_i.i_block[i], 0);
+    // 计算从哪个逻辑块号开始释放
+    // 例如 size=1500, bsize=1024, 则索引 0,1 保留, 从索引 2 开始释放
+    uint32_t free_start_idx = (inode->i_size + bsize - 1) / bsize;
+
+    // 处理对齐清零，如果新大小不在块边界，清空最后一个保留块的剩余部分
+    // 比如上面的 size = 1500，我们需要将第 1 个块之后空闲出来的 548 字节的剩余部分清零
+    uint32_t partial_offset = inode->i_size % bsize; // 计算块内偏移 1500 % 1024 = 476
+    if (partial_offset != 0) { // 处理不是块对齐的情况
+        uint32_t last_logic_idx = inode->i_size / bsize;
+        // 通过逻辑块号获取物理块号
+        // 按理来说这个 inode 应该是有 bmap 函数的，如果没有的话会报空指针，到时候再来处理
+        uint32_t phys_block = inode->i_op->bmap(inode, last_logic_idx); 
+        
+        if (phys_block != 0) {
+            uint8_t *io_buf = kmalloc(bsize);
+            if (io_buf) {
+                struct partition *part = get_part_by_rdev(sb->s_dev);
+                partition_read(part, BLOCK_TO_SECTOR(sb, phys_block), io_buf, bsize / SECTOR_SIZE);
+                
+                // 将 new_size 之后的部分全部抹零，比如前面的例子中，就是将 476 字节之后的 548 字节清空
+                memset(io_buf + partial_offset, 0, bsize - partial_offset);
+                
+                partition_write(part, BLOCK_TO_SECTOR(sb, phys_block), io_buf, bsize / SECTOR_SIZE);
+                kfree(io_buf);
+            }
+        }
+    }
+
+    // 执行递归释放（内部会修改 i_blocks）
+    // 直接块
+    for (uint32_t i = 0; i < 12; i++) {
+        if (i >= free_start_idx && inode->ext2_i.i_block[i] != 0) {
+            recursive_free_blocks(inode, inode->ext2_i.i_block[i], 0, i, free_start_idx);
             inode->ext2_i.i_block[i] = 0;
         }
     }
 
-    // 处理一级间接块 [12]
-    if (inode->ext2_i.i_block[12] != 0) {
-        recursive_free_blocks(sb, inode->ext2_i.i_block[12], 1);
-        inode->ext2_i.i_block[12] = 0;
+    // 一级间接块 (逻辑范围 12 ~ 12+pnts-1)
+    if (inode->ext2_i.i_block[12] != 0 && 12 + pnts > free_start_idx) {
+        recursive_free_blocks(inode, inode->ext2_i.i_block[12], 1, 12, free_start_idx);
+        if (free_start_idx <= 12) inode->ext2_i.i_block[12] = 0;
     }
 
-    // 处理二级间接块 [13]
-    if (inode->ext2_i.i_block[13] != 0) {
-        recursive_free_blocks(sb, inode->ext2_i.i_block[13], 2);
-        inode->ext2_i.i_block[13] = 0;
+    // 二级间接块 (逻辑范围从 12+pnts 开始)
+    uint32_t l2_start = 12 + pnts;
+    if (inode->ext2_i.i_block[13] != 0 && l2_start + pnts*pnts > free_start_idx) {
+        recursive_free_blocks(inode, inode->ext2_i.i_block[13], 2, l2_start, free_start_idx);
+        if (free_start_idx <= l2_start) inode->ext2_i.i_block[13] = 0;
     }
 
-    // 处理三级间接块 [14]
+    // 三级间接块覆盖的范围是 [l3_start, l3_start + pnts^3 - 1]
+    uint32_t l3_start = 12 + pnts + (pnts * pnts);
     if (inode->ext2_i.i_block[14] != 0) {
-        recursive_free_blocks(sb, inode->ext2_i.i_block[14], 3);
-        inode->ext2_i.i_block[14] = 0;
+        // 如果截断点落在三级间接块范围内，或者三级间接块整个都在截断点后
+        // 我们计算三级间接块的总覆盖量：pnts^3。这里简单判断下界即可。
+        if (free_start_idx < l3_start + (uint64_t)pnts * pnts * pnts) {
+            recursive_free_blocks(inode, inode->ext2_i.i_block[14], 3, l3_start, free_start_idx);
+            
+            // 如果整个三级间接块都被释放了
+            if (free_start_idx <= l3_start) {
+                inode->ext2_i.i_block[14] = 0;
+            }
+        }
     }
 
-    uint32_t now = (uint32_t)sys_time();
-
-    // 更新时间戳
-    inode->i_mtime = now;
-    inode->i_ctime = now;
-
-    // 重置元数据
-    inode->i_size = 0;
-    inode->ext2_i.i_blocks = 0;
+    // 重置元数据的操作不应该在此处做，i_size 应该是在上层的 sys_truncate 函数中
+    // 根据用户提供的值来修改的，i_blocks 是在 recursive_free_blocks 中一边改一遍修改的
+    // inode->i_size = 0;
+    // inode->i_blocks = 0;
     
     // 更新磁盘上的 Inode 结构
     sb->s_op->write_inode(inode);
-
-    // printk("truncate done!\n");
 }
 
 static int32_t ext2_remove_entry(struct inode* parent_dir, char* name) {
@@ -1038,6 +1107,8 @@ static int32_t ext2_unlink(struct inode* dir, char* name, int len) {
         // 对于设备文件之类的文件，他们没有磁盘块，因此不需要truncate
         // 由于他们的truncate都为NULL，因此这个条件可以将他们拦住
         if(target_inode->i_op!=NULL&&target_inode->i_op->truncate!=NULL){
+            // 复用 truncate，里面会根据 i_size 来调整文件大小，此处需要将其置为 0
+            target_inode->i_size = 0;
             target_inode->i_op->truncate(target_inode);
         }
         // 释放 Inode 节点，将 Inode Bitmap 相应的位置 0
@@ -1146,6 +1217,8 @@ static int32_t ext2_rmdir(struct inode *dir, char *name, int len) {
     target_inode->i_ctime = now;   // 链接数归零也是状态改变
     target_inode->ext2_i.i_dtime = now;   // 记录删除时间
 
+    // 复用 truncate，里面会根据 i_size 来调整文件大小，此处需要将其置为 0
+    target_inode->i_size = 0;
     // 彻底释放资源
     ext2_truncate(target_inode); // 释放所有数据块
     ext2_resource_free(sb, target_inode->i_no, EXT2_INODE_BITMAP); // 释放 Inode 位图
@@ -1391,7 +1464,7 @@ static int32_t ext2_readlink(struct inode* inode, char* buf, int bufsize) {
     // 快符号链接 (Fast Symlink)中，如果目标路径很短（小于 60 字节）
     // Ext2 会直接把路径字符串存放在 inode 结构体原本用来存放块地址的 i_block[15] 数组里。
     // 这么做的好处是不需要分配额外的数据块，节省空间，更重要的是减少了一次磁盘 IO。
-    if (inode->ext2_i.i_blocks == 0) {
+    if (inode->i_blocks == 0) {
         // 快符号链接，路径直接存在 i_block 数组里
         memcpy(buf, (char*)inode->ext2_i.i_block, path_len);
         buf[path_len] = '\0';
@@ -1448,7 +1521,7 @@ static int32_t ext2_symlink(struct inode* dir, char* name, int len UNUSED, const
     // 区分 Fast 和 Normal
     if (target_len < FAST_LINK_LIMIT) {
         // 物理块数为 0，数据存入 i_block
-        new_inode->ext2_i.i_blocks = 0;
+        new_inode->i_blocks = 0;
         memcpy((char*)new_inode->ext2_i.i_block, target, target_len);
     } else {
         // 分配一个数据块存储路径
@@ -1460,7 +1533,7 @@ static int32_t ext2_symlink(struct inode* dir, char* name, int len UNUSED, const
             return -ENOSPC;
         }
         new_inode->ext2_i.i_block[0] = phys_block;
-        new_inode->ext2_i.i_blocks = sb->s_block_size / SECTOR_SIZE;
+        new_inode->i_blocks = sb->s_block_size / SECTOR_SIZE;
 
         // 将路径写入磁盘块
         void* io_buf = kmalloc(sb->s_block_size);
@@ -1563,7 +1636,7 @@ struct inode_operations ext2_dir_inode_operations = {
     .mknod      = ext2_mknod,
     .rename     = ext2_rename,
     .bmap       = ext2_bmap, 
-    .truncate   = ext2_truncate,
+    .truncate   = NULL, // 目录不能 truncate
     .symlink    = ext2_symlink, // ext2_symlink 本质上也是一个创建操作，和mknod一样，给目录操作集
     .readlink   = NULL,
     .link       = ext2_link,

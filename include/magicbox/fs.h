@@ -38,6 +38,8 @@ extern int32_t sys_lstat(const char* _pathname, struct stat* buf);
 extern int32_t sys_fcntl(int32_t fd, uint32_t cmd, uint32_t arg);
 extern int32_t sys_access(const char* pathname, int mode);
 extern int32_t sys_readlink(const char* path, char* buf, int32_t bufsize);
+extern int32_t sys_truncate(const char* path, int32_t length);
+extern int32_t sys_ftruncate(int32_t fd, int32_t length);
 
 extern struct partition* cur_part;
 extern struct inode* root_dir_inode; 

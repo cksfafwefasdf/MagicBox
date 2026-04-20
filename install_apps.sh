@@ -35,7 +35,7 @@ TEST_TARGETS="test_sig,prog/native_test/test_sig.c test_fifo,prog/native_test/te
 test_malloc,prog/native_test/test_malloc.c test_kmalloc,prog/native_test/test_kmalloc.c \
 test_mmap,prog/native_test/test_mmap.c test_mmap_file,prog/native_test/test_mmap_file.c \
 test_symlink,prog/native_test/test_symlink.c test_rawtty,prog/native_test/test_raw_tty.c \
-test_timer,prog/native_test/test_timer.c"
+test_timer,prog/native_test/test_timer.c test_truncate,prog/native_test/test_truncate.c"
 
 # 根据参数决定最终编译列表
 # $1 表示脚本收到的第一个参数
