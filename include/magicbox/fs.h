@@ -40,8 +40,12 @@ extern int32_t sys_access(const char* pathname, int mode);
 extern int32_t sys_readlink(const char* path, char* buf, int32_t bufsize);
 extern int32_t sys_truncate(const char* path, int32_t length);
 extern int32_t sys_ftruncate(int32_t fd, int32_t length);
+extern int32_t sys_link(const char* _oldpath, const char* _newpath);
 
-extern struct partition* cur_part;
+extern struct inode* root_dir_inode; 
+// root_part 用于记录根分区，他是全局唯一的
+extern struct partition* root_part;
+// 由于我们去除了 dir 结构，因此现在改用 inode 来标记根目录
 extern struct inode* root_dir_inode; 
 
 #endif

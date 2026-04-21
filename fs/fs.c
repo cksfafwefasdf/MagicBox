@@ -26,26 +26,14 @@
 #include <time.h>
 #include <console.h>
 #include <fcntl.h>
+#include <namei.h>
 
 // root_part 用于记录根分区，他是全局唯一的
 struct partition* root_part;
-struct inode* cur_dir_inode;
-
-struct dlist file_systems;
-
 // 由于我们去除了 dir 结构，因此现在改用 inode 来标记根目录
 struct inode* root_dir_inode; 
 
-// search_file 函数所使用的状态机定义
-typedef enum {
-    STATE_START,            // 初始化起点
-    STATE_PARSE_COMPONENT,  // 解析路径中的下一个名字 (usr, bin等)
-    STATE_LOOKUP,           // 在磁盘/缓存中查找该名字
-    STATE_CHECK_TYPE,       // 检查查到的 Inode 类型（目录？链接？挂载点？）
-    STATE_FOLLOW_LINK,      // 处理符号链接
-    STATE_DONE,             // 解析成功结束
-    STATE_ERROR             // 出错结束
-} path_state_t;
+struct dlist file_systems;
 
 static void open_root_dir(struct partition* part) {
     root_dir_inode = inode_open(part, part->sb->s_root_ino);
@@ -196,10 +184,7 @@ void filesys_init() {
         channel_no++;
     }
 
-    
-
 mnt:
-
     // 调用 mount_partition 进行挂载
     // mount_partition 内部会调用 sifs_read_super，加载超级块
     // 而 sifs_read_super 会完成分配 VFS super_block、位图、根 inode 的所有工作
@@ -211,7 +196,6 @@ mnt:
 
     // 设置当前目录环境
     // sifs_read_super 已经把 root_inode 存进了 root_part->sb->s_root_inode
-    cur_dir_inode = root_part->sb->s_root_inode; 
     open_root_dir(root_part);
     // 初始化全局文件表
     uint32_t fd_idx = 0;
@@ -219,254 +203,6 @@ mnt:
         file_table[fd_idx++].fd_inode = NULL;
     }
     printk("filesys_init done!\n");
-}
-
-char* _path_parse(char* pathname,char* name_store){
-	if(pathname[0]=='/'){
-		while(*(++pathname)=='/');
-	}
-
-	while(*pathname!='/'&&*pathname!=0){
-		*name_store++ = *pathname++;
-	}
-
-	if(pathname[0]==0){
-		return NULL;
-	}
-	return pathname;
-}
-
-int32_t path_depth_cnt(char* pathname){
-	ASSERT(pathname!=NULL);
-	char* p = pathname;
-	char name[MAX_FILE_NAME_LEN];
-
-	uint32_t depth = 0;
-
-	p = _path_parse(p,name);
-	while(name[0]){
-		depth++;
-		memset(name,0,MAX_FILE_NAME_LEN);
-		if(p){
-			p=_path_parse(p,name);
-		}
-	}
-	return depth;
-}
-
-// search_file 只关闭中间搜索过程中的“中间父目录”，最终的父目录无论如何他都不关闭
-// 由调用者关闭
-// follow_link 用于指明是否跟踪link，有些时候我们需要判断链接本身是否存在，而不是判断链接指向的文件是否存在
-// 这时我们需要将其置为 false
-// 例如，如果返回 -ENOENT 我们需要区分是“真没坑位”还是“断链占坑”
-// 这是因为对于一个符号链接而言，有两种情况都会导致 search_file 返回 ENOENT
-// 一种是 符号链接文件本身不存在，还有一种是符号链接所指向的文件不存在
-// 我们的 search_file 函数功能比较简单，只会一条路走到底
-// 当它去跟踪一个符号链接时，他会一路走到底，当发现符号链接指向的目标不存在时，他会返回 -ENOENT
-// 因此我们只通过 -ENOENT 是无法直接判断出到底是符号链接本身不存在还是符号链接指向的文件不存在的
-// 对于followlink的传入值而言
-// 消费型函数 (open, stat, mount, chdir)：通常传入 true，因为它们关心路径指向的那个“实体内容”。
-// 管理型/创建型函数 (mknod, mkdir, symlink, unlink, rename)：必须传入 false，因为它们操作的是目录里的那个“名字（Entry）”本身。
-static int32_t search_file(char* pathname, struct path_search_record* searched_record, bool follow_link) {
-
-    // search_file 接收到的必须是绝对地址
-    ASSERT(pathname[0] == '/');
-
-    char path_buf[MAX_PATH_LEN];
-    memset(searched_record, 0, sizeof(struct path_search_record));
-    memcpy(path_buf, pathname, MAX_PATH_LEN);
-
-    path_state_t state = STATE_START;
-    struct inode* curr_inode = NULL;  
-    struct inode* next_inode = NULL;  
-    char* p = path_buf;
-    char name[MAX_FILE_NAME_LEN];
-    int symlink_depth = 0;
-
-    while (state != STATE_DONE && state != STATE_ERROR) {
-        switch (state) {
-            case STATE_START:
-                if (curr_inode && curr_inode != root_dir_inode) inode_close(curr_inode);
-                curr_inode = inode_open(root_part, root_dir_inode->i_no);
-                p = path_buf;
-                // 跳过所有开头的斜杠，防止 // 导致的空组件
-                while (*p == '/') p++; 
-                next_inode = NULL;
-                // 初始化 record，默认指向根
-                searched_record->parent_inode = curr_inode;
-                searched_record->i_dev = curr_inode->i_dev;
-                memset(searched_record->searched_path, 0, MAX_PATH_LEN);
-                // 初始化一个根目录
-                searched_record->searched_path[0] = '/'; // 设为 "/"
-                searched_record->searched_path[1] = '\0';
-                state = STATE_PARSE_COMPONENT;
-                break;
-
-            case STATE_PARSE_COMPONENT:
-                while (*p == '/') p++;
-                if (*p == 0) { // 根目录或者以 / 结尾
-                    searched_record->file_type = FT_DIRECTORY;
-                    state = STATE_DONE;
-                    break;
-                }
-                memset(name, 0, MAX_FILE_NAME_LEN);
-                char* name_start = p;
-                while (*p && *p != '/') p++;
-                int len = p - name_start;
-                memcpy(name, name_start, len);
-
-                if (searched_record->searched_path[0] == '\0') {
-                    // 只有在路径完全为空时（通常不应发生），才初始化为 /
-                    strcpy(searched_record->searched_path, "/");
-                } 
-
-                // 如果当前路径不是只有 "/"，则需要补一个 "/"
-                uint32_t sp_len = strlen(searched_record->searched_path);
-                if (sp_len > 1 && searched_record->searched_path[sp_len - 1] != '/') {
-                    strcat(searched_record->searched_path, "/");
-                }
-
-                strcat(searched_record->searched_path, name);
-                state = STATE_LOOKUP;
-                break;
-
-            case STATE_LOOKUP:
-                // printk("Lookup: name='%s' in parent_ino=%d\n", name, curr_inode->i_no);
-                // 处理 ".." 向上穿透
-                if (len == 2 && memcmp(name, "..", 2) == 0) {
-                    if (curr_inode->i_no == curr_inode->i_sb->s_root_ino && curr_inode->i_mount_at) {
-                        struct inode* old = curr_inode;
-                        struct inode* mp = curr_inode->i_mount_at;
-                        curr_inode = inode_open(get_part_by_rdev(mp->i_dev), mp->i_no);
-                        if (old != root_dir_inode) inode_close(old);
-                    }
-                }
-
-                // 磁盘查找
-                if (curr_inode->i_op->lookup(curr_inode, name, len, &next_inode) != 0) {
-                    // 没找到，保持 curr_inode 为 parent_inode
-                    searched_record->parent_inode = curr_inode;
-                    searched_record->i_dev = curr_inode->i_dev;
-                    state = STATE_ERROR;
-                } else {
-                    state = STATE_CHECK_TYPE;
-                }
-                break;
-
-            case STATE_CHECK_TYPE:
-                //  处理向下跳转 (进入挂载分区的根)
-                while (next_inode->i_mount != NULL) {
-                    struct inode* mounted_root = next_inode->i_mount;
-                    inode_open(get_part_by_rdev(mounted_root->i_dev), mounted_root->i_no);
-                    inode_close(next_inode);
-                    next_inode = mounted_root;
-                }
-
-                // 检查符号链接
-                if (next_inode->i_type == FT_SYMLINK) {
-                    // 判断是否为路径的最后一个组件（通过 p 指针是否到头来判断）
-                    bool is_last = (*p == 0);
-
-                    // 如果不是最后一个组件，必须 Follow（为了穿透中间路径）
-                    // 如果是最后一个组件，则取决于调用者的意愿 (follow_last)
-                    if (!is_last || follow_link) {
-                        state = STATE_FOLLOW_LINK;
-                    } else {
-                        // 命中了，不跟随最后一个链接，直接返回链接自己的 Inode
-                        searched_record->file_type = FT_SYMLINK;
-                        searched_record->parent_inode = curr_inode;
-                        uint32_t link_ino = next_inode->i_no;
-                        inode_close(next_inode);
-                        return link_ino;
-                    }
-                } else if (*p == 0) { // 路径终点判断
-                    searched_record->file_type = next_inode->i_type;
-                    searched_record->i_dev = next_inode->i_dev; // 确保是跳转后的设备号
-                    searched_record->parent_inode = curr_inode; 
-                    uint32_t final_ino = next_inode->i_no;
-                    inode_close(next_inode); 
-                    return final_ino; // 直接返回，避免 DONE 状态的复杂逻辑
-                } else { // 推进到下一层目录
-                    if (curr_inode != root_dir_inode) inode_close(curr_inode);
-                    curr_inode = next_inode;
-                    next_inode = NULL;
-                    // 更新 record，当前的 next 变成了下一轮的 parent
-                    searched_record->parent_inode = curr_inode;
-                    searched_record->i_dev = curr_inode->i_dev;
-                    state = STATE_PARSE_COMPONENT;
-                }
-                break;
-
-            case STATE_FOLLOW_LINK:
-                // 防止出现循环链接
-                if (++symlink_depth > 8) {
-                    printk("search_file: Too many levels of symbolic links!\n");
-                    // 即使出错，也要把当前的现场交给 record，防止调用者误判为“找不到父目录”
-                    searched_record->parent_inode = curr_inode;
-                    state = STATE_ERROR; 
-                    return -ELOOP; 
-                }
-
-                char link_target[MAX_PATH_LEN] = {0};
-
-                int link_len = next_inode->i_op->readlink(next_inode, link_target, MAX_PATH_LEN);
-
-                if (link_len <= 0) {
-                    state = STATE_ERROR;
-                    break;
-                }
-
-                inode_close(next_inode);
-
-                // 拼凑新路径，link_target + 剩下的 p
-                char temp[MAX_PATH_LEN];
-                // 如果 p 后面还有内容，且不是以 / 开头，才补 /
-                char* sep = (*p != 0 && *p != '/') ? "/" : "";
-                // 如访问 /dir/link1/file1 ，link1指向 dir2/dir （相对路径） 时，我们最终会拼接成 /dir/dir2/dir/file1
-                // 如访问 /dir/link1/file1 ，link1指向 /dir2/dir （绝对路径）时，我们会拼接成 /dir2/dir/file1，最开始已经解析完了的上下文会被丢弃，然后我们必须从头开始解析
-                sprintf(temp, "%s%s%s", link_target, sep, p);
-
-                memcpy(path_buf, temp, MAX_PATH_LEN);
-
-                if (link_target[0] == '/') {
-                    state = STATE_START; // 绝对路径链接，重启，重新从根目录开始搜寻
-                    // 只清空路径记录，不要动其他元数据，以便出问题时debug起来简单点
-                    memset(searched_record->searched_path, 0, MAX_PATH_LEN);
-                } else {
-                    // 相对路径链接，原地重启解析
-                    // 我们需要把 path_buf 中已经解析掉的部分去掉，换成符号链接解析出来的内容
-                    p = path_buf; 
-                    state = STATE_PARSE_COMPONENT;
-                    // 还需要手动把已经记录在 searched_path 里的符号链接所在位置的符号链接 dir_lnk 给删了
-                    char* last_slash = strrchr(searched_record->searched_path, '/');
-                    if (last_slash) *last_slash = '\0';
-                }
-                break;
-        }
-    }
-    // 处理以 / 结尾的情况
-    if (state == STATE_DONE) {
-        searched_record->i_dev = curr_inode->i_dev;
-        return curr_inode->i_no;
-    }
-    return -ENOENT;
-}
-
-// 将路径转换为绝对路径
-static void make_abs_pathname(const char* pathname, char* abs_path) {
-    if (pathname[0] == '/') {
-        // 如果已经是绝对路径，直接拷贝
-        strcpy(abs_path, pathname);
-    } else {
-        // 如果是相对路径，先获取当前目录
-        sys_getcwd(abs_path, MAX_PATH_LEN);
-        
-        // 针对根目录 "/" 做特殊处理，避免拼成 "//name"
-        if (strcmp(abs_path, "/") != 0) {
-            strcat(abs_path, "/");
-        }
-        strcat(abs_path, pathname);
-    }
 }
 
 int32_t sys_open(const char* _pathname,int32_t flags){
@@ -552,6 +288,10 @@ int32_t sys_open(const char* _pathname,int32_t flags){
         // 这个操作应该是要放到 VFS 层做的而不是具体的文件系统来做
         // 因为不管是什么文件系统下的文件，他们file结构的填充和inode缓存的建立都是一样的
         if(searched_record.parent_inode->i_op!=NULL&&searched_record.parent_inode->i_op->create!=NULL){
+            // 在这里更新时间没问题，如果 create 内部出现问题要回滚，我们不会将这个被更新过的时间写回磁盘
+            // 因为只有当 create 成功执行了，才会去 write_inode 同步 父目录 inode 和 子节点 inode
+            // 如果中间出现问题回滚了，这个内存中的时间更新操作是不会被写回内存的
+            update_time(searched_record.parent_inode,MTIME|CTIME);
             final_inode_no = searched_record.parent_inode->i_op->create(searched_record.parent_inode, filename, strlen(filename), 0777);
         }else{
             PANIC("searched_record.parent_inode->i_op is NULL");
@@ -599,7 +339,10 @@ int32_t sys_open(const char* _pathname,int32_t flags){
                 // 重置大小并释放块
                 inode->i_size = 0; 
                 // 更新时间戳
-                inode->i_mtime = inode->i_ctime = (uint32_t)sys_time();
+                // 在这里更新时间没问题，如果 truncate 内部出现问题要回滚，我们不会将这个被更新过的时间写回磁盘
+                // 因为只有当 truncate 成功执行了，才会去 write_inode 同步 父目录 inode 和 子目录的 inode
+                // 如果中间出现问题回滚了，这个内存中的时间更新操作是不会被写回内存的
+                update_time(inode,MTIME|CTIME);
                 inode->i_op->truncate(inode);
             }
             inode_close(inode);
@@ -708,9 +451,10 @@ int32_t sys_write(int32_t fd,void* buf, uint32_t count) {
     enum file_types type = inode->i_type;
 
     if(wr_file->f_op!=NULL && wr_file->f_op->write!=NULL){
-        uint32_t now = (uint32_t)sys_time();
-        inode->i_mtime = now;
-        inode->i_ctime = now;
+        // 在这里更新时间没问题，如果 write 内部出现问题要回滚，我们不会将这个被更新过的时间写回磁盘
+        // 因为只有当 write 成功执行了，才会去 write_inode 同步 父目录 inode 和 子目录的 inode
+        // 如果中间出现问题回滚了，这个内存中的时间更新操作是不会被写回内存的
+        update_time(inode,MTIME|CTIME);
         return wr_file->f_op->write(wr_file->fd_inode,wr_file,buf,count);
     }else{
         printk("sys_write: type %x cannot write!\n", type);
@@ -755,7 +499,7 @@ int32_t sys_read(int32_t fd, void* buf, uint32_t count) {
         // 这里通常不需要立即调用 sb->s_op->write_inode(inode)。
         // atime 的修改通常只停留在内存中，
         // 等到 inode 周期性同步或者文件关闭时再写回磁盘。
-        inode->i_atime = (uint32_t)sys_time();
+        update_time(inode,ATIME);
         return rd_file->f_op->read(rd_file->fd_inode,rd_file,buf,count);
     }else{
         printk("sys_write: type %x cannot write!\n", type);
@@ -840,6 +584,7 @@ int32_t sys_unlink(const char* _pathname) {
 
     // 先硬编码文件系统类型，等下来改
     if(parent_inode->i_op!=NULL&&parent_inode->i_op->unlink!=NULL){
+        update_time(parent_inode,CTIME|MTIME);
         parent_inode->i_op->unlink(parent_inode, last_name, name_len);
     }else{
         PANIC("parent_inode->i_op->unlink is NULL");
@@ -890,6 +635,11 @@ int32_t sys_mkdir(const char* _pathname) {
     if(parent_inode->i_op != NULL && parent_inode->i_op->mkdir!=NULL){
         // ext2会处理权限位，但是我们的系统并没有权限管理，因此直接给777满权限
         // 这个0开头的数字是一个8进制数字
+
+        // 在这里更新时间没问题，如果 mkdir 内部出现问题要回滚，我们不会将这个被更新过的时间写回磁盘
+        // 因为只有当 mkdir 成功执行了，才会去 write_inode 同步 父目录 inode 和 子目录的 inode
+        // 如果中间出现问题回滚了，这个内存中的时间更新操作是不会被写回内存的
+        update_time(parent_inode,MTIME|CTIME); // 链接数和 mtime 变了，所以 ctime 必变，目录内容变了所以 mtime 要变
         dir_i_no = parent_inode->i_op->mkdir(parent_inode, dir_name, len, 0777);
     }else{
         PANIC("parent_inode->i_op is NULL");
@@ -925,7 +675,7 @@ int32_t sys_readdir(int32_t fd, struct dirent* de) {
 
         // 只有当从头开始读取目录时，更新一次 atime 即可
         if (f->fd_pos == 0) {
-            f->fd_inode->i_atime = (uint32_t)sys_time();
+            update_time(f->fd_inode,ATIME);
             // 同样，这里只更新内存，不强制刷盘
         }
 
@@ -1005,6 +755,9 @@ int32_t sys_rmdir(const char* _pathname) {
     uint32_t len = strlen(dir_name);
     int32_t ret = -1;
     if(searched_record.parent_inode->i_op!=NULL&&searched_record.parent_inode->i_op->rmdir!=NULL){
+        // 内容变了
+        // 链接数变了，ctime 必变
+        update_time(searched_record.parent_inode,CTIME|MTIME);
         ret = searched_record.parent_inode->i_op->rmdir(searched_record.parent_inode, dir_name, len);
     }else{
         PANIC("searched_record.parent_inode->i_op is NULL");
@@ -1521,6 +1274,7 @@ int32_t sys_mknod(const char* _pathname, enum file_types type, uint32_t dev) {
     uint32_t len = strlen(filename);
     int32_t ret = -1;
     if(parent_inode->i_op!=NULL&&parent_inode->i_op->mknod!=NULL){
+        update_time(parent_inode,CTIME|MTIME);
         ret = parent_inode->i_op->mknod(parent_inode, filename, len, (int)type, (int)dev);
     }else{
         PANIC("parent_inode->i_op is NULL");
@@ -1767,6 +1521,10 @@ int32_t sys_rename(const char* _old_path, const char* _new_path) {
     if (old_record.parent_inode->i_op && old_record.parent_inode->i_op->rename) {
         // 按理说二者在同一个文件系统上，调用谁的无所谓
         // 这也是为什么不能跨文件系统的原因，不然的话这里该调谁的rename都成问题
+        // 源目录 (old_dir) 删除了条目
+        update_time(old_record.parent_inode,MTIME|CTIME);
+        // 目标目录 (new_dir) 增加了条目
+        update_time(new_record.parent_inode,MTIME|CTIME);
         ret = old_record.parent_inode->i_op->rename(
             old_record.parent_inode, old_name, strlen(old_name),
             new_record.parent_inode, new_name, strlen(new_name)
@@ -2006,6 +1764,7 @@ int32_t sys_symlink(const char* target, const char* linkpath) {
     int32_t retval = -ENOSYS;
 
     if (dir->i_op && dir->i_op->symlink) {
+        update_time(dir,MTIME|CTIME);
         retval = dir->i_op->symlink(dir, name, strlen(name), target);
     }
 
@@ -2153,9 +1912,7 @@ static int32_t do_truncate(struct inode* inode , int32_t length){
 
     // 更新时间戳
     // truncate 里面会同步 inode，因此我们在此处先修改时间
-    uint32_t now = (uint32_t)sys_time();
-    inode->i_mtime = now;
-    inode->i_ctime = now;
+    update_time(inode,MTIME|CTIME);
     
     inode->i_op->truncate(inode);
 
@@ -2222,4 +1979,71 @@ int32_t sys_ftruncate(int32_t fd, int32_t length) {
         return -EISDIR;
     }
     return do_truncate(inode, length);
+}
+
+int32_t sys_link(const char* _oldpath, const char* _newpath) {
+    if (_oldpath == NULL || _newpath == NULL) return -EFAULT;
+
+    // 统一转换绝对路径
+    char oldpath[MAX_PATH_LEN] = {0};
+    char newpath[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_oldpath, oldpath);
+    make_abs_pathname(_newpath, newpath);
+
+    struct path_search_record old_record;
+    struct path_search_record new_record;
+    memset(&old_record, 0, sizeof(struct path_search_record));
+    memset(&new_record, 0, sizeof(struct path_search_record));
+
+    // 搜索源文件
+    int32_t old_inode_no = search_file(oldpath, &old_record, true);
+    if (old_inode_no < 0) {
+        inode_close(old_record.parent_inode);
+        return -ENOENT; // 源文件不存在
+    }
+
+    // 校验源文件类型：硬链接不能链接目录
+    if (old_record.file_type == FT_DIRECTORY) {
+        inode_close(old_record.parent_inode);
+        return -EPERM;
+    }
+
+    // 搜索新路径的父目录
+    int32_t new_inode_no = search_file(newpath, &new_record, true);
+    if (new_inode_no >= 0) {
+        // 目标路径已存在，Link 报错 EEXIST
+        inode_close(old_record.parent_inode);
+        inode_close(new_record.parent_inode);
+        return -EEXIST;
+    }
+
+    // 跨设备检查，硬链接必须在同一个分区
+    if (old_record.i_dev != new_record.i_dev) {
+        inode_close(old_record.parent_inode);
+        inode_close(new_record.parent_inode);
+        return -EXDEV;
+    }
+
+    // 获取源文件的 Inode 对象 (进入缓存)
+    struct partition* part = get_part_by_rdev(old_record.i_dev);
+    struct inode* old_inode = inode_open(part, old_inode_no);
+
+    // 调用底层 link 实现
+    int32_t ret = -EPERM;
+    char* filename = strrchr(newpath, '/') + 1;
+
+    // 使用父目录的操作集进行 link
+    if (new_record.parent_inode->i_op && new_record.parent_inode->i_op->link) {
+        // 更新时间戳 (VFS 逻辑：修改目录内容即修改 MTIME/CTIME)
+        update_time(new_record.parent_inode, MTIME | CTIME);
+        update_time(old_inode, CTIME); // 更新 ctime (Inode 状态改变)
+        
+        ret = new_record.parent_inode->i_op->link(old_inode, new_record.parent_inode, filename, strlen(filename));
+    }
+
+    inode_close(old_inode);                // 对应 inode_open
+    inode_close(old_record.parent_inode);  // 对应 search_file(oldpath)
+    inode_close(new_record.parent_inode);  // 对应 search_file(newpath)
+
+    return ret;
 }

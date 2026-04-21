@@ -93,14 +93,6 @@ struct file{
 	struct file_operations* f_op; // 指向该文件的具体操作集
 };
 
-struct path_search_record{
-	char searched_path[MAX_PATH_LEN];
-	struct inode* parent_inode; // 父目录的inode
-	enum file_types file_type;
-    uint32_t i_dev; // 所在设备号
-	int error_code; // 用于记录具体的错误原因
-};
-
 // 用于 vfs，抽象文件操作
 // 不同的文件类型（例如块设备文件、字符设备文件、普通文件、目录文件、pipe文件、fifo文件）会对应不同的操作集
 struct file_operations {

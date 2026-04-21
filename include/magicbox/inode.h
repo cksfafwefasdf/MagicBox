@@ -9,6 +9,12 @@
     这个文件中的代码都是虚拟文件系统VSF中，通用的inode操作的代码
 */
 
+enum time_flag {
+    ATIME = 1,
+    MTIME = 2,
+    CTIME = 4,
+};
+
 struct partition;
 struct inode;
 
@@ -21,5 +27,6 @@ extern int32_t inode_read_data(struct inode* inode, uint32_t offset, void* buf, 
 extern void inode_evict(struct inode* inode);
 extern enum file_types decode_imode(uint16_t mode);
 extern uint16_t encode_imode(enum file_types ft,uint16_t mode);
+extern void update_time(struct inode* inode, int flags);
 
 #endif

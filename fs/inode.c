@@ -10,6 +10,7 @@
 #include <debug.h>
 #include <sifs_inode.h>
 #include <ext2_inode.h>
+#include <time.h>
 
 #define MAX_INODE_CACHE_SIZE 64
 #define BUCKET_NR 32
@@ -71,6 +72,31 @@ uint16_t encode_imode(enum file_types ft,uint16_t mode) {
     if (ft == FT_SYMLINK)  return S_IFLNK|mode;
 
     return 0;
+}
+
+void update_time(struct inode* inode, int flags) {
+    if (inode == NULL) return;
+
+    int64_t now = sys_time();
+    // bool changed = false;
+
+    if ((flags & ATIME)) {
+        inode->i_atime = (uint32_t)now;
+        // changed = true;
+    }
+    if ((flags & MTIME)) {
+        inode->i_mtime = (uint32_t)now;
+        // changed = true;
+    }
+    if ((flags & CTIME)) {
+        inode->i_ctime = (uint32_t)now;
+        // changed = true;
+    }
+
+    // 因为是直写式缓存，一旦数据改变，立即调用底层写回
+    // if (changed && inode->i_sb->s_op->write_inode) {
+    //     inode->i_sb->s_op->write_inode(inode);
+    // }
 }
 
 void inode_cache_init() {

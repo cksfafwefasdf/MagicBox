@@ -222,7 +222,7 @@ static void ext2_write_inode(struct inode* inode) {
     // 更新 ctime (Status Change Time)
     // 只要进入了这个 write_inode 函数，说明 inode 的元数据（大小、链接数、块指向）变了
     // 按照 Unix 标准，此时必须更新 ctime。
-    inode->i_ctime = (uint32_t)sys_time(); 
+    update_time(inode,CTIME);
 
     // 将内存中的三个时间戳刷入磁盘镜像 (ei 是磁盘上的结构)
     ei->i_atime = inode->i_atime;
