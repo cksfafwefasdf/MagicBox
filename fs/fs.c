@@ -1638,15 +1638,16 @@ void sys_disk_info() {
     // 磁盘容量单位预处理，打印磁盘的总览信息
     char** granulars = kmalloc(sizeof(char*) * disk_num);
     uint8_t* div_cnts = kmalloc(sizeof(uint8_t) * disk_num);
+    ASSERT(granulars!=NULL);
+    ASSERT(div_cnts!=NULL);
     memset(div_cnts, 0, disk_num);
-
+    char* units[] = {"B", "KB", "MB", "GB", "TB"};
     for (int i = 0; i < disk_num; i++) {
         uint32_t temp_size = disk_size[i];
         while (temp_size >= 1024) {
             temp_size /= 1024;
             div_cnts[i]++;
         }
-        char* units[] = {"B", "KB", "MB", "GB", "TB"};
         granulars[i] = (div_cnts[i] < 5) ? units[div_cnts[i]] : "OVR!";
     }
 
@@ -1664,7 +1665,7 @@ void sys_disk_info() {
 
     printk("partition\tformat\t512B-blocks\tused\tavailable\n");
 
-    // 3. 遍历硬件结构体打印详细信息
+    // 遍历硬件结构体打印详细信息
     for (channel_idx = 0; channel_idx < CHANNEL_NUM; channel_idx++) {
         for (uint8_t device_idx = 0; device_idx < DEVICE_NUM_PER_CHANNEL; device_idx++) {
             struct disk* hd = &channels[channel_idx].devices[device_idx];

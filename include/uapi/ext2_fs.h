@@ -137,7 +137,7 @@ struct ext2_super_block {
 	uint32_t	s_reserved[190];	/* Padding to the end of the block */
 } __attribute__((packed)) ;
 
-// inode 的磁盘镜像，不出意外的话，它的大小应该是128字节
+// inode 的磁盘镜像，不出意外的话，它的大小应该是128字节，因此它不会跨扇区
 struct ext2_inode {
     uint16_t i_mode; // 文件类型和访问权限
     uint16_t i_uid; // 用户 ID

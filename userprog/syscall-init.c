@@ -92,6 +92,7 @@ void syscall_init(void){
 	syscall_table[SYS_GETPPID] = sys_getppid;
 	syscall_table[SYS_TRUNCATE] = sys_truncate;
 	syscall_table[SYS_TRUNCATE] = sys_ftruncate;
+	syscall_table[SYS_LINK] = sys_link;
 	
 	put_str("syscall_init done\n");
 }

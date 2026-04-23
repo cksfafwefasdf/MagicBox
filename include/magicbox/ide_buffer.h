@@ -17,7 +17,6 @@ struct disk;
 // 128*16=2KB，刚好占用一个页的一半，我们留出另一半来作为一点余裕
 // 防止后面出现莫名其妙的问题
 #define HASH_SIZE 128  
-#define WRITE_BATCH_SIZE SECTORS_PER_OP_BLOCK // 用于在bread_multi进行批量写入的控制
 struct buffer_head {
     uint32_t b_blocknr;     // 对应的磁盘 LBA 地址（扇区号）
     struct disk* b_dev;     // 属于哪个磁盘设备
@@ -35,8 +34,10 @@ struct buffer_head {
 };
 
 struct ide_buffer {
+    uint32_t max_blk_num; // 最大的缓存块数
+    uint32_t cur_blk_num; // 当前的缓存块数
+    uint32_t buf_blk_size; // 缓存块的大小
     struct lock lock;                // 覆盖整个buffer的锁
-    struct buffer_head* cache_pool;  // 缓存池
     struct hashtable hash_table;     // hash表，用于快速查询和索引
     struct dlist lru_list;           // LRU 队列（其实就是一个 dlist）
 };

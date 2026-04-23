@@ -142,6 +142,10 @@ void intr_handler_hd(uint8_t irq_no){
 
 void ide_init(){
 	printk("ide_init start\n");
+
+	// 总之，先初始化一下全局变量
+	memset(channels,0,CHANNEL_NUM*sizeof(struct ide_channel));
+	
 	dlist_init(&partition_list);
 	// get the disk number from BIOS
 	uint8_t hd_cnt = *((uint8_t*)(BIOS_DISK_NUM_ADDR));

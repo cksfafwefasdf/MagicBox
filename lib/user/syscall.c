@@ -357,3 +357,7 @@ int32_t truncate(const char* path, int32_t length) {
 int32_t ftruncate(int32_t fd, int32_t length) {
 	return _syscall2(SYS_FTRUNCATE, fd, length);
 }
+
+int32_t link(const char* _oldpath, const char* _newpath){
+	return _syscall2(SYS_LINK, _oldpath, _newpath);
+}
