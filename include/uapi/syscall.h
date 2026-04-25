@@ -11,7 +11,7 @@
 // 现在用户态内存分配已经改为 libc malloc/free + brk/sbrk，
 // 这两个编号仅保留为历史兼容槽位，避免整体 syscall ABI 重排。
 #define	SYS_GETPPID 2
-// #define	SYS_RESERVED_3 3
+#define	SYS_SYNC 3
 #define	SYS_FORK 4
 #define	SYS_READ 5
 #define	SYS_PUTCHAR 6
@@ -142,5 +142,6 @@ extern void* sbrk(int32_t increment);
 extern int32_t truncate(const char* path, int32_t length);
 extern int32_t ftruncate(int32_t fd, int32_t length);
 extern int32_t link(const char* _oldpath, const char* _newpath);
+extern void sync(void);
 
 #endif

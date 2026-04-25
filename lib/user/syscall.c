@@ -361,3 +361,7 @@ int32_t ftruncate(int32_t fd, int32_t length) {
 int32_t link(const char* _oldpath, const char* _newpath){
 	return _syscall2(SYS_LINK, _oldpath, _newpath);
 }
+
+void sync(){
+	_syscall0(SYS_SYNC);
+}

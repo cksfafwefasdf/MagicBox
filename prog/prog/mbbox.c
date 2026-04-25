@@ -522,6 +522,11 @@ static char* get_applet_name(char* path) {
     return path;
 }
 
+int do_sync(int argc,char** argv){
+    sync();
+    return 0;
+} 
+
 int main(int argc, char** argv) {
     if (argc < 1) return 1;
 
@@ -555,6 +560,7 @@ int main(int argc, char** argv) {
     if (strcmp(applet_name, "fm") == 0)     return do_fm(sub_argc, sub_argv);
     if (strcmp(applet_name, "mkfs.ext2") == 0)     return do_mkfs_ext2(sub_argc, sub_argv);
     if (strcmp(applet_name, "mkfs.sifs") == 0)     return do_mkfs_sifs(sub_argc, sub_argv);
+    if (strcmp(applet_name, "sync") == 0)     return do_sync(sub_argc, sub_argv);
 
     printf("mbbox: applet not found: %s\n", applet_name);
     return 1;

@@ -18,6 +18,7 @@
 #include <ioctl.h>
 #include <time.h>
 #include <poll.h>
+#include <ide_buffer.h>
 
 #define SYSCALL_NR 64
 typedef void* syscall_func;
@@ -93,6 +94,7 @@ void syscall_init(void){
 	syscall_table[SYS_TRUNCATE] = sys_truncate;
 	syscall_table[SYS_TRUNCATE] = sys_ftruncate;
 	syscall_table[SYS_LINK] = sys_link;
+	syscall_table[SYS_SYNC] = sys_sync;
 	
 	put_str("syscall_init done\n");
 }

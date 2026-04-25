@@ -51,4 +51,5 @@ extern void brelse(struct buffer_head* bh);
 extern void bread_multi(struct disk* dev, uint32_t start_lba,void* out_buf , uint32_t sec_cnt);
 extern void bwrite_multi(struct disk* dev, uint32_t start_lba, void* src_buf, uint32_t sec_cnt);
 extern void sync_ide_buffer(void *arg UNUSED);
+extern void sys_sync(void);
 #endif

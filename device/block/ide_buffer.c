@@ -198,6 +198,7 @@ static struct buffer_head* getblk(struct disk* dev, uint32_t lba) {
 
     // 插入 (Double Check) 
     lock_acquire(&global_ide_buffer.lock);
+
     de = hash_find(&global_ide_buffer.hash_table, &bk);
     if (de) {
         // 别人抢先创建了，自杀并返回现有的
@@ -217,7 +218,9 @@ static struct buffer_head* getblk(struct disk* dev, uint32_t lba) {
     hash_insert(&global_ide_buffer.hash_table,(void*)(&bk),&new_bh->hash_tag);
     dlist_push_back(&global_ide_buffer.lru_list,&new_bh->lru_tag);
     global_ide_buffer.cur_blk_num++;
+
     lock_release(&global_ide_buffer.lock);
+
     return new_bh;
 }
 
@@ -335,7 +338,6 @@ void sync_ide_buffer(void *arg UNUSED) {
     if (io_buffer == NULL) PANIC("sync: fail to malloc io_buffer");
 
     while (1) {
-        printk("sync_thread: sync disk...\n");
         for (int c_no = 0; c_no < CHANNEL_NUM; c_no++) {
             for (int d_no = 0; d_no < DEVICE_NUM_PER_CHANNEL; d_no++) {
                 struct disk* dev = &channels[c_no].devices[d_no];
@@ -369,6 +371,14 @@ void sync_ide_buffer(void *arg UNUSED) {
                             break;
                         }
                     }
+
+                    // 先在锁内标记为非脏（防止丢失 IO 期间产生的新修改）
+                    // 如果在 ide_write 期间，有进程又改了这个块，它会重新调用 dirty 把这个块再次挂进 dirty_list。
+                    // 这样 sync_thread 在下一轮循环中会再次发现它，保证数据最终一定落盘。
+                    for (int i = 0; i < count; i++) {
+                        batch[i]->b_dirty = false;
+                        // 如果有引用等待，可以在这里处理
+                    }
                     lock_release(&global_ide_buffer.lock);
 
                     // 内存拼接，将零散的缓存块数据拷贝到连续的 io_buffer
@@ -380,18 +390,11 @@ void sync_ide_buffer(void *arg UNUSED) {
                     ide_write(dev, start_lba, io_buffer, count);
 
                     // printk("\nsync_thread: write %d sectors to dev: 0x%x LBA:0x%x",count, dev->i_rdev, start_lba);
-
-                    // 状态清理
-                    lock_acquire(&global_ide_buffer.lock);
-                    for (int i = 0; i < count; i++) {
-                        batch[i]->b_dirty = false;
-                        // 如果有引用等待，可以在这里处理
-                    }
-                    lock_release(&global_ide_buffer.lock);
                 }
             }
         }
 
+        printk("sync_thread: sync disk done!\n");
         // 定期休眠
         // 即使被 thread_unblock 强制唤醒也没事
         // 因为 sys_milsleep 中的 thread_block 后有一个将进程移出睡眠队列的操作
@@ -434,5 +437,12 @@ void bwrite_multi(struct disk* dev, uint32_t start_lba, void* src_buf, uint32_t 
         }
         lock_release(&global_ide_buffer.lock);
         brelse(bh); // 只是减少引用，数据还在缓存里，等 sync 线程处理
+    }
+}
+
+// 直接唤醒 sync 线程来异步清理
+void sys_sync(){
+    if(sync_thread->status == TASK_WAITING){
+        thread_unblock(sync_thread);
     }
 }
