@@ -103,3 +103,16 @@ struct dlist_elem* dlist_traversal(struct dlist* plist,func_condition condition,
 	return NULL;
 }
 
+// 有序插入函数，插入到第一个满足 condition 条件的节点之前
+void dlist_insert_order(struct dlist* plist,func_condition condition,struct dlist_elem* pelem){
+	// 查找第一个满足 condition 的节点
+	struct dlist_elem* ret = dlist_traversal(plist, condition, (void*)pelem);
+	if (ret != NULL) {
+        // 找到了目标位置，直接插在该位置前面
+        dlist_insert_front(ret, pelem);
+    } else {
+        // 如果没有找到满足条件的（说明 pelem 是最大的），
+        // 或者链表本身为空，都应该插在 tail 之前。
+        dlist_insert_front(&plist->tail, pelem);
+    }
+}

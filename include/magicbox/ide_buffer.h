@@ -10,13 +10,14 @@
 
 struct disk;
 
-#define BUFFER_NUM 2048
+// 缓存率，我们设置成 10%，总内存中会有 10% 的内存被用作磁盘缓存
+#define BUFFER_RATE 10
 // 由于要使用黄金分割乘法hash，因此选取2的幂次作为hash_size
 // 我们的malloc函数，当申请内存大于1024B时，会直接分配一个页的内存给该进程
 // 哈希表中会有一个dlist数组，每一个dlist元素的大小是16字节
-// 128*16=2KB，刚好占用一个页的一半，我们留出另一半来作为一点余裕
+// 128*16=4KB，刚好占满一个页（我们经过改进后，将 arena 的元数据从 payload 中移除了，因此一个页 4KB 是全都可用的）
 // 防止后面出现莫名其妙的问题
-#define HASH_SIZE 128  
+#define HASH_SIZE 256  
 struct buffer_head {
     uint32_t b_blocknr;     // 对应的磁盘 LBA 地址（扇区号）
     struct disk* b_dev;     // 属于哪个磁盘设备
@@ -31,6 +32,7 @@ struct buffer_head {
     // 因此我们需要将hash_tag和lru_tag分开
     struct dlist_elem lru_tag; // 哈希表节点：用于根据 (dev, lba) 快速找到块
     struct dlist_elem hash_tag;  // LRU节点：用于当缓冲区满时，决定踢掉哪个“最老”的块
+    struct dlist_elem dirty_tag; // 用于延迟写回，挂在脏队列上 
 };
 
 struct ide_buffer {
@@ -43,9 +45,10 @@ struct ide_buffer {
 };
 
 extern void ide_buffer_init(void);
-extern struct buffer_head* bread(struct disk* dev,uint32_t lba);
-extern void bwrite(struct disk* dev, uint32_t lba, void* src_buf);
+extern struct buffer_head* _bread(struct disk* dev, uint32_t lba);
+extern void bwrite(struct buffer_head* bh);
 extern void brelse(struct buffer_head* bh);
 extern void bread_multi(struct disk* dev, uint32_t start_lba,void* out_buf , uint32_t sec_cnt);
 extern void bwrite_multi(struct disk* dev, uint32_t start_lba, void* src_buf, uint32_t sec_cnt);
+extern void sync_ide_buffer(void *arg UNUSED);
 #endif

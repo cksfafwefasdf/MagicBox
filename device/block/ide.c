@@ -191,6 +191,9 @@ void ide_init(){
 		while (dev_no<DISK_NUM_IN_CHANNEL){
 			// obtain the memory address that the channel has reserved for the disk
 			struct disk* hd = &channel->devices[dev_no];
+			
+			dlist_init(&hd->dirty_list);
+
 			hd->my_channel = channel;
 			hd->dev_no = dev_no;
 
@@ -351,7 +354,7 @@ void ide_read(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
         uint32_t left_secs = sec_cnt - secs_done;
         uint32_t secs_to_read = (left_secs < SECTORS_PER_OP_BLOCK) ? left_secs : SECTORS_PER_OP_BLOCK;
 
-        // 一口气用 insw 抽走这些数据（这是最快的地方）
+        // 一口气用 insw 抽走这些数据
         read_from_sector(hd, (void*)((uint32_t)buf + secs_done * SECTOR_SIZE), secs_to_read);
         
         secs_done += secs_to_read;
@@ -592,7 +595,6 @@ static int32_t ide_dev_read(struct inode* inode, struct file* file, char* buf, i
 
     uint8_t* dst = (uint8_t*)buf;
     uint32_t bytes_left = count;
-    uint8_t* io_buf = NULL; // 仅用于处理非对齐碎块
 
 	// 5个字节一个扇区00111对应 offset_in_sec != 0分支
 	// 11100 对应 bytes_left < SECTOR_SIZE 分支
@@ -600,15 +602,19 @@ static int32_t ide_dev_read(struct inode* inode, struct file* file, char* buf, i
 	// 00111 11111 11111 11100 
 	// 00000 00110 00000 00000
     while (bytes_left > 0) {
-        uint32_t lba = part->start_lba + (file->fd_pos / SECTOR_SIZE);
+        // uint32_t lba = part->start_lba + (file->fd_pos / SECTOR_SIZE);
+        // 使用相对 lba 地址 bread 和 partition_read 内部会处理成绝对地址
+		uint32_t lba = file->fd_pos / SECTOR_SIZE;
         uint32_t offset_in_sec = file->fd_pos % SECTOR_SIZE;
 
         // 先处理非对齐读取（处理起始位置不在 512 字节边界，或者最后一个扇区剩余长度不足一扇区）
         if (offset_in_sec != 0 || bytes_left < SECTOR_SIZE) {
-            if (!io_buf) io_buf = kmalloc(SECTOR_SIZE);
+            // if (!io_buf) io_buf = kmalloc(SECTOR_SIZE);
             
             // 由于并不足一扇区，一次就处理一扇区
-            bread_multi(part->my_disk, lba, io_buf, 1);
+            // bread_multi(part->my_disk, lba, io_buf, 1);
+			struct buffer_head* bh = bread(part, lba);
+			uint8_t* io_buf = bh ->b_data;
             
 			// 从第一个有效字节偏移地址往高地址走（从左往右走），剩下的字节数
             uint32_t left_in_sec = SECTOR_SIZE - offset_in_sec;
@@ -620,6 +626,7 @@ static int32_t ide_dev_read(struct inode* inode, struct file* file, char* buf, i
 			uint32_t chunk_size = (bytes_left < left_in_sec) ? bytes_left : left_in_sec;
             
             memcpy(dst, io_buf + offset_in_sec, chunk_size);
+			brelse(bh);
             
             file->fd_pos += chunk_size;
             bytes_left -= chunk_size;
@@ -628,7 +635,8 @@ static int32_t ide_dev_read(struct inode* inode, struct file* file, char* buf, i
             // 计算目前能进行的最大批量读取扇区数
             uint32_t secs_to_read = bytes_left / SECTOR_SIZE;
 
-            bread_multi(part->my_disk, lba, dst, secs_to_read);
+            // bread_multi(part->my_disk, lba, dst, secs_to_read);
+            partition_read(part, lba, dst, secs_to_read);
             
             uint32_t total_size = secs_to_read * SECTOR_SIZE;
             file->fd_pos += total_size;
@@ -637,7 +645,7 @@ static int32_t ide_dev_read(struct inode* inode, struct file* file, char* buf, i
         }
     }
 
-    if (io_buf) kfree(io_buf);
+    // if (io_buf) kfree(io_buf);
     return (int32_t)count;
 }
 
@@ -668,19 +676,21 @@ static int32_t ide_dev_write(struct inode* inode, struct file* file, char* buf, 
 
     const uint8_t* src = (const uint8_t*)buf;
     uint32_t bytes_left = count;
-    uint8_t* io_buf = NULL; // 用于处理非对齐部分
+    
 
     while (bytes_left > 0) {
-        uint32_t lba = part->start_lba + (file->fd_pos / SECTOR_SIZE);
+        // uint32_t lba = part->start_lba + (file->fd_pos / SECTOR_SIZE);
+        uint32_t lba = file->fd_pos / SECTOR_SIZE;
         uint32_t offset_in_sec = file->fd_pos % SECTOR_SIZE;
 
         // 非对齐写入（起始位置不对齐，或剩余数据不足一扇区）
         // 此时必须执行 RMW (Read-Modify-Write)，否则会破坏扇区内的其他数据
         if (offset_in_sec != 0 || bytes_left < SECTOR_SIZE) {
-            if (!io_buf) io_buf = kmalloc(SECTOR_SIZE);
+            // if (!io_buf) io_buf = kmalloc(SECTOR_SIZE);
 
             // Read，先把旧数据读出来
-            bread_multi(part->my_disk, lba, io_buf, 1);
+            struct buffer_head* bh = bread(part, lba);
+			uint8_t* io_buf = bh->b_data; // 用于处理非对齐部分
 
             // Modify，覆盖 io_buf 中的特定部分
             uint32_t left_in_sec = SECTOR_SIZE - offset_in_sec;
@@ -688,7 +698,9 @@ static int32_t ide_dev_write(struct inode* inode, struct file* file, char* buf, 
             memcpy(io_buf + offset_in_sec, src, chunk_size);
 
             // Write，写回整扇区
-            bwrite_multi(part->my_disk, lba, io_buf, 1);
+            // partition_write(part, lba, io_buf, 1);
+            bwrite(bh);
+			brelse(bh);
 
             file->fd_pos += chunk_size;
             bytes_left -= chunk_size;
@@ -698,7 +710,7 @@ static int32_t ide_dev_write(struct inode* inode, struct file* file, char* buf, 
             uint32_t secs_to_write = bytes_left / SECTOR_SIZE;
 
             // 直接批量写入
-            bwrite_multi(part->my_disk, lba, (void*)src, secs_to_write);
+            partition_write(part, lba, (void*)src, secs_to_write);
 
             uint32_t total_size = secs_to_write * SECTOR_SIZE;
             file->fd_pos += total_size;
@@ -707,7 +719,7 @@ static int32_t ide_dev_write(struct inode* inode, struct file* file, char* buf, 
         }
     }
 
-    if (io_buf) kfree(io_buf);
+    // if (io_buf) kfree(io_buf);
     return (int32_t)count;
 }
 

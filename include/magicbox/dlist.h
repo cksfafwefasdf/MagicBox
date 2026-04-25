@@ -32,20 +32,21 @@ struct dlist{
 
 typedef bool (*func_condition)(struct dlist_elem*,void* arg);
 
-void dlist_init(struct dlist* plist);
+extern void dlist_init(struct dlist* plist);
 // insert [elem] in front of the [front]
-void dlist_insert_front(struct dlist_elem* front,struct dlist_elem* elem);
+extern void dlist_insert_front(struct dlist_elem* front,struct dlist_elem* elem);
 // insert [elem] after [plist->head]
-void dlist_push_front(struct dlist* plist,struct dlist_elem* elem);
-void dlist_iterate(struct dlist* plist);
-void dlist_push_back(struct dlist* plist,struct dlist_elem* elem);
+extern void dlist_push_front(struct dlist* plist,struct dlist_elem* elem);
+extern void dlist_iterate(struct dlist* plist);
+extern void dlist_push_back(struct dlist* plist,struct dlist_elem* elem);
 // remove [pelem] from the dlist,this operation will not release the space
-void dlist_remove(struct dlist_elem* pelem);
-struct dlist_elem* dlist_pop_front(struct dlist* plist);
+extern void dlist_remove(struct dlist_elem* pelem);
+extern struct dlist_elem* dlist_pop_front(struct dlist* plist);
 //  bool dlist_empty(struct dlist* plist);
-uint32_t dlist_len(struct dlist* plist);
-bool dlist_find(struct dlist* plist,struct dlist_elem* obj_elem);
+extern uint32_t dlist_len(struct dlist* plist);
+extern bool dlist_find(struct dlist* plist,struct dlist_elem* obj_elem);
 // traverse the dlist and check if each element satisfies the condition provided by [condition] 
 // if satisfy, return this elem. ohterwise, return NULL
-struct dlist_elem* dlist_traversal(struct dlist* plist,func_condition condition,void* arg);
+extern struct dlist_elem* dlist_traversal(struct dlist* plist,func_condition condition,void* arg);
+extern void dlist_insert_order(struct dlist* plist,func_condition condition,struct dlist_elem* pelem);
 #endif

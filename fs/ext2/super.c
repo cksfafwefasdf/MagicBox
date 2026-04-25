@@ -120,12 +120,16 @@ static void ext2_read_inode(struct inode* inode) {
     uint32_t sec_lba = BLOCK_TO_SECTOR(sb, inode_table_block) + (byte_offset / SECTOR_SIZE);
     uint32_t off_in_sec = byte_offset % SECTOR_SIZE;
 
+    struct buffer_head* bh = bread(part, sec_lba);
+    char* inode_buf = (char*) bh->b_data;
+
     // 读取磁盘数据
-    char* inode_buf = (char*)kmalloc(SECTOR_SIZE);
+    // char* inode_buf = (char*)kmalloc(SECTOR_SIZE);
 
     ASSERT(inode_buf != NULL);
 
-    partition_read(part, sec_lba, inode_buf, 1);
+    // partition_read(part, sec_lba, inode_buf, 1);
+    
     
     struct ext2_inode* ei = (struct ext2_inode*)(inode_buf + off_in_sec);
 
@@ -171,7 +175,8 @@ static void ext2_read_inode(struct inode* inode) {
             break;
     }
 
-    kfree(inode_buf);
+    // kfree(inode_buf);
+    brelse(bh);
 }
 
 static void ext2_write_inode(struct inode* inode) {
@@ -196,16 +201,19 @@ static void ext2_write_inode(struct inode* inode) {
     uint32_t sec_lba = BLOCK_TO_SECTOR(sb, inode_table_block) + (byte_offset / SECTOR_SIZE);
     uint32_t off_in_sec = byte_offset % SECTOR_SIZE;
 
+    struct buffer_head* bh = bread(part, sec_lba);
+    char* io_buf = (char*) bh->b_data;
+
     // Read-Modify-Write (RMW) 过程
     // 即使 Ext2 不会跨扇区（因为 ext2 的 inode 的大小是128或者256，不会跨扇区）
     // 但为了安全起见我们仍分配 1 个扇区缓冲区
-    char* io_buf = (char*)kmalloc(SECTOR_SIZE);
-    if (io_buf == NULL) {
-        PANIC("ext2_write_inode: fail to kmalloc for io_buf");
-    }
+    // char* io_buf = (char*)kmalloc(SECTOR_SIZE);
+    // if (io_buf == NULL) {
+    //     PANIC("ext2_write_inode: fail to kmalloc for io_buf");
+    // }
 
     // 先读出整块扇区，避免破坏同扇区的其他 Inode
-    partition_read(part, sec_lba, io_buf, 1);
+    // partition_read(part, sec_lba, io_buf, 1);
 
     // 找到缓冲区中的目标位置
     struct ext2_inode* ei = (struct ext2_inode*)(io_buf + off_in_sec);
@@ -219,10 +227,15 @@ static void ext2_write_inode(struct inode* inode) {
     // 拷贝块寻址数组 (i_block[15])
     memcpy(ei->i_block, inode->ext2_i.i_block, sizeof(uint32_t) * 15);
 
+    // 此处 now 的更新不能使用 update_time 函数！
+    // 因为 update_time 的底层又调用了 ext2_write_inode，如果我们直接调用 update_time
+    // 那么就会出现循环调用了！
+    uint32_t now = (uint32_t)sys_time();
+
     // 更新 ctime (Status Change Time)
     // 只要进入了这个 write_inode 函数，说明 inode 的元数据（大小、链接数、块指向）变了
     // 按照 Unix 标准，此时必须更新 ctime。
-    update_time(inode,CTIME);
+    inode->i_ctime = now;
 
     // 将内存中的三个时间戳刷入磁盘镜像 (ei 是磁盘上的结构)
     ei->i_atime = inode->i_atime;
@@ -232,15 +245,17 @@ static void ext2_write_inode(struct inode* inode) {
     // 处理 dtime (Deletion Time)
     // 如果链接数为 0，说明文件被删除了，记录删除时间
     if (inode->ext2_i.i_links_count == 0) {
-        ei->i_dtime = (uint32_t)sys_time();
+        ei->i_dtime = now;
     } else {
         ei->i_dtime = 0;
     }
 
     // 写回磁盘
-    partition_write(part, sec_lba, io_buf, 1);
+    // partition_write(part, sec_lba, io_buf, 1);
+    bwrite(bh);
 
-    kfree(io_buf);
+    // kfree(io_buf);
+    brelse(bh);
 }
 
 // 由于 ext2 的超级块里面维护了很多实时的计数信息，因此如果要卸载超级块的话必须要同步一下

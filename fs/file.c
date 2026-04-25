@@ -156,6 +156,6 @@ int32_t file_mmap(struct file* file, uint32_t addr, uint32_t len, uint32_t prot,
         return -ENODEV;
     }
 	// 建立映射视为一次访问
-    file->fd_inode->i_atime = (uint32_t)sys_time();
+	update_time(file->fd_inode, ATIME);
     return file->f_op->mmap(file->fd_inode, file, addr, len, prot, flags, offset);
 }

@@ -7,6 +7,14 @@
 #include <sync.h>
 #include <hashtable.h>
 #include <interrupt.h>
+#include <memory.h>
+#include <timer.h>
+#include <thread.h>
+
+// 单次合并写入的最大扇区数
+#define MAX_SYNC_COUNT SECTORS_PER_OP_BLOCK
+
+extern struct task_struct* sync_thread;
 
 static struct ide_buffer global_ide_buffer; 
 
@@ -37,6 +45,17 @@ static bool buffer_condition(struct dlist_elem* pelem,void* arg){
     return bh->b_dev == bk->disk&&bh->b_blocknr == bk->lba;
 }
 
+// arg 传入的是待插入的 pelem 指针本身
+static bool _cb_bh_lba_condition(struct dlist_elem* pelem, void* arg) {
+    struct dlist_elem* new_elem = (struct dlist_elem*)arg;
+    
+    // 从 tag 还原回 buffer_head
+    struct buffer_head* bh_in_list = member_to_entry(struct buffer_head, dirty_tag, pelem);
+    struct buffer_head* bh_new     = member_to_entry(struct buffer_head, dirty_tag, new_elem);
+    
+    // 如果当前链表中的块 LBA 大于新块，说明找到了插入位置
+    return bh_in_list->b_blocknr > bh_new->b_blocknr;
+}
 
 void ide_buffer_init(){
     printk("ide_buffer_init...\n");
@@ -44,20 +63,22 @@ void ide_buffer_init(){
     
     lock_init(&global_ide_buffer.lock);
     lock_acquire(&global_ide_buffer.lock);
-    global_ide_buffer.max_blk_num = BUFFER_NUM; 
-    global_ide_buffer.cur_blk_num = 0;
     global_ide_buffer.buf_blk_size = SECTOR_SIZE; 
+    global_ide_buffer.max_blk_num = (mem_bytes_total / BUFFER_RATE)/global_ide_buffer.buf_blk_size; 
+    global_ide_buffer.cur_blk_num = 0;
+    
     dlist_init(&global_ide_buffer.lru_list);
 
     hash_init(&global_ide_buffer.hash_table,HASH_SIZE,buffer_hash,buffer_condition);
     
     lock_release(&global_ide_buffer.lock);
+    printk("max buffer num: %d\n",global_ide_buffer.max_blk_num);
     printk("ide_buffer_init done\n");
 }
 
-// 从缓存中驱逐一个缓存块
-static bool blk_evict(void) {
-    // 先从 LRU 中找到一个可用的缓存块
+// 从 LRU 中找到一个可用的缓存块
+static struct buffer_head* find_victim(void){
+    
     struct dlist_elem* pelem = global_ide_buffer.lru_list.head.next;
     struct buffer_head* victim = NULL;
 
@@ -65,12 +86,19 @@ static bool blk_evict(void) {
         struct buffer_head* tmp = member_to_entry(struct buffer_head, lru_tag, pelem);
         
         // 只有没有进程使用的块才可以被驱逐
+        // 只要有引用，不管脏不脏，无论如何都不能释放
         if (tmp->b_ref_count == 0) {
             victim = tmp;
             break; 
         }
         pelem = pelem->next;
     }
+
+    return victim;
+}
+
+// 从缓存中驱逐一个缓存块
+static bool blk_evict(struct buffer_head* victim) {
 
     if (!victim) {
         // 如果翻遍了 LRU 都没有 ref_count == 0 的块，
@@ -84,19 +112,7 @@ static bool blk_evict(void) {
     // 理论上被选为牺牲者的块 ref_count 必须为 0
     ASSERT(victim->b_ref_count == 0);
 
-
-    // 我们先采用直写缓存，因此此处直接淘汰就行
-
-    // 脏数据落盘 (Write-back)
-    // 如果该块在内存中被修改过，必须先同步到磁盘
-    // if (victim->b_dirty) {
-    //     // 这里的 ide_write 是阻塞的
-    //     ide_write(victim->b_dev, victim->b_blocknr, victim->b_data, 1);
-    //     victim->b_dirty = false;
-    // }
-
-    
-
+    // 我们在函数外部进行了写回淘汰，因此此处直接淘汰就行
     // 从追踪结构中摘除
     // 这样之后 getblk 就彻底找不到这个块了
     hash_remove(&global_ide_buffer.hash_table, &victim->hash_tag);
@@ -112,68 +128,101 @@ static bool blk_evict(void) {
     return true;
 }
 
-static struct buffer_head* getblk(struct disk* dev, uint32_t lba){
-    // 首先现在hash表中查看该内存是否缓存命中
-    struct buffer_key bk= {lba,dev};
-    struct dlist_elem* de = NULL;
-    struct buffer_head* bh = NULL;
-
+static struct buffer_head* getblk(struct disk* dev, uint32_t lba) {
+    struct buffer_key bk = {lba, dev};
+    
+    // 缓存命中
     lock_acquire(&global_ide_buffer.lock);
-    de = hash_find(&global_ide_buffer.hash_table,(void*)(&bk));
-    // 命中
-    if(NULL!=de){
-        bh = member_to_entry(struct buffer_head,hash_tag,de);
-        // 添加引用计数，将元素移动到lru队列队尾
+    struct dlist_elem* de = hash_find(&global_ide_buffer.hash_table, &bk);
+    if (de) {
+        struct buffer_head* bh = member_to_entry(struct buffer_head, hash_tag, de);
         bh->b_ref_count++;
         dlist_remove(&bh->lru_tag);
-        dlist_push_back(&global_ide_buffer.lru_list,&bh->lru_tag);
+        dlist_push_back(&global_ide_buffer.lru_list, &bh->lru_tag);
         lock_release(&global_ide_buffer.lock);
         return bh;
     }
 
-    // 未命中，先检查是否达到了阈值
-    // 如果达到了阈值，那么就执行 evict 逻辑 kfree 释放一下不需要的块再 kmalloc
-    // 最好用 while，因为一次 evict 可能由于某些块被锁定而失败，或者需要腾出更多空间
-    while (global_ide_buffer.cur_blk_num >= global_ide_buffer.max_blk_num) {
-        // blk_evict 成功驱逐返回 true，无块可驱逐返回 false
-        if (!blk_evict()) break; 
+    // 压力预警，当负载达到 80% 了，进行后台刷脏，但是不阻塞当前进程 
+    if (global_ide_buffer.cur_blk_num > (global_ide_buffer.max_blk_num * 8 / 10)) {
+        // 唤醒后台 sync 线程
+        if(sync_thread->status == TASK_WAITING){
+            thread_unblock(sync_thread);
+        }
     }
 
-    // 动态申请
-    // 申请管理结构
-    bh = (struct buffer_head*)kmalloc(sizeof(struct buffer_head));
-
-    if(bh == NULL){
-        // 此处先直接 panic 简单处理
-        // 正常情况下，我们可以在此处先执行一次 evict，腾出些内存再尝试重新 malloc
-        PANIC("getblk: bh is NULL!");
+    // 慢速路径 (回收与分配) 
+    // 如果缓存达到了 90% 满了，则直接在当前进程中阻塞回收
+    // 我们在第二次拿锁插入时，并没有检查 cur_blk_num
+    // 虽然我们已经执行了 blk_evict，但在释放锁去 kmalloc 的间隙
+    // 如果有多个进程同时并发地执行 getblk 分配不同的块，它们可能会同时穿过 while 循环，然后各自申请内存
+    // 最后在插入阶段依次增加 cur_blk_num。
+    // 这会导致 cur_blk_num 暂时性地超过 max_blk_num
+    // 为了减少这种情况出现的概率，我们的阻塞回收阈值设置在 90% 
+    // 这样的话不容易超过最大限制，即使超过了其实也没事，因为我们下面的 blk_evict 是用 while 执行的
+    // 那些超过的部分都会被刷走
+    while (global_ide_buffer.cur_blk_num >= (global_ide_buffer.max_blk_num * 9 / 10)) {
+        struct buffer_head* victim = find_victim();
+        if (!victim) {
+            // 若全员处于引用中
+            // 可以选择 sleep 等待别人 brelse
+            // 或者暂时允许超过 max 限制（动态伸缩）
+            // 但是目前我们先 panic 来组织这种情况
+            PANIC("blk_evict: buffer exhausted!\n");
+            break; 
+        }
+        
+        // 如果 victim 是脏的，那么我们得给他写回后再淘汰它
+        if (victim->b_dirty) {
+            // 在 IO 前释放全局锁，否则整个系统缓存都会卡死在磁盘 IO 上
+            lock_release(&global_ide_buffer.lock);
+            ide_write(victim->b_dev, victim->b_blocknr, victim->b_data, 1);
+            lock_acquire(&global_ide_buffer.lock);
+            // 重新标记后继续循环，因为释放锁期间 victim 可能被别人引用了
+            victim->b_dirty = false;
+            continue; 
+        }
+        
+        blk_evict(victim);
     }
-
-    // 申请数据区
-    bh->b_data = kmalloc(global_ide_buffer.buf_blk_size); 
-
-    if(bh->b_data == NULL){
-        // 此处先直接 panic 简单处理
-        // 正常情况下，我们可以在此处先执行一次 evict，腾出些内存再尝试重新 malloc
-        PANIC("getblk: bh->b_data is NULL!");
-    }
-
-    // 初始化属性并挂载
-    bh->b_dev = dev;
-    bh->b_blocknr = lba;
-    bh->b_ref_count = 1;
-    bh->b_dirty = false;
-    bh->b_valid = false; // 由于没有存有真实的数据，是新申请的，所以没有有效数据，valid为false
-    hash_insert(&global_ide_buffer.hash_table,(void*)(&bk),&bh->hash_tag);
-    dlist_push_back(&global_ide_buffer.lru_list,&bh->lru_tag);
-    global_ide_buffer.cur_blk_num++;
-
     lock_release(&global_ide_buffer.lock);
+
+    // 在锁外申请内存，降低锁竞争
+    struct buffer_head* new_bh = kmalloc(sizeof(struct buffer_head));
+    new_bh->b_data = kmalloc(global_ide_buffer.buf_blk_size);
+    if(new_bh == NULL || new_bh->b_data == NULL){
+        // 此处先直接 panic 简单处理
+        // 正常情况下，我们可以在此处先执行一次 evict，腾出些内存再尝试重新 malloc
+        PANIC("getblk: fail to kmalloc!");
+    }
+
+    // 插入 (Double Check) 
+    lock_acquire(&global_ide_buffer.lock);
+    de = hash_find(&global_ide_buffer.hash_table, &bk);
+    if (de) {
+        // 别人抢先创建了，自杀并返回现有的
+        kfree(new_bh->b_data); kfree(new_bh);
+        struct buffer_head* bh = member_to_entry(struct buffer_head, hash_tag, de);
+        bh->b_ref_count++;
+        lock_release(&global_ide_buffer.lock);
+        return bh;
+    }
     
-    return bh;
+    // 初始化属性并挂载
+    new_bh->b_dev = dev;
+    new_bh->b_blocknr = lba;
+    new_bh->b_ref_count = 1;
+    new_bh->b_dirty = false;
+    new_bh->b_valid = false; // 由于没有存有真实的数据，是新申请的，所以没有有效数据，valid为false
+    hash_insert(&global_ide_buffer.hash_table,(void*)(&bk),&new_bh->hash_tag);
+    dlist_push_back(&global_ide_buffer.lru_list,&new_bh->lru_tag);
+    global_ide_buffer.cur_blk_num++;
+    lock_release(&global_ide_buffer.lock);
+    return new_bh;
 }
 
 void brelse(struct buffer_head* bh){
+    // printk("brelse: 0x%x refcnt: %d\n",bh->b_blocknr,bh->b_ref_count);
     if(NULL==bh){
         return;
     }
@@ -194,6 +243,32 @@ void brelse(struct buffer_head* bh){
     lock_release(&global_ide_buffer.lock);
 }
 
+// bread 的零拷贝版本，用户不需要传入缓冲区，而是直接操作缓冲区中的内存副本
+// 此处的 lba 需要使用绝对的 lba 地址，不能使用相对 lba 地址，所以此函数叫做 _bread
+// 我们正常使用需要使用宏 bread，它会负责将相对 lba 转成绝对 lba 地址
+// 由于 _bread 直接引用了 ide 缓存，因此用户需要自己管理 缓存计数，使用完毕后需要手动 brelse
+// 目前最主要就是给 ext2_write_inode 和 ext2_read_inode 来用，因为他们会被调用用来读取 inode，并且一般只读一个扇区，使用该函数可以提速
+// 我们目前的延迟写回中， inode 的缓存仍然是直写缓存，每次操作进行完毕后都直接调用 write_inode 写回
+// 将延迟写回的任务全部放到 ide 层上来做
+struct buffer_head* _bread(struct disk* dev, uint32_t lba) {
+    // 获取块，getblk 内部处理了引用计数 ref_count++
+    struct buffer_head* bh = getblk(dev, lba);
+    
+    // 如果数据无效，直接读盘到缓存区
+    if (!bh->b_valid) {
+        // getblk 已经拿到了全局锁，但 ide_read 是阻塞且开中断的
+        // 此处可能会引发进程切换
+        ide_read(dev, lba, bh->b_data, 1);
+        bh->b_valid = true; // 当前的数据就是最新数据，valid 置为 true
+        bh->b_dirty = false; 
+    }
+    
+    // 返回结构体指针，用户通过 bh->b_data 访问数据
+    return bh;
+}
+
+// 由于多扇区的读写会涉及到多个 buffer_head，目前的架构当中不太好针对这种情况实现零拷贝
+// 因此多扇区读的部分还是依然先使用有拷贝的实现
 void bread_multi(struct disk* dev, uint32_t start_lba, void* out_buf, uint32_t sec_cnt) {
     uint32_t i = 0;
     while (i < sec_cnt) {
@@ -252,47 +327,112 @@ void bread_multi(struct disk* dev, uint32_t start_lba, void* out_buf, uint32_t s
     }
 }
 
-// void ide_write(struct disk* hd,uint32_t lba,void* buf,uint32_t sec_cnt)
-// 采用直写式缓存
-void bwrite_multi(struct disk* dev, uint32_t start_lba, void* src_buf, uint32_t sec_cnt) {
-    uint32_t secs_done = 0;
+void sync_ide_buffer(void *arg UNUSED) {
+    // 预分配一个足够大的临时缓冲区，避免在循环里频繁申请内存
+    // 大小为 SECTORS_PER_OP_BLOCK * 512
+    uint32_t io_buffer_sec_cnt = (MAX_SYNC_COUNT>global_ide_buffer.max_blk_num)?(global_ide_buffer.max_blk_num):MAX_SYNC_COUNT;
+    uint8_t* io_buffer = kmalloc(io_buffer_sec_cnt * SECTOR_SIZE);
+    if (io_buffer == NULL) PANIC("sync: fail to malloc io_buffer");
 
-    while (secs_done < sec_cnt) {
-        // 我们最多一次性只能连续写回 16 块，因此先截断一下
-        uint32_t curr_batch_cnt = (sec_cnt - secs_done > SECTORS_PER_OP_BLOCK) ? 
-                                   SECTORS_PER_OP_BLOCK : (sec_cnt - secs_done);
-        
-        uint8_t* batch_src = (uint8_t*)src_buf + (secs_done * SECTOR_SIZE);
-        uint32_t current_lba_base = start_lba + secs_done;
+    while (1) {
+        printk("sync_thread: sync disk...\n");
+        for (int c_no = 0; c_no < CHANNEL_NUM; c_no++) {
+            for (int d_no = 0; d_no < DEVICE_NUM_PER_CHANNEL; d_no++) {
+                struct disk* dev = &channels[c_no].devices[d_no];
+                if (dev->name[0] == '\0'|| dev->i_rdev == 0 || dlist_empty(&dev->dirty_list)) continue;
 
-        // 物理落盘优先，直接把用户数据写进去，这是最快的
-        // 这一步保证了至少磁盘数据永远是最新的
-        ide_write(dev, current_lba_base, batch_src, curr_batch_cnt);
-        // 直写式缓存同步，只处理那些“已经在缓存里”的块 以便保证缓存一致
-        // 如果每一次写操作都将所有数据都更新进缓存的话，设想一种这样的情况
-        // 如果我们的缓存只有 4MB，用户这时写了 10MB 的数据到磁盘中
-        // 如果这 10MB 全都写到缓存里的话，我们的缓存会迅速耗尽！
-        lock_acquire(&global_ide_buffer.lock);
-        for (uint32_t i = 0; i < curr_batch_cnt; i++) {
-            uint32_t current_lba = current_lba_base + i;
-            
-            // 这里不要用 getblk，因为 getblk 没命中会新建。
-            // 我们需要“只查不增”
-            struct buffer_key bk = {current_lba, dev};
-            
-            struct dlist_elem* de = hash_find(&global_ide_buffer.hash_table, &bk);
-            
-            if (de) {
-                struct buffer_head* bh = member_to_entry(struct buffer_head, hash_tag, de);
-                // 既然磁盘已经写成功了，如果缓存里有，顺手更新掉
-                memcpy(bh->b_data, batch_src + (i * SECTOR_SIZE), SECTOR_SIZE);
-                bh->b_valid = true; 
-                bh->b_dirty = false; // 因为已经直写落盘了，所以它是干净的
+                while (!dlist_empty(&dev->dirty_list)) {
+                    struct buffer_head* batch[MAX_SYNC_COUNT];
+                    int count = 0;
+                    uint32_t start_lba;
+
+                    lock_acquire(&global_ide_buffer.lock);
+                    if (dlist_empty(&dev->dirty_list)) {
+                        lock_release(&global_ide_buffer.lock);
+                        break;
+                    }
+
+                    // 提取连续脏块
+                    struct dlist_elem* pelem = dlist_pop_front(&dev->dirty_list);
+                    struct buffer_head* bh = member_to_entry(struct buffer_head, dirty_tag, pelem);
+                    batch[count++] = bh;
+                    start_lba = bh->b_blocknr;
+
+                    while (count < MAX_SYNC_COUNT && !dlist_empty(&dev->dirty_list)) {
+                        struct dlist_elem* next_pelem = dev->dirty_list.head.next;
+                        struct buffer_head* next_bh = member_to_entry(struct buffer_head, dirty_tag, next_pelem);
+
+                        if (next_bh->b_blocknr == batch[count-1]->b_blocknr + 1) {
+                            dlist_pop_front(&dev->dirty_list);
+                            batch[count++] = next_bh;
+                        } else {
+                            break;
+                        }
+                    }
+                    lock_release(&global_ide_buffer.lock);
+
+                    // 内存拼接，将零散的缓存块数据拷贝到连续的 io_buffer
+                    for (int i = 0; i < count; i++) {
+                        memcpy(io_buffer + i * SECTOR_SIZE, batch[i]->b_data, SECTOR_SIZE);
+                    }
+
+                    // 批量 IO，一次性写入磁盘
+                    ide_write(dev, start_lba, io_buffer, count);
+
+                    // printk("\nsync_thread: write %d sectors to dev: 0x%x LBA:0x%x",count, dev->i_rdev, start_lba);
+
+                    // 状态清理
+                    lock_acquire(&global_ide_buffer.lock);
+                    for (int i = 0; i < count; i++) {
+                        batch[i]->b_dirty = false;
+                        // 如果有引用等待，可以在这里处理
+                    }
+                    lock_release(&global_ide_buffer.lock);
+                }
             }
-            
+        }
+
+        // 定期休眠
+        // 即使被 thread_unblock 强制唤醒也没事
+        // 因为 sys_milsleep 中的 thread_block 后有一个将进程移出睡眠队列的操作
+        // 可以保证被唤醒后的进程不在睡眠队列中
+        sys_milsleep(5000); 
+    }
+}
+
+// 针对零拷贝的 bread 设计的零拷贝的 write
+void bwrite(struct buffer_head* bh) {
+    if (bh == NULL) return;
+    
+    lock_acquire(&global_ide_buffer.lock);
+    if (!bh->b_dirty) {
+        bh->b_dirty = true;
+        // 这里的 bh->b_dev 已经在 bread 的 getblk 时填好了
+        dlist_insert_order(&bh->b_dev->dirty_list, _cb_bh_lba_condition, &bh->dirty_tag);
+    }
+    lock_release(&global_ide_buffer.lock);
+}
+
+// 完全异步的 io 操作
+// 全量延迟写
+void bwrite_multi(struct disk* dev, uint32_t start_lba, void* src_buf, uint32_t sec_cnt) {
+    for (uint32_t i = 0; i < sec_cnt; i++) {
+        uint32_t current_lba = start_lba + i;
+        // 没命中就申请一个，命中了就增加引用
+        // getblk 内部会处理缓存的负载
+        struct buffer_head* bh = getblk(dev, current_lba);
+        
+        // 既然是全块覆盖写，不需要 read 磁盘。直接 memcpy
+        memcpy(bh->b_data, (uint8_t*)src_buf + (i * SECTOR_SIZE), SECTOR_SIZE);
+        
+        bh->b_valid = true;  // 数据已经是最新的了
+        lock_acquire(&global_ide_buffer.lock);
+        if (!bh->b_dirty) {
+            bh->b_dirty = true;
+            // 加入脏队列，按照 lba 升序插入，以便后续合并
+            dlist_insert_order(&dev->dirty_list, _cb_bh_lba_condition, &bh->dirty_tag); 
         }
         lock_release(&global_ide_buffer.lock);
-
-        secs_done += curr_batch_cnt;
+        brelse(bh); // 只是减少引用，数据还在缓存里，等 sync 线程处理
     }
 }

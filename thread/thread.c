@@ -50,13 +50,6 @@ extern void switch_to(struct task_struct* cur,struct task_struct* next);
 // 由于我们的内核栈和pcb不再同页，因此需要使用其他的方法来获得栈顶
 // 我们必须在栈页的最开头存一个指针指向 task_struct，通过那个指针来找到task_struct
 struct task_struct* get_running_task_struct() {
-    // uint32_t esp;
-    // asm("mov %%esp, %0" : "=g"(esp));
-    // // 假设内核栈是 PG_SIZE * 2 (8KB)，则掩码是 0xffffe000
-    // uint32_t stack_page_start = esp & KERNEL_THREAD_STACK_MASK; 
-    // // 栈页最底部存放着 PCB 指针
-    // return *(struct task_struct**)stack_page_start;
-
 	return tss.cur_task;
 }
 
@@ -113,7 +106,6 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 		pthread->sigactions[i].sa_flags = 0;
 		pthread->sigactions[i].sa_restorer = NULL;
 	}
-
 
 	// the others set as -1
 	uint8_t fd_idx = 0;

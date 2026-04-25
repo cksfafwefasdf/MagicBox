@@ -32,6 +32,8 @@
 #define partition_write(part, logic_lba, buf, count) \
     bwrite_multi((part)->my_disk, PART_LBA(part, logic_lba), (buf), (count))
 
+// struct buffer_head* _bread(struct disk* dev, uint32_t lba)
+#define bread(part, logic_lba) _bread((part)->my_disk, PART_LBA(part, logic_lba))
 
 // 对于第一块盘 sda：i_rdev 是 0x0300。
 // sda1 就是 0x0300 + 1 = 0x0301。
@@ -69,6 +71,7 @@ struct disk{
 	struct partition all_disk_part; 
 	uint32_t i_rdev; // 逻辑设备号，用于在vfs中注册时使用
 	uint32_t total_sectors;
+	struct dlist dirty_list; // 用于挂载脏扇区头，以便延迟写回
 };
 
 struct ide_channel{

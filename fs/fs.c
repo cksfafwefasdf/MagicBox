@@ -1600,7 +1600,7 @@ int32_t sys_statfs(const char* path, struct statfs* buf) {
 static int32_t probe_fs_unmounted(struct partition* part, struct statfs* st) {
     // 尝试探测 SIFS
     struct sifs_super_block sifs_sb;
-    partition_read(part, 1, &sifs_sb, 1); // 假设 SIFS 超级块在第 1 扇区
+    partition_read(part, 1, &sifs_sb, 1); // SIFS 超级块在第 1 扇区
     if (sifs_sb.magic == SIFS_FS_MAGIC_NUMBER) {
         st->f_type = sifs_sb.magic;
         st->f_blocks = sifs_sb.sec_cnt;

@@ -78,25 +78,27 @@ void update_time(struct inode* inode, int flags) {
     if (inode == NULL) return;
 
     int64_t now = sys_time();
-    // bool changed = false;
+    bool changed = false;
 
     if ((flags & ATIME)) {
         inode->i_atime = (uint32_t)now;
-        // changed = true;
+        changed = true;
     }
     if ((flags & MTIME)) {
         inode->i_mtime = (uint32_t)now;
-        // changed = true;
+        changed = true;
     }
     if ((flags & CTIME)) {
         inode->i_ctime = (uint32_t)now;
-        // changed = true;
+        changed = true;
     }
 
     // 因为是直写式缓存，一旦数据改变，立即调用底层写回
-    // if (changed && inode->i_sb->s_op->write_inode) {
-    //     inode->i_sb->s_op->write_inode(inode);
-    // }
+    // 底层写操作如果是延迟写的话效率还是很高的
+    ASSERT(inode->i_sb->s_op->write_inode);
+    if (changed) {
+        inode->i_sb->s_op->write_inode(inode);
+    }
 }
 
 void inode_cache_init() {

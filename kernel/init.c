@@ -45,6 +45,7 @@ const char* init_envp[] = {
 
 struct task_struct* main_thread;
 struct task_struct* idle_thread;
+struct task_struct* sync_thread;
 
 void init(void) {
     // 先打开一个可读可写的控制台
@@ -209,6 +210,8 @@ static void after_init() {
     intr_enable(); // ide_init will use the interrupt
     ide_buffer_init();
     ide_init();
+    // 启动 sync 内核线程，他会定期将脏块刷回磁盘
+    sync_thread = thread_start("sync",5,sync_ide_buffer,NULL);
     time_init(); // 这里面会用到printk函数，因此放到此处
     filesys_init();
     make_dev_nodes();
