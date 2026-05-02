@@ -26,6 +26,9 @@ void io_perf_test() {
     printf("Step 1: Writing data to buffer cache...\n");
     for (int i = 0; i < ITERATIONS; i++) {
         write(fd, buf, BUF_SIZE);
+        if (i % 100 == 0){
+            for(int i=0;i<1000000;i++);
+        }
         if (i % 500 == 0) printf("  Written %d blocks...\n", i);
     }
     

@@ -71,7 +71,9 @@ struct disk{
 	struct partition all_disk_part; 
 	uint32_t i_rdev; // 逻辑设备号，用于在vfs中注册时使用
 	uint32_t total_sectors;
-	struct dlist dirty_list; // 用于挂载脏扇区头，以便延迟写回
+	struct dlist dirty_lists[2]; // 用于挂载脏扇区头，以便延迟写回
+	int32_t active_dirty_idx; // 当前活跃队列的索引 (0 或 1)
+    struct lock lists_lock; // 保护该分区队列切换的锁
 };
 
 struct ide_channel{

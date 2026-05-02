@@ -49,4 +49,5 @@ extern bool dlist_find(struct dlist* plist,struct dlist_elem* obj_elem);
 // if satisfy, return this elem. ohterwise, return NULL
 extern struct dlist_elem* dlist_traversal(struct dlist* plist,func_condition condition,void* arg);
 extern void dlist_insert_order(struct dlist* plist,func_condition condition,struct dlist_elem* pelem);
+extern void dlist_move_all(struct dlist* dst, struct dlist* src);
 #endif

@@ -34,8 +34,6 @@ struct vm_area* find_vma(struct task_struct* task, uint32_t vaddr) {
     printk("\n");
 #endif
     
-
-    
     if (vma_tag == NULL) {
         return NULL;
     }

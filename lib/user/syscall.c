@@ -365,3 +365,7 @@ int32_t link(const char* _oldpath, const char* _newpath){
 void sync(){
 	_syscall0(SYS_SYNC);
 }
+
+int32_t swapon(const char* _pathname){
+	return _syscall1(SYS_SWAPON,_pathname);
+}

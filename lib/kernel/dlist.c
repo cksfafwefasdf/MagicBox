@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <debug.h>
 #include <vgacon.h>
+#include <ide_buffer.h>
+#include <stdio-kernel.h>
 
 #define TIMEOUT_CNT 100000000
 
@@ -84,6 +86,16 @@ struct dlist_elem* dlist_traversal(struct dlist* plist,func_condition condition,
 		return NULL;
 	}
 	while(elem!=&plist->tail){
+		if (elem->prev == NULL || elem->next == NULL) {
+            printk("BAD NODE in list detected during traversal!\n");
+            printk("Node addr: 0x%x, prev: 0x%x, next: 0x%x\n", elem, elem->prev, elem->next);
+            // 看看这个 node 到底属于哪个 page
+            PANIC("Inconsistent list state");
+        }
+        // 检查双向指向是否正确
+        if (elem->next->prev != elem || elem->prev->next != elem) {
+            PANIC("Double link broken!");
+        }
 
 		if (count++ > TIMEOUT_CNT) { 
             put_str("\n!!!! DEAD LOOP DETECTED !!!!\n");
@@ -115,4 +127,21 @@ void dlist_insert_order(struct dlist* plist,func_condition condition,struct dlis
         // 或者链表本身为空，都应该插在 tail 之前。
         dlist_insert_front(&plist->tail, pelem);
     }
+}
+
+// 将 src 链表中的所有元素移动到 dst 链表中，并清空 src
+void dlist_move_all(struct dlist* dst, struct dlist* src) {
+    if (dlist_empty(src)) return;
+
+    // 修正新链表的首尾连接
+    dst->head.next = src->head.next;
+    dst->tail.prev = src->tail.prev;
+
+    // 修正元素对新链表头的指向
+    dst->head.next->prev = &dst->head;
+    dst->tail.prev->next = &dst->tail;
+
+    // 彻底重置原链表为空
+    src->head.next = &src->tail;
+    src->tail.prev = &src->head;
 }

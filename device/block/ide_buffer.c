@@ -118,6 +118,11 @@ static bool blk_evict(struct buffer_head* victim) {
     hash_remove(&global_ide_buffer.hash_table, &victim->hash_tag);
     dlist_remove(&victim->lru_tag);
 
+    // 一定要及时把所有的 tag 都移除相应的队列
+    if(dlist_is_linked(&victim->dirty_tag)){
+        dlist_remove(&victim->dirty_tag);
+    }
+
     // 彻底销毁内存对象
     // 先释放数据区，再释放管理结构
     kfree(victim->b_data);
@@ -171,18 +176,32 @@ static struct buffer_head* getblk(struct disk* dev, uint32_t lba) {
             PANIC("blk_evict: buffer exhausted!\n");
             break; 
         }
-        
+
         // 如果 victim 是脏的，那么我们得给他写回后再淘汰它
         if (victim->b_dirty) {
+            // 必须先摘除节点，防止 sync_thread 碰到它，出现竞态问题
+            // 因为 sync_thread 也会进行脏块的刷盘操作
+            // 此处对一个脏块进行刷盘后，如果不及时将其移出脏队列的话
+            // 待会儿 sync_thread 又会对这个脏块进行 sync
+            // 但是此处的 blk_evict 已经将相应的脏块给 kfree 了
+            // blk_evict 里面不会将相应的脏块移出 dirty 队列，只会将其移出 lru 队列和 hash 表
+            // 因此待会儿 sync_thread 又会去访问这个空的数据块！
+            // 出现稀奇古怪的问题
+            lock_acquire(&victim->b_dev->lists_lock);
+            dlist_remove(&victim->dirty_tag); // 彻底从脏链表剥离
+            lock_release(&victim->b_dev->lists_lock);
+
             // 在 IO 前释放全局锁，否则整个系统缓存都会卡死在磁盘 IO 上
             lock_release(&global_ide_buffer.lock);
             ide_write(victim->b_dev, victim->b_blocknr, victim->b_data, 1);
             lock_acquire(&global_ide_buffer.lock);
-            // 重新标记后继续循环，因为释放锁期间 victim 可能被别人引用了
+            
             victim->b_dirty = false;
-            continue; 
+            // 此时它已经不在任何链表了，可以直接 blk_evict
+            blk_evict(victim); 
+            continue;
         }
-        
+
         blk_evict(victim);
     }
     lock_release(&global_ide_buffer.lock);
@@ -341,31 +360,68 @@ void sync_ide_buffer(void *arg UNUSED) {
         for (int c_no = 0; c_no < CHANNEL_NUM; c_no++) {
             for (int d_no = 0; d_no < DEVICE_NUM_PER_CHANNEL; d_no++) {
                 struct disk* dev = &channels[c_no].devices[d_no];
-                if (dev->name[0] == '\0'|| dev->i_rdev == 0 || dlist_empty(&dev->dirty_list)) continue;
+                if (dev->name[0] == '\0'|| dev->i_rdev == 0 || dlist_empty(&dev->dirty_lists[dev->active_dirty_idx])) continue;
+                lock_acquire(&dev->lists_lock);
+                
+                // 切换活跃索引，让 bwrite 开始往另一个队列写数据
+                // 现在的旧队列进行排序和同步
+                int old_idx = dev->active_dirty_idx;
+                // 0 变 1，1 变 0
+                dev->active_dirty_idx = 1 - old_idx;
 
-                while (!dlist_empty(&dev->dirty_list)) {
+                lock_release(&dev->lists_lock);
+
+                if (dlist_empty(&dev->dirty_lists[old_idx])){
+                    continue;
+                }
+                // 在锁外重构顺序，以便于合并 io
+                struct dlist sorted_list;
+                dlist_init(&sorted_list);
+                
+                lock_acquire(&global_ide_buffer.lock);    
+                while (!dlist_empty(&dev->dirty_lists[old_idx])) {
+                    // 将旧队列中的节点弹出，然后按需插入 sorted_list 中
+                    // 这个操作的复杂度较高，可能会达到 O(n^2)
+                    struct dlist_elem* pelem = dlist_pop_front(&dev->dirty_lists[old_idx]);
+                    struct buffer_head* bh = member_to_entry(struct buffer_head, dirty_tag, pelem);
+                    // 添加计数，防止被 evict
+                    // 不知道为什么，在此处增加 b_ref_count 的计数的话
+                    // 基准测试的速度反而还会快 2 秒左右，这可能是因为此处可以合并写回，速度更快一些
+                    // 如果不添加计数的话，该块可能会被 evict 出去，evict 在驱逐脏块时，首先会进行一次写回
+                    // 然后回到这里后，又会对这个块进行一次写回，不添加计数的话可能会引入 evict 里面那次额外的同步
+                    // 因此速度会变慢，变慢都不要紧，两次同步可能还会导致额外的一致性问题，最好此处还是加一下
+                    // 这个操作的本质其实是一个缓存锁定操作
+                    bh->b_ref_count++; 
+                    // 使用 insert_order 逻辑，但在私有链表上运行
+                    dlist_insert_order(&sorted_list, _cb_bh_lba_condition, &bh->dirty_tag);
+                }
+                lock_release(&global_ide_buffer.lock);
+
+                // 使用排序后的队列进行 io，速度比不排序直接 io 时可能会提升一倍左右
+                while (!dlist_empty(&sorted_list)) {
                     struct buffer_head* batch[MAX_SYNC_COUNT];
                     int count = 0;
                     uint32_t start_lba;
 
                     lock_acquire(&global_ide_buffer.lock);
-                    if (dlist_empty(&dev->dirty_list)) {
+                    if (dlist_empty(&sorted_list)) {
                         lock_release(&global_ide_buffer.lock);
                         break;
                     }
 
                     // 提取连续脏块
-                    struct dlist_elem* pelem = dlist_pop_front(&dev->dirty_list);
+                    struct dlist_elem* pelem = dlist_pop_front(&sorted_list);
                     struct buffer_head* bh = member_to_entry(struct buffer_head, dirty_tag, pelem);
                     batch[count++] = bh;
                     start_lba = bh->b_blocknr;
 
-                    while (count < MAX_SYNC_COUNT && !dlist_empty(&dev->dirty_list)) {
-                        struct dlist_elem* next_pelem = dev->dirty_list.head.next;
+                    while (count < MAX_SYNC_COUNT && !dlist_empty(&sorted_list)) {
+                        
+                        struct dlist_elem* next_pelem = sorted_list.head.next;
                         struct buffer_head* next_bh = member_to_entry(struct buffer_head, dirty_tag, next_pelem);
 
                         if (next_bh->b_blocknr == batch[count-1]->b_blocknr + 1) {
-                            dlist_pop_front(&dev->dirty_list);
+                            dlist_pop_front(&sorted_list);
                             batch[count++] = next_bh;
                         } else {
                             break;
@@ -388,13 +444,18 @@ void sync_ide_buffer(void *arg UNUSED) {
 
                     // 批量 IO，一次性写入磁盘
                     ide_write(dev, start_lba, io_buffer, count);
-
+                    lock_acquire(&global_ide_buffer.lock);
+                    for (int i = 0; i < count; i++) {
+                        // brelse(batch[i]); 
+                        batch[i]->b_ref_count--;
+                    }
+                    lock_release(&global_ide_buffer.lock);
                     // printk("\nsync_thread: write %d sectors to dev: 0x%x LBA:0x%x",count, dev->i_rdev, start_lba);
                 }
             }
         }
 
-        printk("sync_thread: sync disk done!\n");
+        // printk("sync_thread: sync disk done!\n");
         // 定期休眠
         // 即使被 thread_unblock 强制唤醒也没事
         // 因为 sys_milsleep 中的 thread_block 后有一个将进程移出睡眠队列的操作
@@ -411,7 +472,15 @@ void bwrite(struct buffer_head* bh) {
     if (!bh->b_dirty) {
         bh->b_dirty = true;
         // 这里的 bh->b_dev 已经在 bread 的 getblk 时填好了
-        dlist_insert_order(&bh->b_dev->dirty_list, _cb_bh_lba_condition, &bh->dirty_tag);
+        // dlist_insert_order(&bh->b_dev->dirty_list, _cb_bh_lba_condition, &bh->dirty_tag);
+
+        // 不要在在此处进行 dlist_insert_order，这太费时间了，在叠加 swap 的情况下可能会引发严重的竞态问题
+        // 我们直接在此处进行 O(1) 级别的 push_back，在 sync 的时候再进行重整排序，之后在进行写入 
+        lock_acquire(&bh->b_dev->lists_lock);
+        // 获取活跃队列，将数据压到活跃队列中
+        int32_t active_idx = bh->b_dev->active_dirty_idx;
+        dlist_push_back(&bh->b_dev->dirty_lists[active_idx], &bh->dirty_tag);
+        lock_release(&bh->b_dev->lists_lock);
     }
     lock_release(&global_ide_buffer.lock);
 }
@@ -433,7 +502,16 @@ void bwrite_multi(struct disk* dev, uint32_t start_lba, void* src_buf, uint32_t 
         if (!bh->b_dirty) {
             bh->b_dirty = true;
             // 加入脏队列，按照 lba 升序插入，以便后续合并
-            dlist_insert_order(&dev->dirty_list, _cb_bh_lba_condition, &bh->dirty_tag); 
+            // dlist_insert_order(&dev->dirty_list, _cb_bh_lba_condition, &bh->dirty_tag);
+
+            
+            // 不要在在此处进行 dlist_insert_order，这太费时间了，在叠加 swap 的情况下可能会引发严重的竞态问题
+            // 我们直接在此处进行 O(1) 级别的 push_back，在 sync 的时候再进行重整排序，之后在进行写入 
+            lock_acquire(&dev->lists_lock);
+            int32_t active_idx = dev->active_dirty_idx;
+            // 获取活跃队列，将数据压到活跃队列中
+            dlist_push_back(&dev->dirty_lists[active_idx], &bh->dirty_tag); 
+            lock_release(&dev->lists_lock);
         }
         lock_release(&global_ide_buffer.lock);
         brelse(bh); // 只是减少引用，数据还在缓存里，等 sync 线程处理

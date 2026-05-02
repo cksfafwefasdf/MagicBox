@@ -181,6 +181,9 @@ void schedule(){
 	next->status = TASK_RUNNING;
 	process_activate(next);
 
+	// if(strcmp(next->name,"idle")){
+	// 	printk("schedule: switch to %s\n",next->name);
+	// }
 #ifdef DEBUG_SWITCH_TO
 	put_str(cur->name);put_str(" switch to ");put_str(next->name);put_char('\n');
 	put_int(cur->pid);put_str(" switch to ");put_int(next->pid);put_char('\n');

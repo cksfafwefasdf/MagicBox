@@ -27,6 +27,7 @@
 #include <console.h>
 #include <fcntl.h>
 #include <namei.h>
+#include <swap.h>
 
 // root_part 用于记录根分区，他是全局唯一的
 struct partition* root_part;
@@ -435,6 +436,8 @@ int32_t sys_write(int32_t fd,void* buf, uint32_t count) {
         return -1;
     }
 
+    ASSERT(buf!=NULL);
+
     // 获取全局文件结构体
     int32_t _fd = fd_local2global(get_running_task_struct(), fd);
     struct file* wr_file = &file_table[_fd];
@@ -471,7 +474,6 @@ int32_t sys_read(int32_t fd, void* buf, uint32_t count) {
         printk("sys_read: fd error! fd cannot be negative\n");
         return -EBADF;
     }
-    // ASSERT(buf != NULL);
 
     if (buf == NULL) {
     printk("sys_read: process [%d] passed NULL buffer, count=%d\n", 
@@ -2047,4 +2049,39 @@ int32_t sys_link(const char* _oldpath, const char* _newpath) {
     inode_close(new_record.parent_inode);  // 对应 search_file(newpath)
 
     return ret;
+}
+
+int32_t sys_swapon(const char* _pathname){
+    char path[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, path);
+    struct path_search_record record;
+    memset(&record, 0, sizeof(struct path_search_record));
+    // 搜索源文件
+    int32_t inode_no = search_file(path, &record, true);
+    if (inode_no < 0) {
+        inode_close(record.parent_inode);
+        printk("sys_swapon: file %s not exists\n", _pathname);
+        return -ENOENT; // 源文件不存在
+    }
+
+    struct partition* part = get_part_by_rdev(record.i_dev);
+    struct inode* inode = inode_open(part, inode_no);
+
+    if(inode->i_type != FT_BLOCK_SPECIAL){
+        inode_close(inode);
+        inode_close(record.parent_inode);
+        printk("sys_swapon: this type of device (%d) cannot swapon!\n",inode->i_type);
+        return -ENOTBLK;
+    }
+    if (inode->i_rdev == 0) {
+        printk("sys_swapon: invalid device id\n");
+        inode_close(inode);
+        return -EINVAL;
+    }
+    part = get_part_by_rdev(inode->i_rdev);
+    do_swapon(part);
+    printk("swap on partition %s done!\n",part->name);
+    inode_close(inode);
+    inode_close(record.parent_inode);
+    return 0;
 }

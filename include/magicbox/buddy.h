@@ -43,6 +43,13 @@ struct page {
     bool slab_large; // when malloc above 1024Bytes, large is true
     uint8_t slab_pad[3];
     struct dlist_elem free_list_tag; // 挂载到对应 order 的空闲链表上
+    struct dlist_elem activate_tag; // 挂载到对应 order 的空闲链表上
+    // 指向 task_struct，用来找到进程的页目录 (pgdir)，记录这个页被哪个进程拥有
+    // 由于我们的系统中之前引入了 COW，因此可能会出现多个虚拟地址映射到同一个页上的情况
+    // 在这种情况下想进行 swap 是很复杂的，并且其实在我们的系统中，并不会出现大量的共享页情况
+    // 大多数情况在 fork 的不久后都会立马触发 COW，使得计数变回 1，因此我们只 swap 那些计数为 1 的页
+    struct task_struct* first_owner; 
+    uint32_t first_vaddr; // 记录该物理页对应的虚拟地址
 };
 
 struct free_area {
@@ -58,6 +65,9 @@ struct buddy_pool {
     uint32_t pool_size;
     // 该池对应的 page 数组起始地址，在内核内存管理中，它们都是 global_pages
     struct page* page_base; 
+    // 记录可供置换的活跃页，活跃页会在 mapping_v2p 函数中被挂载到这个队列上
+    // mapping_v2p 在整个系统中只会被 swap_page 函数调用
+    struct dlist activate_list; 
 };
 
 extern void pfree_pages(struct buddy_pool* bpool, struct page* pg, uint32_t order);

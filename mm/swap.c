@@ -11,25 +11,25 @@
 #include <bitmap.h>
 #include <stdint.h>
 #include <wait_exit.h>
+#include <ide.h>
+#include <stdbool.h>
+#include <sync.h>
 
-// 使用位图来磁盘管理swap分区中有哪些空间是空闲的
-struct swap_info {
-    struct bitmap slot_bitmap; // 管理磁盘槽位的分配情况
-    uint32_t start_lba; // 交换区在磁盘上的起始扇区
-    uint32_t slot_cnt; // 总共有多少个 4KB 槽位
-};
+uint8_t next_dev_id = 1;
+// 为了快速索引，用数组存指针
+// 设备号从 1 开始，以便避免创建出的 pte 最终为 0 的情况
+struct swap_info* swap_table[MAX_SWAP_DEVICES+1];
 
-static bool is_vaddr_mapped(struct task_struct* task UNUSED, uint32_t vaddr) {
-    // 先检查页目录项 
-    uint32_t* pde = pde_ptr(vaddr);
-    if (!(*pde & PG_P_1)) {
-        // 如果 PDE 都不存在，说明对应的页表页还没分配，物理页肯定没映射
-        return false; 
-    }
+struct lock swap_lock;
 
-    // 只有 PDE 存在，访问 pte_ptr 才不会导致崩溃
-    uint32_t* pte = pte_ptr(vaddr);
-    return (*pte & PG_P_1);
+static void* swap_out(void);
+static void swap_write(uint32_t pte_val, void* buf);
+static void swap_read(uint32_t pte_val, void* buf);
+static bool swap_in(uint32_t* pte_ptr, uint32_t page_vaddr, struct vm_area* vma);
+
+void swap_init(){
+    memset(swap_table, 0, sizeof(swap_table));
+    lock_init(&swap_lock);
 }
 
 // 将父进程的页表项设置为只读后拷贝给子进程
@@ -87,6 +87,7 @@ void copy_page_tables(struct task_struct* from, struct task_struct* to, void* pa
 	intr_set_status(old_status);
 }
 
+// -d int -D qemu.log
 // 该函数对应两者情况
 // 懒加载/交换：内核分配物理页。
 // 非法访问：访问了完全没有映射、或者不属于用户空间（如访问内核空间地址）的内存
@@ -109,15 +110,16 @@ void swap_page(uint32_t err_code,void* err_vaddr){
 	printk("swap_page:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
 #endif
 	struct task_struct* cur = get_running_task_struct();
+    ASSERT(cur!=NULL);
 	uint32_t vaddr = (uint32_t)err_vaddr;
 
 	// 硬件给出的 vaddr 可能是 0xbffffabc，我们需要把它对齐到 0xbffff000
     uint32_t page_vaddr = vaddr & 0xfffff000;
 
     // 防止swap_page递归重入，掩盖错误的第一现场
-    // 如果报错地址小于 0x1000（第一页），通常不是懒加载，而是代码 Bug，
+    // 如果报错地址小于 0x100000（低端1MB），通常不是懒加载，而是代码 Bug，
     // 主要是针对内核线程的限制，用户进程会发信号自己退出
-    if (vaddr < 0x1000&&cur->pgdir==NULL) {
+    if (vaddr < 0x100000 && cur->pgdir == NULL) {
         printk("CRITICAL: Null Pointer Access at %x! Terminating.\n", vaddr);
         print_stacktrace();
         while(1);
@@ -136,6 +138,19 @@ void swap_page(uint32_t err_code,void* err_vaddr){
         // vma = find_vma_condition(cur, VM_READ|VM_WRITE|VM_GROWSDOWN|VM_ANON);
 		goto segmentation_fault;
 	}
+
+    // 获取 PTE 状态
+    uint32_t* pte_ptr = get_pte_ptr(cur->pgdir, page_vaddr);
+    uint32_t pte_val = (pte_ptr) ? *pte_ptr : 0;
+
+    // 页面在交换分区中 (P=0 且 PTE 有内容)
+    if (pte_val != 0 && !(pte_val & PG_P_1)) {
+        if (!swap_in(pte_ptr, page_vaddr, vma)) {
+            PANIC("swap_page: swap_in failed");
+        }
+        intr_set_status(_old);
+        return;
+    }
 
 	// 尝试栈自动扩容，由于我们在process.c中的start_process函数中
 	// 只默认为用户进程栈的高4KB映射了物理内存
@@ -157,27 +172,43 @@ void swap_page(uint32_t err_code,void* err_vaddr){
     // 如果 is_vaddr_mapped 为 true 却依然触发缺页，可能是 P=0 但位图没清，
     // 在没有置换到交换分区（Swap Partition）前，这种情况通常是异常。
     
-	if (is_vaddr_mapped(cur, page_vaddr)) {
-        // 如果物理页已经存在，但仍然缺页，可能是权限问题（比如写保护）
-        // 但写保护通常由 write_protect 处理，这里直接 panic 方便调试
-        PANIC("swap_page: page already mapped but fault again!");
+    // pte_val!=0 但是 (pte_val & PG_P_1) == 1 时的情况
+    if(pte_val!=0 && (pte_val & PG_P_1)){
+        // 如果 P=1 依然进到这里，说明不是缺页，可能是写保护，但这种情况需要交由 write_protect 处理
+        PANIC("swap_page: unexpected fault");
     }
+
     // while(1);
 	// 合法合同且尚未映射，开始分配物理页
-    // mapping_v2p 内部会完成 palloc 物理页 + 修改位图 + 建立页表映射
-    void* ret_vaddr =  mapping_v2p(PF_USER, page_vaddr);
-    if (ret_vaddr == NULL) {
+    // mapping_v2p 内部会完成建立页表映射以及初始化一些基本状态，物理内存需要我们手动申请
+    void* page_paddr = palloc(&user_pool);
+    if (page_paddr == NULL) {
         // 物理内存耗尽，且没有置换算法
-        PANIC("Out of Memory! Cannot allocate physical page for vaddr\n");
+        // PANIC("Out of Memory! Cannot allocate physical page for vaddr\n");
+        // 内存满了，尝试踢出一个页
+        page_paddr = swap_out();
+        // 既然腾出了一个物理页，我们现在重新申请
+        // 我们最好就用系统原本的 palloc 和 pfree 函数，这样接口比较统一
+        page_paddr = palloc(&user_pool);
+        if (page_paddr != NULL) {
+            mapping_v2p(page_vaddr, (uint32_t)page_paddr);
+        } else {
+            // 连 swap_out 都踢不出页了（全是共享页或内核页）
+            PANIC("Out of Memory! Even Swap Out failed.\n");
+        }
+    } else {
+        mapping_v2p(page_vaddr, (uint32_t)page_paddr);
     }
 
 	// 根据合同内容初始化物理页数据
+    // 内核最好不要用用户的虚拟地址，最好临时映射一个用
+    void* kaddr = kmap((uint32_t)page_paddr);
     if (vma->vma_inode != NULL) {
         // 有文件的映射 (代码段、数据段、BSS)
         uint32_t offset_in_vma = page_vaddr - vma->vma_start;
         
         // 先全页清零，保证了 BSS 区域和文件末端对齐部分的正确性
-        memset((void*)page_vaddr, 0, PG_SIZE);
+        memset((void*)kaddr, 0, PG_SIZE);
 
         // 如果故障点在文件有效长度内，则读取磁盘
         if (offset_in_vma < vma->vma_filesz) {
@@ -190,15 +221,16 @@ void swap_page(uint32_t err_code,void* err_vaddr){
             // 物理偏移 = 合同起始偏移 + 块内偏移
             inode_read_data(vma->vma_inode, 
                             vma->vma_pgoff + offset_in_vma, 
-                            (void*)page_vaddr, 
+                            (void*)kaddr, 
                             read_size);
         }
     } else {
         // 匿名映射 (栈、堆 brk 区域) 
         // 按照规定，新分配的匿名页必须初始化为全 0
 		// 这里可以直接自动实现我们的栈扩容逻辑
-        memset((void*)page_vaddr, 0, PG_SIZE);
+        memset((void*)kaddr, 0, PG_SIZE);
     }
+    kunmap(kaddr);
 
 	intr_set_status(_old);
     return;
@@ -318,4 +350,275 @@ void write_protect(uint32_t err_code, void* err_vaddr) {
     // printk("COW Done: vaddr %x now mapped to pa %x\n", vaddr, *pte & 0xfffff000);
 
 	intr_set_status(_old);
+}
+
+void do_swapon(struct partition* part) {
+    struct swap_info* si = (struct swap_info*)kmalloc(sizeof(struct swap_info));
+
+    if(si==NULL){
+        PANIC("do_swapon: fail to kmalloc for swap_info");
+    }
+    
+    si->part = part;
+    si->slot_cnt = part->sec_cnt / 8; // 一个页面 8 个扇区
+    
+    // 初始化位图结构
+    // 计算位图字节长度：slot_cnt / 8 向上取整
+    si->slot_bitmap.btmp_bytes_len = DIV_ROUND_UP(si->slot_cnt, 8);
+    // 申请内存存放位图的 bits
+    si->slot_bitmap.bits = (uint8_t*)kmalloc(si->slot_bitmap.btmp_bytes_len);
+    
+    if(si->slot_bitmap.bits == NULL){
+        PANIC("do_swapon: fail to kmalloc for bitmap");
+    }
+
+    bitmap_init(&si->slot_bitmap);
+
+    ASSERT(next_dev_id < MAX_SWAP_DEVICES);
+    
+    si->dev_id = next_dev_id++;
+    swap_table[si->dev_id] = si;
+
+    printk("do_swapon: %s enabled as swap device %d, slot count: %d\n", part->name, si->dev_id, si->slot_cnt);
+}
+
+// 返回编码后的 PTE 值 (slot_idx << 4 | dev_id << 1)
+static uint32_t alloc_swap_slot(void) {
+    for (int i = 0; i < MAX_SWAP_DEVICES; i++) {
+        struct swap_info* si = swap_table[i];
+        if (si == NULL) continue;
+        // printk("alloc slot\n");
+        // 扫描 1 个空位
+        int bit_idx = bitmap_scan(&si->slot_bitmap, 1);
+        if (bit_idx != -1) {
+            bitmap_set(&si->slot_bitmap, bit_idx, 1);
+            // 构造 PTE：bit 0 是 Present(0)，bit 1-3 是 dev_id，高位是 index
+            // 当 present 位为 0 时，PTE 的其他的几个属性位都会被直接忽略。
+            // 因此我们可以直接复用这几个位来存储我们的 dev_id，但是这可能会覆盖掉我们原本的 RW 位
+            // 这也不用担心，因为我们可以通过 VMA 来恢复这个权限位。
+            return (uint32_t)((bit_idx << 4) | (si->dev_id << 1));
+        }
+    }
+    return 0; // 交换空间全满
+}
+
+static void free_swap_slot(uint32_t pte_val) {
+    uint8_t dev_id = (pte_val >> 1) & 0x07;
+    uint32_t slot_idx = pte_val >> 4;
+    
+    struct swap_info* si = swap_table[dev_id];
+    if (si) {
+        bitmap_set(&si->slot_bitmap, slot_idx, 0); // 归还位图
+    }
+}
+
+/*
+    使用 Clock 算法找到一个可以被踢出的页
+    (0, 0)：最近未访问且干净。最高优先级，直接踢，代价最小。
+    (0, 1)：最近未访问但脏。需要写磁盘，但反正它最近没人用。
+    (1, 0)：最近访问过但干净。虽然它是干净的，但踢了它马上就会缺页。
+    (1, 1)：最近访问过且脏。最后才考虑。
+    优先找那些脏位为 0 的块，以便最大化 I/O 效率
+    按理来说，最多 4 轮扫描一定能找到
+*/
+static struct page* pick_page_from_activate_list(void) {
+    struct buddy_pool* pool = &user_pool;
+    if (dlist_empty(&pool->activate_list)) return NULL;
+
+    struct dlist_elem* ptr;
+    struct dlist_elem* tail = &pool->activate_list.tail;
+    
+    // 第一轮扫描，寻找 (0, 0) 
+    // 不修改任何标志位，只找最完美的牺牲者
+    ptr = pool->activate_list.head.next;
+    while (ptr != tail) {
+        struct page* pg = member_to_entry(struct page, activate_tag, ptr);
+        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
+        
+        if (!(*pte_ptr & PG_A) && !(*pte_ptr & PG_D) && pg->ref_count==1) {
+            goto found;
+        }
+        ptr = ptr->next;
+    }
+
+    // 第二轮扫描，寻找 (0, 1)，并将 A 位清零 
+    // 如果没找到 (0, 0)，就找那些没被访问过但脏了的。
+    // 顺便把扫过的 A 位都清 0，给下一轮创造 (0, 0)
+    ptr = pool->activate_list.head.next;
+    while (ptr != tail) {
+        struct page* pg = member_to_entry(struct page, activate_tag, ptr);
+        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
+        
+        if (!(*pte_ptr & PG_A) && (*pte_ptr & PG_D) && pg->ref_count==1) {
+            goto found;
+        }
+        // 没找到，但把 A 位抹掉，给予“降级”
+        *pte_ptr &= ~PG_A;
+        asm volatile("invlpg (%0)" : : "r"(pg->first_vaddr) : "memory");
+        ptr = ptr->next;
+    }
+
+    // 第三轮扫描，重复第一轮
+    // 因为第二轮清了 A 位，现在肯定能找到 (0, 0) 了
+    ptr = pool->activate_list.head.next;
+    while (ptr != tail) {
+        struct page* pg = member_to_entry(struct page, activate_tag, ptr);
+        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
+        
+        if (!(*pte_ptr & PG_A) && !(*pte_ptr & PG_D) && pg->ref_count==1) {
+            goto found;
+        }
+        ptr = ptr->next;
+    }
+
+    // 第四轮扫描，保底方案
+    // 找任何一个 A=0 的（此时必然存在 A=0, D=1 的页，这是最开始(1,1)的页）
+    ptr = pool->activate_list.head.next;
+    while (ptr != tail) {
+        struct page* pg = member_to_entry(struct page, activate_tag, ptr);
+        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
+        if (!(*pte_ptr & PG_A) && pg->ref_count==1) goto found;
+        ptr = ptr->next;
+    }
+
+    return NULL;
+
+found:
+    return member_to_entry(struct page, activate_tag, ptr);
+}
+
+// 挑选一个页面并将其置换到磁盘，释放一个物理页框
+// 成功释放的物理页起始地址
+static void* swap_out(void) {
+    lock_acquire(&swap_lock);
+    // 使用 Clock 算法找到牺牲者
+    struct page* pg = pick_page_from_activate_list();
+    if (pg == NULL) {
+        lock_release(&swap_lock);
+        return NULL; // 实在是没页可踢了（比如全是共享页或内核页）
+    }
+
+    uint32_t vaddr = pg->first_vaddr;
+    struct task_struct* owner = pg->first_owner;
+
+    ASSERT(pg->first_owner != get_running_task_struct());
+    printk("swap_out: swap out %s for %s\n",pg->first_owner->name,get_running_task_struct()->name);
+
+    uint32_t* pte_ptr = get_pte_ptr(owner->pgdir, vaddr);
+    
+    // 记录下该页的物理地址，最后返回它
+    void* phys_addr = (void*)(*pte_ptr & 0xfffff000);
+
+    // 检查脏位 (PG_D)
+    // 如果页面是脏的，或者它从未被换出过，则必须写入磁盘
+    // 如果页面是干净的 (D=0)，说明磁盘上的数据和内存一致，直接跳过写入
+    if (*pte_ptr & PG_D) {
+        // 匿名脏页，直接写到 Swap 分区
+        // 对于文件映射脏页
+        // 因为我们目前只支持 MAP_PRIVATE，私有映射的脏页不应该写回原文件！
+        // 它们一旦变脏，就变成了“写时复制”后的私有数据，应该当做匿名页处理，写到 Swap。
+        uint32_t swap_pte = alloc_swap_slot();
+        if (swap_pte == 0) {
+            // 交换分区满了！
+            lock_release(&swap_lock);
+            // 先 panic ，之后再进一步处理
+            PANIC("swap_out: fail to alloc_swap_slot, you may need a swap device!");
+            return NULL; 
+        }
+
+        // 调用 swap_write 写入磁盘
+        // 这里的 buf 需要是虚拟地址，我们需要将物理地址转换成虚拟地址
+        // 由于用户传入的物理地址可能位于 1GB 区域以上，因此不要直接用+0xc000000的方式进行虚拟地址的转换
+        // 我们直接使用 kmap 来建立一个临时映射
+        // 将这个物理地址临时绑定到一个高端128MB 的虚拟地址上，操作完了再释放这个虚拟地址
+        void* kaddr = kmap((uint32_t)phys_addr);
+        swap_write(swap_pte, kaddr);
+        kunmap(kaddr);
+        
+        *pte_ptr = swap_pte; // 页表存 Swap 索引
+    } else {
+        // 无论是文件映射页还是匿名映射页，总之我们直接把页表项置空，等访问时触发缺页中断逻辑
+        // 然后让 swap_page 函数来处理
+        *pte_ptr = 0;
+    }
+
+    ASSERT(pg->ref_count == 1);
+
+    // 维护 struct page 元数据
+    // 清除该页的映射关系，因为它已经不再属于任何进程了
+    // 引用计数应该归零（在 pick 逻辑里我们已经保证了 ref_count == 1）
+    // pfree 会替我们完成这些工作
+    pfree((uint32_t)phys_addr);
+
+    // 刷 TLB
+    asm volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
+
+    lock_release(&swap_lock);
+    printk("swap_out: unbind and pfree paddr(0x%x) and vaddr(0x%x)\n", phys_addr, vaddr);
+    // 返回这个可以被重新使用的物理地址
+    return phys_addr;
+}
+
+// 从交换分区换入页面
+// pte_ptr 缺页地址对应的页表项指针
+// page_vaddr 缺页的虚拟起始地址（4KB对齐）
+// vma 所在的虚拟内存区域，用于恢复权限
+static bool swap_in(uint32_t* pte_ptr, uint32_t page_vaddr, struct vm_area* vma) {
+    lock_acquire(&swap_lock);
+    uint32_t pte_val = *pte_ptr;
+
+    // 分配物理页，如果满了再触发 swap_out
+    void* page_paddr = palloc(&user_pool);
+    if (page_paddr == NULL) {
+        page_paddr = swap_out();
+        page_paddr = palloc(&user_pool);
+        // 彻底没救了
+        if (page_paddr == NULL){
+            lock_release(&swap_lock);        
+            printk("swap_in: fail to swap in!\n");
+            return false;
+        }
+    }
+
+    // 从磁盘换入数据，利用 kmap 来防止用户的地址是一个大于 1GB 的地址
+    void* kaddr = kmap((uint32_t)page_paddr);
+    swap_read(pte_val, kaddr);
+    kunmap(kaddr);
+
+    // 释放磁盘槽位
+    free_swap_slot(pte_val);
+
+    // mapping_v2p 会帮我们处理：page_table_add、元数据设置、加入 activate_list
+    mapping_v2p(page_vaddr, (uint32_t)page_paddr);
+
+    // 根据 VMA 补全权限位
+    // mapping_v2p 默认可能开了写权限，如果 VMA 是只读的，这里记得修正一下
+    uint32_t attr = (vma->vma_flags & VM_WRITE) ? PG_RW_W : PG_RW_R;
+    *pte_ptr = (uint32_t)page_paddr | PG_P_1 | PG_US_U | attr;
+    asm volatile("invlpg (%0)" : : "r"(page_vaddr) : "memory");
+    lock_release(&swap_lock);
+    printk("swap_in: bind paddr(0x%x) with vaddr(0x%x)\n",page_paddr,page_vaddr);
+    return true;
+}
+
+static void swap_read(uint32_t pte_val, void* buf) {
+    uint8_t dev_id = (pte_val >> 1) & 0x07;
+    uint32_t slot_idx = pte_val >> 4;
+    struct swap_info* si = swap_table[dev_id];
+
+    // 一个 Slot 占 8 个扇区 (4KB / 512B)
+    uint32_t logic_lba = slot_idx * 8; 
+
+    partition_read(si->part, logic_lba, buf, 8);
+}
+
+static void swap_write(uint32_t pte_val, void* buf) {
+    uint8_t dev_id = (pte_val >> 1) & 0x07;
+    uint32_t slot_idx = pte_val >> 4;
+    struct swap_info* si = swap_table[dev_id];
+
+    // 一个 Slot 占 8 个扇区 (4KB / 512B)
+    uint32_t logic_lba = slot_idx * 8; 
+
+    partition_write(si->part, logic_lba, buf, 8);
 }

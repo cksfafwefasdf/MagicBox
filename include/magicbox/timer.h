@@ -21,6 +21,7 @@ extern void timer_init(void);
 extern int32_t sys_milsleep(uint32_t mil_seconds);
 extern int32_t sys_alarm(uint32_t seconds);
 extern int sys_pause(void);
+extern void mtime_yield(uint32_t mil_seconds);
 
 extern uint32_t ticks;
 extern struct dlist timer_list;

@@ -53,6 +53,7 @@ void print_stacktrace(){
     asm volatile ("movl %%ebp, %0" : "=r" (ebp));
 
     put_str("stack backtrace:");
+    uart_puts("stack backtrace:");
     // 由于内核栈在 PCB 页面的顶端，栈底通常是对齐到页面边界的。
     // 只要 ebp 指针还在当前内核栈的有效范围内（1页之内），我们就继续。
     
@@ -64,6 +65,7 @@ void print_stacktrace(){
         // 比如 A 在第7行调用了B，那么这个ret_addr的地址是A第7行的地址，而不是A的起始入口地址
         // 这一点需要注意，因此我们拿到ret_addr在kernel.map中找入口时，应当要往前找
         put_str(" [0x"); put_int(ret_addr); put_str("]");
+        uart_puts(" [0x"); printk("0x%x",ret_addr); uart_puts("]");
         
         // 取出上一个 ebp 的值
         uint32_t* last_ebp = (uint32_t*)*ebp;

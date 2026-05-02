@@ -249,3 +249,25 @@ int32_t sys_alarm(uint32_t seconds) {
 
     return remaining;
 }
+
+// sleep is measured in ticks; all time-based sleeps are converted to this tick format.
+static void ticks_to_yield(uint32_t sleep_ticks){
+    uint32_t start_tick = ticks;
+
+    while(ticks-start_tick<sleep_ticks){
+        // yield 会将进程插入到就绪队列的尾部，不会阻塞他
+        // 因此每次调度的时候都会重新检查这个进程，效果上其实类似于一个忙等待，只是说每次他都会把 cpu 主动让出来
+        // 但是每一轮询问时都会问它
+        thread_yield();
+    }
+}
+
+// sleep is measured in mil-second
+void mtime_yield(uint32_t mil_seconds){
+    if(mil_seconds == 0){
+        return;
+    }
+    uint32_t sleep_ticks = DIV_ROUND_UP(mil_seconds,mil_seconds_per_intr);
+    ASSERT(sleep_ticks>0);
+    ticks_to_yield(sleep_ticks);
+}

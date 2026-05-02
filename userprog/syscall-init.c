@@ -20,7 +20,7 @@
 #include <poll.h>
 #include <ide_buffer.h>
 
-#define SYSCALL_NR 64
+#define SYSCALL_NR 96
 typedef void* syscall_func;
 syscall_func syscall_table[SYSCALL_NR];
 
@@ -95,6 +95,7 @@ void syscall_init(void){
 	syscall_table[SYS_TRUNCATE] = sys_ftruncate;
 	syscall_table[SYS_LINK] = sys_link;
 	syscall_table[SYS_SYNC] = sys_sync;
+	syscall_table[SYS_SWAPON] = sys_swapon;
 	
 	put_str("syscall_init done\n");
 }

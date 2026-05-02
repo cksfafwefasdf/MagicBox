@@ -99,6 +99,7 @@ static void mem_pool_init(uint32_t all_mem) {
     // 初始化物理伙伴池
     buddy_init(&kernel_pool, real_phy_start, kernel_pool_size, global_pages);
     buddy_init(&user_pool, real_phy_start + kernel_pool_size, user_pool_size, global_pages);
+
     lock_init(&kmap_lock);
     memset(kmap_slots, 0, sizeof(kmap_slots));
 
@@ -167,6 +168,12 @@ static void* vaddr_alloc(enum pool_flags pf, uint32_t pg_cnt, bool force_mmap) {
     }
 }
 
+// 在直接映射区，通过一个物理地址获得虚拟地址
+static void* direct_map_ptr(uint32_t paddr) {
+    ASSERT(paddr_is_lowmem(paddr));
+    return (void*)(KERNEL_PAGE_OFFSET + paddr);
+}
+
 // get vaddr's pte pointer
 uint32_t* pte_ptr(uint32_t vaddr){
 	uint32_t* pte = (uint32_t*)(0xffc00000+((vaddr&0xffc00000)>>10)+PTE_IDX(vaddr)*4);
@@ -191,6 +198,7 @@ void* palloc(struct buddy_pool* m_pool) {
 
     if (pg == NULL) {
         intr_set_status(old);
+        printk("palloc: warning, palloc return NULL!\n");
         return NULL;
     }
 
@@ -201,6 +209,7 @@ void* palloc(struct buddy_pool* m_pool) {
     uint32_t page_phyaddr = PAGE_TO_ADDR(m_pool,pg);
 
     intr_set_status(old);
+    // printk("palloc: alloc paddr: 0x%x\n",page_phyaddr);
     return (void *)page_phyaddr;
 }
 
@@ -389,24 +398,35 @@ void* get_user_pages(uint32_t pg_cnt){
 // only surport to allocate 1 page
 // 引入vma后，此函数只管分物理页和挂页表。
 // 我们靠 vma_find_gap 函数来保证虚拟地址不冲突
-void* mapping_v2p(enum pool_flags pf,uint32_t vaddr){
-	struct buddy_pool* mem_pool = pf&PF_KERNEL?&kernel_pool:&user_pool;
-	lock_acquire(&mem_pool->lock);
-    // 内核空间目前我们全用直接映射，所以不需要在此处进一步操作了
-	if (pf == PF_KERNEL) {
-		lock_release(&mem_pool->lock);
-		PANIC("mapping_v2p: PF_KERNEL no longer manages arbitrary virtual addresses");
-	}
+// 这个函数目前只有 swap_page 函数会调用
+// 内核空间目前我们全用直接映射，所以不需要在此处进一步操作了，不会调用这个函数建立映射
+void* mapping_v2p(uint32_t vaddr ,uint32_t paddr){
+	// struct buddy_pool* mem_pool = pf&PF_KERNEL?&kernel_pool:&user_pool;
+    ASSERT((void*)vaddr!=NULL && (void*)paddr!=NULL)
+    
 	// 由于我们在 add_vma 时已经确认了这块地的合法性
 	// 因此此处不用再去操作相关的东西了，只用绑定物理地址和虚拟地址就行
-	void *page_phyaddr = palloc(mem_pool);
-	if(page_phyaddr==NULL){
-		lock_release(&mem_pool->lock);
-		return NULL;
-	}
-	page_table_add((void*)vaddr,page_phyaddr);
+	// void *page_phyaddr = palloc(mem_pool);
+	// if(page_phyaddr==NULL){
+	// 	lock_release(&mem_pool->lock);
+	// 	return NULL;
+	// }
+	page_table_add((void*)vaddr,(void*)paddr);
 
-	lock_release(&mem_pool->lock);
+    struct page* pg = ADDR_TO_PAGE(global_pages ,(uint32_t) paddr);
+
+    // 建立反向映射的必要信息
+    // 否则置换算法不知道该去哪个页表里找这个物理页
+    pg->first_vaddr = vaddr; // 置换需要知道修改哪个虚拟地址的 PTE
+    pg->first_owner = get_running_task_struct(); // 置换需要知道属于哪个进程
+    pg->ref_count = 1;
+
+    lock_acquire(&user_pool.lock);
+    ASSERT(!dlist_is_linked(&pg->activate_tag));
+    // 挂在队尾，以便遵循最久未使用的原则
+    dlist_push_back(&user_pool.activate_list,&pg->activate_tag);
+
+	lock_release(&user_pool.lock);
 
 	return (void*)vaddr;
 }
@@ -636,7 +656,14 @@ void pfree(uint32_t pg_phy_addr) {
     if (pg->ref_count == 0) {
         // 这里的 pool 判断逻辑之前的一致
         struct buddy_pool* m_pool = (pg_phy_addr >= user_pool.phy_addr_start) ? &user_pool : &kernel_pool;
+        pg->first_vaddr = 0;
+        pg->first_owner = NULL;
         
+        // 如果在活跃队列中，将其从活跃队列中移除
+        if(dlist_is_linked(&pg->activate_tag)){
+            dlist_remove(&pg->activate_tag);
+        }
+
         // 调用伙伴系统的释放逻辑，尝试合并
         pfree_pages(m_pool, pg, 0);
     }
@@ -931,11 +958,6 @@ static struct vm_area* find_covering_or_next_vma(struct task_struct* task, uint3
     return NULL;
 }
 
-static void* direct_map_ptr(uint32_t paddr) {
-    ASSERT(paddr_is_lowmem(paddr));
-    return (void*)(KERNEL_PAGE_OFFSET + paddr);
-}
-
 // 手动填写低端内存映射
 static void direct_map_lowmem_range(uint32_t start_paddr, uint32_t end_paddr) {
     uint32_t paddr = PAGE_ALIGN_DOWN(start_paddr);
@@ -1202,4 +1224,31 @@ int32_t sys_munmap(uint32_t addr, uint32_t len) {
         cursor = seg_end;
     }
     return 0;
+}
+
+// owner_pgdir: 目标进程页目录的虚拟地址（通常存在 task_struct 里）
+// vaddr: 要查找的虚拟地址
+// 返回值：指向目标 PTE 的内核虚拟地址指针
+uint32_t* get_pte_ptr(uint32_t* pgdir, uint32_t vaddr) {
+    // 获取 PDE 索引和 PTE 索引
+    uint32_t pde_idx = (vaddr & 0xffc00000) >> 22;
+    uint32_t pte_idx = (vaddr & 0x003ff000) >> 12;
+
+    // 找到 PDE
+    uint32_t pde = pgdir[pde_idx];
+
+    // 检查 PDE 是否存在
+    // 如果页表（Page Table）本身还没分配，说明这个 vaddr 从未被映射过
+    if (!(pde & PG_P_1)) {
+        return NULL; 
+    }
+
+    // 从 PDE 中提取页表的物理地址（高 20 位）
+    uint32_t pt_phyaddr = pde & 0xfffff000;
+
+    // 将页表物理地址转换为内核可访问的虚拟地址
+    uint32_t* pt_vaddr = (uint32_t*)direct_map_ptr(pt_phyaddr);
+
+    // 返回指向具体 PTE 的指针
+    return &pt_vaddr[pte_idx];
 }

@@ -527,6 +527,15 @@ int do_sync(int argc,char** argv){
     return 0;
 } 
 
+int do_swapon(int argc,char** argv){
+    if(argc!=2){
+        printf("usage: swapon <filename>\n");
+        return -1;
+    }
+    swapon(argv[1]);
+    return 0;
+} 
+
 int main(int argc, char** argv) {
     if (argc < 1) return 1;
 
@@ -554,14 +563,15 @@ int main(int argc, char** argv) {
     if (strcmp(applet_name, "umount") == 0) return do_umount(sub_argc, sub_argv);
     if (strcmp(applet_name, "ps") == 0)     return do_ps(sub_argc, sub_argv);
     if (strcmp(applet_name, "df") == 0)     return do_df(sub_argc, sub_argv);
-    if (strcmp(applet_name, "cat") == 0)     return do_cat(sub_argc, sub_argv);
-    if (strcmp(applet_name, "echo") == 0)     return do_echo(sub_argc, sub_argv);
+    if (strcmp(applet_name, "cat") == 0)    return do_cat(sub_argc, sub_argv);
+    if (strcmp(applet_name, "echo") == 0)   return do_echo(sub_argc, sub_argv);
     if (strcmp(applet_name, "hd") == 0)     return do_hd(sub_argc, sub_argv);
     if (strcmp(applet_name, "fm") == 0)     return do_fm(sub_argc, sub_argv);
+    if (strcmp(applet_name, "sync") == 0)   return do_sync(sub_argc, sub_argv);
+    if (strcmp(applet_name, "swapon") == 0) return do_swapon(sub_argc, sub_argv);
     if (strcmp(applet_name, "mkfs.ext2") == 0)     return do_mkfs_ext2(sub_argc, sub_argv);
     if (strcmp(applet_name, "mkfs.sifs") == 0)     return do_mkfs_sifs(sub_argc, sub_argv);
-    if (strcmp(applet_name, "sync") == 0)     return do_sync(sub_argc, sub_argv);
-
+    
     printf("mbbox: applet not found: %s\n", applet_name);
     return 1;
 }

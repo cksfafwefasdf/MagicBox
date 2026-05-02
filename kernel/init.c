@@ -26,6 +26,7 @@
 #include <time.h>
 #include <uart.h>
 #include <syscall_intrcpt.h>
+#include <swap.h>
 
 void init(void);
 void print_logo(void);
@@ -210,8 +211,9 @@ static void after_init() {
     intr_enable(); // ide_init will use the interrupt
     ide_buffer_init();
     ide_init();
+    swap_init();
     // 启动 sync 内核线程，他会定期将脏块刷回磁盘
-    sync_thread = thread_start("sync",5,sync_ide_buffer,NULL);
+    sync_thread = thread_start("sync",32,sync_ide_buffer,NULL);
     time_init(); // 这里面会用到printk函数，因此放到此处
     filesys_init();
     make_dev_nodes();

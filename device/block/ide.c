@@ -192,7 +192,10 @@ void ide_init(){
 			// obtain the memory address that the channel has reserved for the disk
 			struct disk* hd = &channel->devices[dev_no];
 			
-			dlist_init(&hd->dirty_list);
+			dlist_init(&hd->dirty_lists[0]);
+			dlist_init(&hd->dirty_lists[1]);
+			lock_init(&hd->lists_lock);
+			hd->active_dirty_idx = 0;
 
 			hd->my_channel = channel;
 			hd->dev_no = dev_no;
@@ -269,10 +272,11 @@ static void select_disk(struct disk* hd){
 
 static void select_sector(struct disk* hd,uint32_t lba,uint8_t sec_cnt){
 	if (lba > max_lba) {
-        struct task_struct* cur = get_running_task_struct();
-        printk("\n[IDE Error] Task:%s, CWD_Inode:0x%x, LBA:0x%x\n", 
-                cur->name, cur->pwd->i_no, lba);
+        // struct task_struct* cur = get_running_task_struct();
+        // printk("\n[IDE Error] Task:%s, CWD_Inode:0x%x, LBA:0x%x\n", 
+        //         cur->name, cur->pwd->i_no, lba);
         // 若 CWD_Inode 还是旧的，则 sys_mount 的重置没生效
+		printk("select_sector: lba is 0x%x\n", lba);
         ASSERT(lba <= max_lba);
     }
 	struct ide_channel* channel = hd->my_channel;
@@ -319,18 +323,22 @@ static void write2sector(struct disk* hd,void* buf,uint8_t sec_cnt){
 	outsw(reg_data(hd->my_channel),buf,size_in_byte/2);
 }
 
-static bool busy_wait(struct disk* hd) {
-    struct ide_channel* channel = hd->my_channel;
-    // 轮询一段时间（比如 100,000 次），不进行 thread_yield
-    // 因为 QEMU 模拟器里，磁盘状态翻转极快，原地等待可能只要几百个纳秒
-    uint32_t timeout = 1000000; 
-    while (timeout--) {
-        uint8_t status = inb(reg_status(channel));
-        if (!(status & BIT_ALT_STAT_BSY)) { // 不忙了
-            return (status & BIF_ALT_STAT_DRQ); // 返回是否准备好数据
-        }
-    }
-    return false;
+// busy wait 30 seconds
+static bool busy_wait(struct disk* hd){
+	struct ide_channel* channel = hd->my_channel;
+	uint16_t time_limit = BUSY_WAIT_TIME_LIMIT;
+	while(time_limit-=10>0){
+		if(!(inb(reg_status(channel))&BIT_ALT_STAT_BSY)){
+			// DRQ is 1 means disk is ready to read or write
+			return (inb(reg_status(channel))&BIF_ALT_STAT_DRQ);
+		}else{
+			mtime_yield(10); //sleep 10ms, this thread will yield the CPU
+		}
+	}
+	// All actions required in this state shall be completed within 31 s
+	// if the disk fails to complete the operation within 30 seconds
+	// return false
+	return false;
 }
 
 void ide_read(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
@@ -365,6 +373,13 @@ void ide_read(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
 
 
 void ide_write(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
+
+	if (lba >= 0xC0000000) {
+		printk("ide_write LBA=0x%x\n",lba);
+		PANIC("Pointer leaked into LBA!");
+	}
+
+
     lock_acquire(&hd->my_channel->lock);
 
     // 告知起始地址和总扇区数

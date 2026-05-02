@@ -12,6 +12,8 @@
 #define PG_RW_W 2
 #define PG_US_S 0
 #define PG_US_U 4
+#define PG_A 0x20   // 第 5 位，访问位 (Accessed)
+#define PG_D 0x40   // 第 6 位，脏位 (Dirty)
 // 16Bytes 32,64,128,256,512,1024 
 // 7 types in total
 #define DESC_TYPE_CNT 7
@@ -98,7 +100,7 @@ extern uint32_t* pte_ptr(uint32_t vaddr);
 extern void* malloc_page(enum pool_flags pf,uint32_t pg_cnt);
 extern void* get_kernel_pages(uint32_t pg_cnt);
 extern void* get_user_pages(uint32_t pg_cnt);
-extern void* mapping_v2p(enum pool_flags pf,uint32_t vaddr);
+extern void* mapping_v2p(uint32_t vaddr ,uint32_t paddr);
 extern uint32_t addr_v2p(uint32_t vaddr);
 extern void* kmap(uint32_t paddr);
 extern void kunmap(void* vaddr);
@@ -122,9 +124,12 @@ extern uint32_t sys_brk(uint32_t new_brk);
 extern uint32_t sys_mmap(uint32_t user_mmap_args);
 extern uint32_t sys_mmap_direct(uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset);
 extern int32_t sys_munmap(uint32_t addr, uint32_t len);
+extern uint32_t* get_pte_ptr(uint32_t* pgdir, uint32_t vaddr);
 
 
 extern uint32_t mem_bytes_total;
 extern uint32_t kernel_heap_start;
 extern struct page* global_pages;
+extern struct buddy_pool kernel_pool;
+extern struct buddy_pool user_pool;
 #endif
