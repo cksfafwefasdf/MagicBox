@@ -181,24 +181,36 @@ void swap_page(uint32_t err_code,void* err_vaddr){
     // while(1);
 	// 合法合同且尚未映射，开始分配物理页
     // mapping_v2p 内部会完成建立页表映射以及初始化一些基本状态，物理内存需要我们手动申请
-    void* page_paddr = palloc(&user_pool);
-    if (page_paddr == NULL) {
-        // 物理内存耗尽，且没有置换算法
-        // PANIC("Out of Memory! Cannot allocate physical page for vaddr\n");
-        // 内存满了，尝试踢出一个页
-        page_paddr = swap_out();
-        // 既然腾出了一个物理页，我们现在重新申请
-        // 我们最好就用系统原本的 palloc 和 pfree 函数，这样接口比较统一
+    void* page_paddr = NULL;
+
+    // 进行尽力而为的内存分配，一直申请，直到成功或者内存耗尽
+    // 这么做在多核的情况下也比较好
+    while (1) {
         page_paddr = palloc(&user_pool);
         if (page_paddr != NULL) {
-            mapping_v2p(page_vaddr, (uint32_t)page_paddr);
-        } else {
-            // 连 swap_out 都踢不出页了（全是共享页或内核页）
-            PANIC("Out of Memory! Even Swap Out failed.\n");
+            break; // 申请成功，跳出循环
         }
-    } else {
-        mapping_v2p(page_vaddr, (uint32_t)page_paddr);
+
+        // 走到这里说明 palloc 失败了
+        // 内存满了，尝试踢出一个页
+        void* swapped_phys = swap_out();
+
+        if (swapped_phys == NULL) {
+            // 连 swap_out 都踢不出页面了（比如内存里全是内核不可移动页或被锁定的页）
+            // 此时才是真正的 Out of Memory，而不是内存负载过大
+            PANIC("Out of Memory! No page can be swapped out.");
+        }
+
+        // 既然 swap_out 成功返回了一个物理地址，说明理论上现在有一页空闲了
+        // 循环会回到开头，再次执行 palloc
+        // 我们最好就用系统原本的 palloc 和 pfree 函数，这样接口比较统一
+        // 在单核的情况下，我们通过关中断，理论上来将，下一次 palloc 应该都能成功
+        // 但是在多核的情况下，刚刚 swap_out 出的内存可能会被其他的核拿走，只是关中断没用
+        // 因此我们需要使用 while 来进行多次尝试
     }
+
+    // 成功拿到 page_paddr，进行映射
+    mapping_v2p(page_vaddr, (uint32_t)page_paddr);
 
 	// 根据合同内容初始化物理页数据
     // 内核最好不要用用户的虚拟地址，最好临时映射一个用
@@ -383,7 +395,7 @@ void do_swapon(struct partition* part) {
 }
 
 // 返回编码后的 PTE 值 (slot_idx << 4 | dev_id << 1)
-static uint32_t alloc_swap_slot(void) {
+uint32_t alloc_swap_slot(void) {
     for (int i = 0; i < MAX_SWAP_DEVICES; i++) {
         struct swap_info* si = swap_table[i];
         if (si == NULL) continue;
@@ -402,7 +414,7 @@ static uint32_t alloc_swap_slot(void) {
     return 0; // 交换空间全满
 }
 
-static void free_swap_slot(uint32_t pte_val) {
+void free_swap_slot(uint32_t pte_val) {
     uint8_t dev_id = (pte_val >> 1) & 0x07;
     uint32_t slot_idx = pte_val >> 4;
     
@@ -501,7 +513,8 @@ static void* swap_out(void) {
     uint32_t vaddr = pg->first_vaddr;
     struct task_struct* owner = pg->first_owner;
 
-    ASSERT(pg->first_owner != get_running_task_struct());
+    // 我们是可以将自己的页置换到磁盘的，不一定非要置换其他进程的页
+    // ASSERT(pg->first_owner != get_running_task_struct());
     printk("swap_out: swap out %s for %s\n",pg->first_owner->name,get_running_task_struct()->name);
 
     uint32_t* pte_ptr = get_pte_ptr(owner->pgdir, vaddr);
@@ -566,19 +579,28 @@ static void* swap_out(void) {
 static bool swap_in(uint32_t* pte_ptr, uint32_t page_vaddr, struct vm_area* vma) {
     lock_acquire(&swap_lock);
     uint32_t pte_val = *pte_ptr;
+    
+    void* page_paddr = NULL;
 
-    // 分配物理页，如果满了再触发 swap_out
-    void* page_paddr = palloc(&user_pool);
-    if (page_paddr == NULL) {
-        page_paddr = swap_out();
+    // 使用和 swap_page 函数里类似的尽力而为的分配
+    while (1) {
         page_paddr = palloc(&user_pool);
-        // 彻底没救了
-        if (page_paddr == NULL){
-            lock_release(&swap_lock);        
-            printk("swap_in: fail to swap in!\n");
-            return false;
+        if (page_paddr != NULL) {
+            break; 
         }
+
+        // 尝试腾出一个页
+        if (swap_out() == NULL) {
+            // 物理页全被锁定或全是内核页，实在无法置换
+            lock_release(&swap_lock);
+            // 目前先 panic，防止内核跑飞
+            PANIC("swap_in: OOM - no page can be swapped out!\n");
+            return false; 
+        }
+        // swap_out 成功后，下一轮循环会再次尝试 palloc
     }
+
+    ASSERT(page_paddr != NULL)
 
     // 从磁盘换入数据，利用 kmap 来防止用户的地址是一个大于 1GB 的地址
     void* kaddr = kmap((uint32_t)page_paddr);

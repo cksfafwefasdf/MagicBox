@@ -24,4 +24,6 @@ extern void swap_page(uint32_t err_code,void* err_vaddr);
 extern void write_protect(uint32_t err_code,void* err_vaddr);
 extern void swap_init(void);
 extern void do_swapon(struct partition* part);
+extern void free_swap_slot(uint32_t pte_val);
+extern uint32_t alloc_swap_slot(void);
 #endif

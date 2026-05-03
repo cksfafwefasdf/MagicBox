@@ -14,6 +14,7 @@
 #include <ide.h>
 #include <exec.h>
 #include <vma.h>
+#include <swap.h>
 
 extern void intr_exit(void);
 
@@ -41,11 +42,18 @@ void release_pg_block(struct task_struct* task){
 			while (pte_idx<USER_PTE_NR){
 				v_pte_ptr = first_pte_vaddr_in_pde+pte_idx;
 				pte = *v_pte_ptr;
-				if(pte&0xfffff000){
-					pg_phy_addr = pte&0xfffff000;
-					pfree(pg_phy_addr); // 释放页表项指向的数据页
-					*v_pte_ptr = 0; // 抹除映射
-				}
+				if (pte != 0) { // PTE 有内容
+                    if (pte & PG_P_1) {
+                        // 页面在内存中，这样的话就释放物理页
+                        pg_phy_addr = pte & 0xfffff000;
+                        pfree(pg_phy_addr); 
+                    } else {
+                        // 页面在 Swap 分区中，释放磁盘槽位
+                        // 这里必须调用 swap 中的 free_swap_slot
+                        free_swap_slot(pte);
+                    }
+                    *v_pte_ptr = 0; // 抹除映射，防止重复释放
+                }
 				pte_idx++;
 			}
 			// 不要在 exit 中释放页表本身，因为页表本身记载着一些内核地址块的信息

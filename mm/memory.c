@@ -647,6 +647,12 @@ void pfree(uint32_t pg_phy_addr) {
     // 确保不是在释放一个已经空闲的页
     ASSERT(pg->ref_count > 0);
 
+    // 如果遇到一个计数已经为0的块，那么直接返回
+    if(pg->ref_count==0) {
+        printk("pfree: warning, pfree 0 ref_count page\n");
+        return;
+    }
+
     enum intr_status old = intr_disable();
 
     // 递减引用计数
