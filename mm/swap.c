@@ -295,11 +295,17 @@ static void do_copy_on_write(uint32_t vaddr, uint32_t* pte, uint32_t old_pa) {
     // 我们更新的是当前进程的页表，也就是说，谁进行的写操作，谁进行复制
     // 并且复制完后自己更新自己的页表，和当前进程共享页面的其他进程的页表不变
     // 谁写的谁自己主动搬出去
+    // 如果只有一个引用计数的话，我们会在 write_protect 里面直接恢复写权限，不会走到这个函数里面
     // 现在 PTE 指向新物理页，并开启 PG_RW_W 写权限
     *pte = (uint32_t)new_pa | PG_P_1 | PG_RW_W | PG_US_U;
 
+    // 谁写的谁自己搬出去，然后自己重新创建一个 swap 信息
+    struct page* pg = ADDR_TO_PAGE(global_pages,new_pa);
+    pg->first_owner = get_running_task_struct();
+    pg->first_vaddr = vaddr & 0xfffff000;
+
     // 调用pfree减去老物理页的引用计数
-    // 变成0时会自动释放，但是在此处应该不会变成0
+    // 变成 0 时会自动释放，但是在此处应该不会变成 0
     pfree(old_pa);
 
     // 刷新出错虚拟地址的 TLB
@@ -347,12 +353,29 @@ void write_protect(uint32_t err_code, void* err_vaddr) {
     // COW 处理
 	struct page* pg = ADDR_TO_PAGE(global_pages,pa);
 
+    // 我们在这里处理了 swap 的两种特殊情况，一种是一个页触发写保护后，拷贝了这个页
+    // 这时我们需要将拷贝出来的这个页的 swap 所有页设置为这个写进程
+    // 对应 do_copy_on_write 中的处理逻辑
+    // 第二种情况是 A 和 B 共享一个页，A 是第一所有者，此时 A 退出了，因此我们需要将第一所有者改成唯一存活的这个 B
+    // 但是我们这样的处理不太彻底，因为假如 B 自始至终都没有触发写保护错误的话，这个页的所有者自始至终都不会被修正
+    // 如果在此期间我们要针对这个页进行 swap 的话，页表查询的操作就会出错，因为原本的 A 进程都已经不在了，查它的页表会段错误
+    // 对于这个问题的解决办法是在 pfree 中，当引用计数为 2 且 owner 是自己时，直接把 owner 置为空并将其从活跃队列中移出
+    // 等到后续触发写保护的时候再来重新更新它的所有者，并将其加入活跃队列，这么做会导致有一些页无法被置换出去，但是总比让系统直接崩溃了要好
+    // 在我们目前的系统中，只有只读页的引用计数能够大于 1，可写的页的引用计数一定是为 1 的，因此这个方案目前来看至少不会让系统出错
     if (pg->ref_count > 1) {
         // 确实有多个进程共享，执行拷贝
         do_copy_on_write(vaddr, pte, pa);
     } else if (pg->ref_count == 1) {
         // 只有一个人用了，直接恢复写权限，不用额外拷贝了
         *pte |= PG_RW_W;
+        // 更新一下所有者，防止 swap 的时候出现问题
+        pg->first_owner = get_running_task_struct(); 
+        pg->first_vaddr = vaddr & 0xfffff000;
+
+        if(!dlist_is_linked(&pg->activate_tag)){
+            dlist_push_back(&user_pool.activate_list, &pg->activate_tag);
+        }
+
 		// 刷新页目录项
         asm volatile ("invlpg %0" : : "m" (*(char*)vaddr));
     } else {
@@ -401,6 +424,7 @@ uint32_t alloc_swap_slot(void) {
         if (si == NULL) continue;
         // printk("alloc slot\n");
         // 扫描 1 个空位
+        // 再磁盘上找一个可用的 page slot
         int bit_idx = bitmap_scan(&si->slot_bitmap, 1);
         if (bit_idx != -1) {
             bitmap_set(&si->slot_bitmap, bit_idx, 1);
@@ -445,6 +469,10 @@ static struct page* pick_page_from_activate_list(void) {
     ptr = pool->activate_list.head.next;
     while (ptr != tail) {
         struct page* pg = member_to_entry(struct page, activate_tag, ptr);
+        
+        // 第一所有者为空的进程不应该在活跃队列中
+        ASSERT(pg->first_owner!=NULL);
+
         uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
         
         if (!(*pte_ptr & PG_A) && !(*pte_ptr & PG_D) && pg->ref_count==1) {
@@ -459,6 +487,9 @@ static struct page* pick_page_from_activate_list(void) {
     ptr = pool->activate_list.head.next;
     while (ptr != tail) {
         struct page* pg = member_to_entry(struct page, activate_tag, ptr);
+
+        ASSERT(pg->first_owner!=NULL);
+
         uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
         
         if (!(*pte_ptr & PG_A) && (*pte_ptr & PG_D) && pg->ref_count==1) {
@@ -475,6 +506,9 @@ static struct page* pick_page_from_activate_list(void) {
     ptr = pool->activate_list.head.next;
     while (ptr != tail) {
         struct page* pg = member_to_entry(struct page, activate_tag, ptr);
+
+        ASSERT(pg->first_owner!=NULL);
+
         uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
         
         if (!(*pte_ptr & PG_A) && !(*pte_ptr & PG_D) && pg->ref_count==1) {
@@ -488,6 +522,9 @@ static struct page* pick_page_from_activate_list(void) {
     ptr = pool->activate_list.head.next;
     while (ptr != tail) {
         struct page* pg = member_to_entry(struct page, activate_tag, ptr);
+
+        ASSERT(pg->first_owner!=NULL);
+
         uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
         if (!(*pte_ptr & PG_A) && pg->ref_count==1) goto found;
         ptr = ptr->next;

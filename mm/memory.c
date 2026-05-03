@@ -658,6 +658,17 @@ void pfree(uint32_t pg_phy_addr) {
     // 递减引用计数
     pg->ref_count--;
 
+    // 如果减1后，页的引用计数为 1，且当前页的第一所有者是自己，那么就直接将第一所有者置为空
+    // 为什么这么做的详细原因可以参考 write_protect 函数引用计数部分的注释
+    if(pg->ref_count == 1 && pg->first_owner != NULL && pg->first_owner == get_running_task_struct()){
+        pg->first_owner = NULL;
+        // vaddr 没有必要置为 NULL，因为在共享的情况下 vaddr 是一样的
+        // 在这种情况下直接给他移出活跃队列，防止在 pick_page_from_activate_list 中被扫描到
+        if(dlist_is_linked(&pg->activate_tag)){
+            dlist_remove(&pg->activate_tag);
+        }
+    }
+
     // 判断是否需要归还给伙伴系统
     if (pg->ref_count == 0) {
         // 这里的 pool 判断逻辑之前的一致
@@ -1236,6 +1247,9 @@ int32_t sys_munmap(uint32_t addr, uint32_t len) {
 // vaddr: 要查找的虚拟地址
 // 返回值：指向目标 PTE 的内核虚拟地址指针
 uint32_t* get_pte_ptr(uint32_t* pgdir, uint32_t vaddr) {
+
+    ASSERT(pgdir != NULL);
+
     // 获取 PDE 索引和 PTE 索引
     uint32_t pde_idx = (vaddr & 0xffc00000) >> 22;
     uint32_t pte_idx = (vaddr & 0x003ff000) >> 12;
