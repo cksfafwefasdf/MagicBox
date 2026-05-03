@@ -72,6 +72,7 @@
 #define SYS_TRUNCATE 61
 #define SYS_FTRUNCATE 62
 #define SYS_SWAPON 63
+#define SYS_SWAPOFF 64
 
 // user interface
 extern uint32_t getpid(void);
@@ -145,5 +146,6 @@ extern int32_t ftruncate(int32_t fd, int32_t length);
 extern int32_t link(const char* _oldpath, const char* _newpath);
 extern void sync(void);
 extern int32_t swapon(const char* _pathname);
+extern int32_t swapoff(const char* _pathname);
 
 #endif

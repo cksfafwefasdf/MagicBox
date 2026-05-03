@@ -369,3 +369,7 @@ void sync(){
 int32_t swapon(const char* _pathname){
 	return _syscall1(SYS_SWAPON,_pathname);
 }
+
+int32_t swapoff(const char* _pathname){
+	return _syscall1(SYS_SWAPOFF,_pathname);
+}

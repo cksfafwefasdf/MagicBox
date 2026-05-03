@@ -42,6 +42,7 @@ extern int32_t sys_truncate(const char* path, int32_t length);
 extern int32_t sys_ftruncate(int32_t fd, int32_t length);
 extern int32_t sys_link(const char* _oldpath, const char* _newpath);
 extern int32_t sys_swapon(const char* _pathname);
+extern int32_t sys_swapoff(const char* _pathname);
 
 extern struct inode* root_dir_inode; 
 // root_part 用于记录根分区，他是全局唯一的

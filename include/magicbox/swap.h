@@ -15,6 +15,7 @@ struct swap_info {
     struct partition* part; // 引用你现有的分区结构
     struct bitmap slot_bitmap; // 该 Swap 分区专属的位图
     uint32_t slot_cnt; // 槽位总数 (sec_cnt / 8)
+    uint32_t used_slots; // 记录已被使用的槽数
     uint8_t dev_id; // 给置换算法看的 ID (0-7)
     struct dlist_elem swap_list_tag; // 挂载到全局 swap_list 中
 };
@@ -24,6 +25,7 @@ extern void swap_page(uint32_t err_code,void* err_vaddr);
 extern void write_protect(uint32_t err_code,void* err_vaddr);
 extern void swap_init(void);
 extern void do_swapon(struct partition* part);
+extern void do_swapoff(struct partition* part);
 extern void free_swap_slot(uint32_t pte_val);
 extern uint32_t alloc_swap_slot(void);
 #endif

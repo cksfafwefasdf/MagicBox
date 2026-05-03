@@ -536,6 +536,15 @@ int do_swapon(int argc,char** argv){
     return 0;
 } 
 
+int do_swapoff(int argc,char** argv){
+    if(argc!=2){
+        printf("usage: swapoff <filename>\n");
+        return -1;
+    }
+    swapoff(argv[1]);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 1) return 1;
 
@@ -558,20 +567,28 @@ int main(int argc, char** argv) {
         sub_argv = &argv[1];
     }
 
+    int32_t ret = 1;
+
     // 统一分发处理
-    if (strcmp(applet_name, "mount") == 0)  return do_mount(sub_argc, sub_argv);
-    if (strcmp(applet_name, "umount") == 0) return do_umount(sub_argc, sub_argv);
-    if (strcmp(applet_name, "ps") == 0)     return do_ps(sub_argc, sub_argv);
-    if (strcmp(applet_name, "df") == 0)     return do_df(sub_argc, sub_argv);
-    if (strcmp(applet_name, "cat") == 0)    return do_cat(sub_argc, sub_argv);
-    if (strcmp(applet_name, "echo") == 0)   return do_echo(sub_argc, sub_argv);
-    if (strcmp(applet_name, "hd") == 0)     return do_hd(sub_argc, sub_argv);
-    if (strcmp(applet_name, "fm") == 0)     return do_fm(sub_argc, sub_argv);
-    if (strcmp(applet_name, "sync") == 0)   return do_sync(sub_argc, sub_argv);
-    if (strcmp(applet_name, "swapon") == 0) return do_swapon(sub_argc, sub_argv);
-    if (strcmp(applet_name, "mkfs.ext2") == 0)     return do_mkfs_ext2(sub_argc, sub_argv);
-    if (strcmp(applet_name, "mkfs.sifs") == 0)     return do_mkfs_sifs(sub_argc, sub_argv);
-    
+    if (strcmp(applet_name, "mount") == 0)  ret = do_mount(sub_argc, sub_argv);
+    if (strcmp(applet_name, "umount") == 0) ret = do_umount(sub_argc, sub_argv);
+    if (strcmp(applet_name, "ps") == 0)     ret = do_ps(sub_argc, sub_argv);
+    if (strcmp(applet_name, "df") == 0)     ret = do_df(sub_argc, sub_argv);
+    if (strcmp(applet_name, "cat") == 0)    ret = do_cat(sub_argc, sub_argv);
+    if (strcmp(applet_name, "echo") == 0)   ret = do_echo(sub_argc, sub_argv);
+    if (strcmp(applet_name, "hd") == 0)     ret = do_hd(sub_argc, sub_argv);
+    if (strcmp(applet_name, "fm") == 0)     ret = do_fm(sub_argc, sub_argv);
+    if (strcmp(applet_name, "sync") == 0)   ret = do_sync(sub_argc, sub_argv);
+    if (strcmp(applet_name, "swapon") == 0) ret = do_swapon(sub_argc, sub_argv);
+    if (strcmp(applet_name, "swapoff") == 0) ret = do_swapoff(sub_argc, sub_argv);
+    if (strcmp(applet_name, "mkfs.ext2") == 0)     ret = do_mkfs_ext2(sub_argc, sub_argv);
+    if (strcmp(applet_name, "mkfs.sifs") == 0)     ret = do_mkfs_sifs(sub_argc, sub_argv);
+
+    // 不要直接返回 -1，因为 -1 是 ENOPERM，这个错误 ash 会尝试去处理！产生预料之外的副作用！
+    if(ret <= 0){
+        return 0;
+    }
+
     printf("mbbox: applet not found: %s\n", applet_name);
     return 1;
 }

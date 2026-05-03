@@ -2085,3 +2085,38 @@ int32_t sys_swapon(const char* _pathname){
     inode_close(record.parent_inode);
     return 0;
 }
+
+int32_t sys_swapoff(const char* _pathname){
+    char path[MAX_PATH_LEN] = {0};
+    make_abs_pathname(_pathname, path);
+    struct path_search_record record;
+    memset(&record, 0, sizeof(struct path_search_record));
+    // 搜索源文件
+    int32_t inode_no = search_file(path, &record, true);
+    if (inode_no < 0) {
+        inode_close(record.parent_inode);
+        printk("sys_swapoff: file %s not exists\n", _pathname);
+        return -ENOENT; // 源文件不存在
+    }
+
+    struct partition* part = get_part_by_rdev(record.i_dev);
+    struct inode* inode = inode_open(part, inode_no);
+
+    if(inode->i_type != FT_BLOCK_SPECIAL){
+        inode_close(inode);
+        inode_close(record.parent_inode);
+        printk("sys_swapoff: this type of device (%d) cannot swapoff!\n",inode->i_type);
+        return -ENOTBLK;
+    }
+    if (inode->i_rdev == 0) {
+        printk("sys_swapoff: invalid device id\n");
+        inode_close(inode);
+        return -EINVAL;
+    }
+    part = get_part_by_rdev(inode->i_rdev);
+    do_swapoff(part);
+    printk("swap off partition %s done!\n",part->name);
+    inode_close(inode);
+    inode_close(record.parent_inode);
+    return 0;
+}

@@ -15,7 +15,6 @@
 #include <stdbool.h>
 #include <sync.h>
 
-uint8_t next_dev_id = 1;
 // 为了快速索引，用数组存指针
 // 设备号从 1 开始，以便避免创建出的 pte 最终为 0 的情况
 struct swap_info* swap_table[MAX_SWAP_DEVICES+1];
@@ -387,7 +386,40 @@ void write_protect(uint32_t err_code, void* err_vaddr) {
 	intr_set_status(_old);
 }
 
+static int32_t get_swap_info_by_part(struct partition* part) {
+    for (int i = 1; i <= MAX_SWAP_DEVICES; i++) {
+        if (swap_table[i] && swap_table[i]->part == part) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int32_t alloc_swap_dev_slot(void){
+    for (int i = 1; i <= MAX_SWAP_DEVICES; i++) {
+        if(swap_table[i]==NULL){
+            return i;
+        }
+    }
+    return -1;
+}
+
 void do_swapon(struct partition* part) {
+    lock_acquire(&swap_lock);
+
+    if (get_swap_info_by_part(part) > 0) {
+        printk("do_swapon: Device %s already mounted as a swap device.\n", part->name);
+        lock_release(&swap_lock);
+        return;
+    }
+
+    int32_t dev_id = alloc_swap_dev_slot();
+    if(dev_id<0){
+        printk("do_swapon: fail to swapon! no more free swap dev slot\n");
+        lock_release(&swap_lock);
+        return;
+    }
+
     struct swap_info* si = (struct swap_info*)kmalloc(sizeof(struct swap_info));
 
     if(si==NULL){
@@ -404,22 +436,61 @@ void do_swapon(struct partition* part) {
     si->slot_bitmap.bits = (uint8_t*)kmalloc(si->slot_bitmap.btmp_bytes_len);
     
     if(si->slot_bitmap.bits == NULL){
+        kfree(si);
+        lock_release(&swap_lock);
         PANIC("do_swapon: fail to kmalloc for bitmap");
     }
 
     bitmap_init(&si->slot_bitmap);
 
-    ASSERT(next_dev_id < MAX_SWAP_DEVICES);
+    ASSERT(dev_id <= MAX_SWAP_DEVICES && dev_id >= 1);
     
-    si->dev_id = next_dev_id++;
-    swap_table[si->dev_id] = si;
+    si->dev_id = dev_id;
+    swap_table[dev_id] = si;
 
     printk("do_swapon: %s enabled as swap device %d, slot count: %d\n", part->name, si->dev_id, si->slot_cnt);
+    lock_release(&swap_lock);
+}
+
+// 目前的设计中，只要有正在使用的 slot，那么我们就拒绝卸载这个 swap 设备
+// 在之后可以考虑这样优化他：先将设备设置为只读，只将内容从磁盘输出，然后引导用户去清空磁盘上的 slot
+// 比如引导用户使用 kill 命令去终止那些正在使用该设备进行 swap 的进程
+// 等到 slot 全部为空了再进行卸载，这么做需要额外考虑一下在 swapoff 的过程中，如果用户又重新 swapon 了这个设备该怎么办
+// 这时可能需要重新恢复这个设备的写权限，让其可以重新写入数据
+// 由于这个交互比较麻烦，目前先直接拒绝卸载，对于目前的使用场景来说已经足够了
+void do_swapoff(struct partition* part) {
+    lock_acquire(&swap_lock);
+    
+    int32_t dev_id = get_swap_info_by_part(part);
+    if (dev_id < 0) {
+        printk("swapoff: swap device not found\n");
+        lock_release(&swap_lock);
+        return;
+    } 
+
+    struct swap_info* si = swap_table[dev_id]; 
+
+    // 只要还有数据，就拒绝卸载
+    if (si->used_slots > 0) {
+        printk("swapoff: %s is busy (%d slots in use). Clean up tasks or wait.\n", 
+               part->name, si->used_slots);
+        lock_release(&swap_lock);
+        return;
+    } 
+
+    ASSERT(dev_id == si->dev_id);
+    // 彻底释放资源
+    swap_table[dev_id] = NULL;
+    kfree(si->slot_bitmap.bits);
+    kfree(si);
+    printk("swapoff: %s unmounted successfully.\n", part->name);
+    
+    lock_release(&swap_lock);
 }
 
 // 返回编码后的 PTE 值 (slot_idx << 4 | dev_id << 1)
 uint32_t alloc_swap_slot(void) {
-    for (int i = 0; i < MAX_SWAP_DEVICES; i++) {
+    for (int i = 1; i <= MAX_SWAP_DEVICES; i++) {
         struct swap_info* si = swap_table[i];
         if (si == NULL) continue;
         // printk("alloc slot\n");
@@ -432,6 +503,9 @@ uint32_t alloc_swap_slot(void) {
             // 当 present 位为 0 时，PTE 的其他的几个属性位都会被直接忽略。
             // 因此我们可以直接复用这几个位来存储我们的 dev_id，但是这可能会覆盖掉我们原本的 RW 位
             // 这也不用担心，因为我们可以通过 VMA 来恢复这个权限位。
+            // 防止上溢出，通常不容易发生，主要要检查的是下溢出，上溢出只是顺手检查
+            ASSERT(si->used_slots+1>si->used_slots);
+            si->used_slots++;
             return (uint32_t)((bit_idx << 4) | (si->dev_id << 1));
         }
     }
@@ -445,6 +519,9 @@ void free_swap_slot(uint32_t pte_val) {
     struct swap_info* si = swap_table[dev_id];
     if (si) {
         bitmap_set(&si->slot_bitmap, slot_idx, 0); // 归还位图
+        // 操作不当时，非常容易发生下溢出，需要检查
+        ASSERT(si->used_slots-1 < si->used_slots); // 防止下溢
+        si->used_slots--;
     }
 }
 
@@ -567,6 +644,7 @@ static void* swap_out(void) {
         // 对于文件映射脏页
         // 因为我们目前只支持 MAP_PRIVATE，私有映射的脏页不应该写回原文件！
         // 它们一旦变脏，就变成了“写时复制”后的私有数据，应该当做匿名页处理，写到 Swap。
+
         uint32_t swap_pte = alloc_swap_slot();
         if (swap_pte == 0) {
             // 交换分区满了！
@@ -585,10 +663,17 @@ static void* swap_out(void) {
         swap_write(swap_pte, kaddr);
         kunmap(kaddr);
         
+        // 我们直接将刚刚构造好的新 pte 条目存到相应的 pte 中
+        // 这样的话，在访问这个虚拟地址时，硬件会发现 P 位为 0 并触发缺页中断
+        // 然后将流程给到 swap_page 函数中，swap_page 会将这个 pte 的内容和触发缺页的虚拟地址传到 swap_in 函数中
+        // 然后 swap_in 函数会申请新的物理页，然后根据 *pte_ptr 中的页 slot 号到磁盘的相应位置将数据换入内存
+        // 之后建立新申请的物理页和触发页错误的虚拟页之间的映射  
         *pte_ptr = swap_pte; // 页表存 Swap 索引
     } else {
         // 无论是文件映射页还是匿名映射页，总之我们直接把页表项置空，等访问时触发缺页中断逻辑
         // 然后让 swap_page 函数来处理
+        // 这会让我们得到一个神奇的特性，如果我们目前置换的页不是一个脏页，那么即使没有 swap 设备我们的 swap 操作也能成功
+        // 如果一个程序整体没有脏页，那么在没有 swap 设备的情况下即使将整个程序 swap 出去也都不会产生问题
         *pte_ptr = 0;
     }
 
