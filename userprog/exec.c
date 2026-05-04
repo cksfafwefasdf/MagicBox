@@ -1,3 +1,4 @@
+#include <exec.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <global.h>
@@ -5,7 +6,6 @@
 #include <memory.h>
 #include <string.h>
 #include <thread.h>
-#include <exec.h>
 #include <stdio.h>
 #include <syscall.h>
 #include <stdio-kernel.h>
@@ -15,68 +15,56 @@
 #include <wait_exit.h>
 #include <vma.h>
 #include <fcntl.h>
+#include <errno.h>
 
 extern void intr_exit;
 
-static int32_t load(const char* pathname){
-	int32_t ret = -1;
-	struct Elf32_Ehdr elf_header;
-	struct Elf32_Phdr prog_header;
-	memset(&elf_header,0,sizeof(struct Elf32_Ehdr));
-
-	int32_t fd = sys_open(pathname,O_RDONLY);
-	if(fd < 0){
-		return -1;
-	}
+static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header){
 	
+	ASSERT(elf_header!=NULL && fd>=0);
+	int32_t load_bias = -EFAULT;
 	
-	if(sys_read(fd,&elf_header,sizeof(struct Elf32_Ehdr))!= sizeof(struct Elf32_Ehdr)){
-		ret = -1;
-		goto done;
-	}
+	// execv 的进程通常直接就是我们现在正在运行的程序所在的进程了
+	struct task_struct* cur = get_running_task_struct();
+    struct Elf32_Phdr prog_header;
 
-	if(memcmp(elf_header.e_ident,"\177ELF\1\1\1",7)\
-	|| elf_header.e_type!= 2\
-	|| elf_header.e_machine!=3\
-	|| elf_header.e_version!=1\
-	|| elf_header.e_phnum>1024\
-	|| elf_header.e_phentsize!=sizeof(struct Elf32_Phdr)){
-		return -1;
-		goto done;
-	}
 
-	Elf32_Off prog_header_offset = elf_header.e_phoff;
-	Elf32_Half prog_header_size = elf_header.e_phentsize;
+	// 获取 inode 便于填充vma
+    int32_t global_fd = fd_local2global(cur, fd);
+    struct inode* file_inode = file_table[global_fd].fd_inode;
 
-	int32_t global_fd = fd_local2global(get_running_task_struct(), fd);
-
-	struct inode* file_inode = file_table[global_fd].fd_inode; // 获取 inode，以便于填充vma
-
-	ASSERT(global_fd!=-1);
+	Elf32_Off prog_header_offset = elf_header->e_phoff;
+	Elf32_Half prog_header_size = elf_header->e_phentsize;
 
 	uint32_t prog_idx = 0;
     uint32_t max_vaddr = 0; 
-	// execv 的进程通常直接就是我们现在正在运行的程序所在的进程了
-    struct task_struct* cur = get_running_task_struct();
-
+	
 	cur->start_code = 0;
     cur->end_code = 0;
     cur->start_data = 0;
     cur->end_data = 0;
 	
-	while(prog_idx<elf_header.e_phnum){
-		
+	while(prog_idx<elf_header->e_phnum){
+
+		// 在循环遍历 Program Header 时
 		memset(&prog_header,0,prog_header_size);
 		
 		sys_lseek(fd,prog_header_offset,SEEK_SET);
-		// printf("1\n1\n1\n");
-		if(sys_read(fd,&prog_header,prog_header_size)!=prog_header_size){
-			ret = -1;
-			goto done;
+		int ret = sys_read(fd,&prog_header,prog_header_size);
+		ASSERT(ret>=0 && ret == prog_header_size);
+
+		if(ret < 0){
+			// 直接返回 read 的错误码
+			return ret;
 		}
+
 		// printf("prog_header.p_type:%x\n",prog_header.p_type);
 		// 所有的代码段和数据段都必须是可加载段（PT_LOAD）
 		if(PT_LOAD == prog_header.p_type){
+			// 找出偏移量为 0 的可加载段，以便给 AT_PHDR 用
+			if (prog_header.p_offset == 0) {
+    			load_bias = prog_header.p_vaddr; 
+			}
 
 			// VMA_READ 的flag的定义和 PF_R 的定义不一样，所以得翻译一下
 			uint32_t vma_flags = 0;
@@ -147,7 +135,7 @@ static int32_t load(const char* pathname){
 			
 		}
 
-		prog_header_offset+=elf_header.e_phentsize;
+		prog_header_offset+=elf_header->e_phentsize;
 		prog_idx++;
 	}
 
@@ -174,16 +162,103 @@ static int32_t load(const char* pathname){
 
 	// printk("load: start_code:%x end_data:%x start_stack:%x\n",cur->start_code,cur->end_data,cur->start_stack);
 
-	ret = elf_header.e_entry;
+	return load_bias;
+}
 
-done:
-	sys_close(fd);
-	return ret;
+static int32_t load_elf(int32_t fd, struct Elf32_Ehdr* elf_header){
+
+	ASSERT(elf_header!=NULL && fd>=0);
+
+	int32_t global_fd = fd_local2global(get_running_task_struct(), fd);
+	
+	ASSERT(global_fd!=-1);
+
+    struct inode* inode = file_table[global_fd].fd_inode;
+
+    // 检查是否是目录
+    if (FT_DIRECTORY == inode->i_type) {
+        return -EISDIR; 
+    }
+	
+	int32_t read_ret = sys_read(fd,elf_header,sizeof(struct Elf32_Ehdr));
+	if(read_ret < 0){
+		return read_ret;
+	}
+
+	// e_type = 2 是 ET_EXEC
+	// e_machine = 3 是 i386
+	if(memcmp(elf_header->e_ident,"\177ELF\1\1\1",7)\
+	|| elf_header->e_type!=2\
+	|| elf_header->e_machine!=3\
+	|| elf_header->e_version!=1\
+	|| elf_header->e_phnum>1024\
+	|| elf_header->e_phentsize!=sizeof(struct Elf32_Phdr)){
+		return -ENOEXEC;
+	}
+
+	return 0;
 }
 
 // 在 Linux 的实现中，只有带环境变量的 execve ，execv 是库函数封装的
+/* 
+ * -----------------------------------------------------------
+ * sys_execve 完成后的用户栈布局 (符合 System V ABI i386 标准):
+ * -----------------------------------------------------------
+ * 高地址 (USER_STACK_BASE: 0xc0000000)
+ * 
+ *   [ 字符串区域 ]
+ *   ... 
+ *   envp[n] 字符串内容 ("PATH=/usr/bin\0")
+ *   ...
+ *   argv[n] 字符串内容 ("ls\0")
+ * 
+ *   [ 指针/辅助向量区域 ] (4字节对齐)
+ *   ---------------------------------------------------------
+ *   Padding / Unspecified         <- 初始 sp 这里的空间通常预留
+ *   ---------------------------------------------------------
+ *   Auxiliary Vector (AT_NULL)    <- Value: 0
+ *   Auxiliary Vector (AT_NULL)    <- Key: 0 (标识辅助向量结束)
+ *   ...
+ *   Auxiliary Vector (AT_ENTRY)   <- Value: 主程序入口 e_entry
+ *   Auxiliary Vector (AT_ENTRY)   <- Key: 9
+ *   Auxiliary Vector (AT_PHDR)    <- Value: 主程序 PHDR 虚拟地址
+ *   Auxiliary Vector (AT_PHDR)    <- Key: 3
+ *   ---------------------------------------------------------
+ *   envp[n] = NULL                <- 环境变量数组结束标志
+ *   envp[n-1] 指针                --|
+ *   ...                             |-- 指向高地址处的字符串内容
+ *   envp[0] 指针                  --|
+ *   ---------------------------------------------------------
+ *   argv[n] = NULL                <- 参数数组结束标志
+ *   argv[n-1] 指针                --|
+ *   ...                             |-- 指向高地址处的字符串内容
+ *   argv[0] 指针                  --|
+ *   ---------------------------------------------------------
+ *   argc                          <- 最终 ESP 指向这里 (参数个数)
+ *   ---------------------------------------------------------
+ * 低地址 (ESP)
+ */
 int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
-    if (argv == NULL) return -1;
+    if (argv == NULL) return -EFAULT; // 非法地址/坏地址;
+
+
+	if(strlen(path) > MAX_PATH_LEN){
+		return -ENAMETOOLONG;
+	}
+
+	struct Elf32_Ehdr elf_header;
+	// 栈上的变量最好手动清零一下
+	memset(&elf_header, 0, sizeof(struct Elf32_Ehdr));
+
+	int32_t fd = sys_open(path, O_RDONLY);
+	
+	if(fd < 0){
+		return fd;
+	}
+	
+    // 预检合规性（此时旧进程空间还是完好的）
+    int32_t err = load_elf(fd, &elf_header);
+    if (err < 0) return err; // 直接返回错误，进程无损
 
     struct task_struct* cur = get_running_task_struct();
     uint32_t argc = 0;
@@ -194,7 +269,7 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
     char* k_arg_page = get_kernel_pages(1);
     if (!k_arg_page) return -1;
     char* path_bk = kmalloc(strlen(path) + 1); // +1 是加上一个 '\0'
-    if (!path_bk) { mfree_page(PF_KERNEL, k_arg_page, 1); return -1; }
+    if (!path_bk) { mfree_page(PF_KERNEL, k_arg_page, 1); return -ENOMEM; }
     strcpy(path_bk, path); // 备份路径
 
     char* k_ptr = k_arg_page;
@@ -205,13 +280,26 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
 	// 备份参数，第一个参数是文件名
 	// 由于我们是以 argv[i] != NULL 作为边界条件的，因此 argv 必须以 NULL 结尾
 	// 拷贝 argv 字符串
+	uint32_t total_len = 0;
     while (argv[argc] && argc < MAX_ARG_NR) {
-        arg_lens[argc] = strlen(argv[argc]) + 1;
-        arg_offsets[argc] = (uint32_t)(k_ptr - k_arg_page);
-        strcpy(k_ptr, argv[argc]);
-        k_ptr += arg_lens[argc];
-        argc++;
-    }
+		uint32_t len = strlen(argv[argc]) + 1;
+		
+		// 检查是否会超出我们申请的一页内核内存
+		if (total_len + len > PG_SIZE) {
+			// 释放已申请的内存并返回“参数列表过长”错误
+			mfree_page(PF_KERNEL, k_arg_page, 1);
+			kfree(path_bk);
+			return -E2BIG; 
+		}
+
+		arg_lens[argc] = len;
+		arg_offsets[argc] = total_len;
+		strcpy(k_ptr, argv[argc]);
+		
+		k_ptr += len;
+		total_len += len;
+		argc++;
+	}
 
     // 拷贝 envp 字符串 (如果 envp 为 NULL 则 envc 为 0)
     while (envp && envp[envc] && (argc + envc) < MAX_ARG_NR) {
@@ -245,13 +333,17 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
 
 	// 加载新程序，传入内核空间的 path 副本
     // 此时读取 path 访问的是内核地址 (0xC0000000以上)，绝对不会触发用户空间缺页
-    int32_t entry_point = load(path_bk);
-    if (entry_point == -1) {
-        kfree(path_bk); mfree_page(PF_KERNEL, k_arg_page, 1);
+    int32_t load_bias = load_vma(fd, &elf_header);
+    // fd 用完了，关掉
+	sys_close(fd);
+    if (load_bias < 0) {
+        // kfree(path_bk); 
+		mfree_page(PF_KERNEL, k_arg_page, 1);
 		// 必须走 sys_exit。
 		// 既然已经 user_vaddr_space_clear 了，这个进程已经无法生存，
 		// 必须通过正规渠道“宣布死亡”，让父进程收尸。
-        sys_exit(-1);
+        sys_exit(load_bias);
+		// return load_vma_ret; // 返回错误码
     }
 
     // 准备用户栈 (从高向低压入)
@@ -275,11 +367,38 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
         k_argv_ps[i] = user_stack_top;
     }
 
-    // 压入指针数组 (必须 4 字节对齐)
+    // 压入辅助向量和指针数组 (必须 4 字节对齐)
     uint32_t* sp = (uint32_t*)(user_stack_top & ~3);
 
-    // 压入辅助向量结束标志 (Auxv)  musl 启动需要用到
-    sp--; *sp = 0; 
+	// 压入辅助向量，静态链接的程序或许可以不用，但是不能没有
+    // AT_NULL (结束标志)
+    sp--; *sp = 0;           // Value
+    sp--; *sp = AT_NULL;     // Key: 0
+
+    // AT_ENTRY (主程序入口点)
+    sp--; *sp = elf_header.e_entry; 
+    sp--; *sp = AT_ENTRY;    // Key: 9
+
+    // AT_PHNUM (程序头数量)
+    sp--; *sp = elf_header.e_phnum;
+    sp--; *sp = AT_PHNUM;    // Key: 5
+
+    // AT_PHENT (程序头条目大小)
+    sp--; *sp = elf_header.e_phentsize;
+    sp--; *sp = AT_PHENT;    // Key: 4
+
+    // AT_PHDR (程序头表在内存中的地址)
+    // load 后的 PHDR 地址 = 加载基址 + 偏移 e_phoff
+	// 对于静态链接的执行文件
+	// ELF 文件头和程序头表（PHDR）通常被包含在第一个 PT_LOAD 段中
+	// 这个段在文件中的偏移 p_offset 是 0。
+    sp--; *sp = elf_header.e_phoff + load_bias;
+	// printk("load_bias: 0x%x\n",load_bias);
+    sp--; *sp = AT_PHDR;     // Key: 3
+
+    // AT_PAGESZ (页面大小)
+    sp--; *sp = PG_SIZE;        // 4KB
+    sp--; *sp = AT_PAGESZ;   // Key: 6
 
     // 压入 envp 指针数组 (以 NULL 结尾)
     sp--; *sp = 0; 
@@ -304,7 +423,7 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
 
     // 准备中断栈，进入用户态
     struct intr_stack* intr_0_stack = (struct intr_stack*)((uint32_t)cur->kstack_pages + KERNEL_THREAD_STACK - sizeof(struct intr_stack));
-    intr_0_stack->eip = (void*)entry_point;
+    intr_0_stack->eip = (void*)elf_header.e_entry;
     intr_0_stack->esp = (void*)sp;  // ESP 指向 argc
     
     // 按照 Linux ABI，EDX 存放 envp 地址，EBX 清零

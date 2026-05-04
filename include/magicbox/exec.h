@@ -5,6 +5,22 @@
 
 #define MAX_PT_LOADER_SEGMENT 10 // the max number of the PT_LOAD segment is 10 (Linux standard)
 
+// 终止符，用于告诉 C 库或动态链接器辅助向量表到此结束，类似于字符串结尾的 \0
+#define AT_NULL   0 
+// 指向主程序程序头表在虚拟内存中的地址，动态链接器（ld.so）必须读取程序头表来定位 .dynamic 段，从而知道主程序依赖哪些库。
+#define AT_PHDR   3 
+// 每个程序头条目的大小（在 32 位系统上通常是 32 字节），用于遍历 AT_PHDR 指向的数组。
+#define AT_PHENT  4 
+// 程序头表中有多少个条目，防止 ld.so 在遍历程序头时越界。
+#define AT_PHNUM  5 
+// 系统的物理页大小（通常是 4096，即 4KB），malloc 等内存分配函数需要知道页对齐边界；动态链接器在映射共享库时也需要按页对齐。
+#define AT_PAGESZ 6 
+// 动态链接器（Interpreter）本身被加载到的基地址，如果是静态链接程序，这个值为 0。如果是动态链接，它告诉内核 ld.so 映射在哪个偏置位置。
+#define AT_BASE   7  
+// Entry Point，主程序的入口点地址（即 elf_header.e_entry）
+// 当动态链接器（ld.so）帮主程序搬完砖（加载完所有 .so 库）后，它需要知道跳到哪里去开始执行主程序，这个地址就从这里拿。
+#define AT_ENTRY  9 
+
 typedef uint32_t Elf32_Word,Elf32_Addr,Elf32_Off;
 typedef uint16_t Elf32_Half;
 
