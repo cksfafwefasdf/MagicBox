@@ -15,6 +15,7 @@
 #include <buddy.h>
 #include <file.h>
 #include <file_table.h>
+#include <errno.h>
 
 // uint8_t* mem_map = NULL;
 
@@ -41,7 +42,7 @@ static void direct_map_lowmem_range(uint32_t start_paddr, uint32_t end_paddr);
 static void* direct_map_ptr(uint32_t paddr);
 static void* do_alloc(uint32_t size);
 static void do_free(void* ptr);
-static uint32_t prot_to_vm_flags(uint32_t prot, bool anon);
+static uint32_t prot_to_vm_flags(uint32_t prot, uint32_t flags, bool anon);
 static struct vm_area* find_covering_or_next_vma(struct task_struct* task, uint32_t vaddr);
 static uint32_t do_mmap(struct task_struct* cur, uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset);
 
@@ -198,7 +199,9 @@ void* palloc(struct buddy_pool* m_pool) {
 
     if (pg == NULL) {
         intr_set_status(old);
+#ifdef DEBUG_SWAP
         printk("palloc: warning, palloc return NULL!\n");
+#endif
         return NULL;
     }
 
@@ -402,7 +405,10 @@ void* get_user_pages(uint32_t pg_cnt){
 // 内核空间目前我们全用直接映射，所以不需要在此处进一步操作了，不会调用这个函数建立映射
 void* mapping_v2p(uint32_t vaddr ,uint32_t paddr){
 	// struct buddy_pool* mem_pool = pf&PF_KERNEL?&kernel_pool:&user_pool;
-    ASSERT((void*)vaddr!=NULL && (void*)paddr!=NULL)
+    if((void*)vaddr==NULL || (void*)paddr==NULL){
+        printk("vaddr: 0x%x paddr: 0x%x\n",vaddr,paddr);
+        PANIC("bad addr");
+    }
     
 	// 由于我们在 add_vma 时已经确认了这块地的合法性
 	// 因此此处不用再去操作相关的东西了，只用绑定物理地址和虚拟地址就行
@@ -934,7 +940,7 @@ static bool is_kernel_vaddr(uint32_t vaddr) {
     return vaddr >= KERNEL_PAGE_OFFSET;
 }
 
-static uint32_t prot_to_vm_flags(uint32_t prot, bool anon) {
+static uint32_t prot_to_vm_flags(uint32_t prot, uint32_t flags, bool anon) {
     uint32_t vma_flags = 0;
     if (prot & PROT_READ) {
         vma_flags |= VM_READ;
@@ -944,6 +950,9 @@ static uint32_t prot_to_vm_flags(uint32_t prot, bool anon) {
     }
     if (prot & PROT_EXEC) {
         vma_flags |= VM_EXEC;
+    }
+    if (!(flags & MAP_PRIVATE)) {
+        vma_flags |= VM_SHARED;
     }
     if (anon) {
         vma_flags |= VM_ANON;
@@ -1114,7 +1123,7 @@ static uint32_t do_mmap(struct task_struct* cur, uint32_t addr, uint32_t len, ui
         if (fd != -1 || offset != 0) {
             return (uint32_t)MAP_FAILED;
         }
-        add_vma(cur, vaddr, vaddr + size, 0, NULL, prot_to_vm_flags(prot, true), 0);
+        add_vma(cur, vaddr, vaddr + size, 0, NULL, prot_to_vm_flags(prot, flags, true), 0);
         return vaddr;
     }
 
@@ -1271,4 +1280,111 @@ uint32_t* get_pte_ptr(uint32_t* pgdir, uint32_t vaddr) {
 
     // 返回指向具体 PTE 的指针
     return &pt_vaddr[pte_idx];
+}
+
+// 将 VMA 的 flags 转换为页表属性位
+static uint32_t vma_flags_to_pte_attr(uint32_t vma_flags) {
+    uint32_t attr = PG_P_1; // 存在位
+
+    // 处理读写权限
+    if (vma_flags & VM_WRITE) {
+        attr |= PG_RW_W; // 可读写
+    } else {
+        attr |= PG_RW_R; // 只读
+    }
+
+    // 处理访问级别
+    if (vma_flags & VM_USER) {
+        attr |= PG_US_U; // 对应页表中的 U/S 位 = 1 (User)
+    } else {
+        attr |= PG_US_S; // 对应页表中的 U/S 位 = 0 (Supervisor)
+    }
+
+    return attr;
+}
+
+static void update_page_tables_permission(uint32_t* pgdir, uint32_t start, uint32_t end, uint32_t new_flags) {
+    ASSERT(start % PG_SIZE == 0 && end % PG_SIZE == 0);
+    
+    uint32_t attr = vma_flags_to_pte_attr(new_flags);
+    uint32_t vaddr = start;
+
+    while (vaddr < end) {
+        // 检查 PDE
+        uint32_t pde_idx = PDE_IDX(vaddr);
+        // 这里 pgdir[pde_idx] 访问的是物理页目录的内容
+        if (!(pgdir[pde_idx] & PG_P_1)) {
+            // 如果这一级页表都不存在，说明这块区域还没分配物理页，直接跳过
+            vaddr = (vaddr & 0xffc00000) + 0x00400000; // 跳到下一个 PDE 的起始位置
+            continue;
+        }
+
+        // 定位 PTE (利用递归分页获取该页表的内核虚拟地址)
+        // 0xffc00000 是页表区基址
+        uint32_t* pte_ptr = (uint32_t*)(0xffc00000 | (pde_idx << 12));
+        uint32_t pte_idx = PTE_IDX(vaddr);
+
+        // 检查 PTE
+        if (pte_ptr[pte_idx] & PG_P_1) {
+            uint32_t old_pte = pte_ptr[pte_idx];
+            uint32_t pa = old_pte & 0xfffff000;
+            struct page* pg = ADDR_TO_PAGE(global_pages, pa); // 找到物理页元数据
+
+            uint32_t final_attr = attr;
+
+            // 如果用户想要写权限 (attr & PG_RW_W)
+            // 但是这个物理页目前被多方共享 (pg->ref_count > 1)
+            // 那么我们绝对不能在 PTE 里给写权限，必须保持只读，等待 COW 触发自动将其变为写
+            if ((attr & PG_RW_W) && (pg->ref_count > 1)) {
+                final_attr &= ~PG_RW_W; // 强制抹除写权限，维持只读
+            }
+
+            uint32_t new_pte = pa | final_attr;
+            
+            if (old_pte != new_pte) {
+                pte_ptr[pte_idx] = new_pte;
+                asm volatile ("invlpg (%0)" : : "r" (vaddr) : "memory");
+            }
+        }
+
+        vaddr += PG_SIZE;
+    }
+}
+
+// 更改一块虚拟地址的权限，需要按页对其
+int32_t sys_mprotect(uint32_t addr, uint32_t len, uint32_t new_flags) {
+    // 对齐检查
+    if (addr % PG_SIZE != 0) return -EINVAL;
+    uint32_t end = addr + PAGE_ALIGN_UP(len);
+
+    struct task_struct* cur = get_running_task_struct();
+    uint32_t curr_addr = addr;
+
+    while (curr_addr < end) {
+        struct vm_area* vma = find_vma(cur, curr_addr);
+        if (!vma) return -ENOMEM; // 权限修改不能超过已有的 VMA 范围
+
+        // 如果 vma 开始位置比修改起点早，分裂它
+        if (vma->vma_start < curr_addr) {
+            vma_split(vma, curr_addr); 
+            // 分裂后，原来的 vma 变短了，下一个循环会自动处理 new_vma
+            vma = find_vma(cur, curr_addr); 
+        }
+
+        // 如果 vma 结束位置比修改终点晚，分裂它
+        if (vma->vma_end > end) {
+            vma_split(vma, end);
+            // 分裂后，当前 vma 刚好对齐到 end
+        }
+
+        // 修改 VMA 权限
+        vma->vma_flags = new_flags;
+
+        // 同步物理页表
+        update_page_tables_permission(cur->pgdir, vma->vma_start, vma->vma_end, new_flags);
+
+        curr_addr = vma->vma_end;
+    }
+
+    return 0;
 }

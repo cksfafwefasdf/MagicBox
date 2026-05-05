@@ -14,6 +14,7 @@
 #define USER_STACK_SIZE 0x800000UL
 // #define USER_STACK_BASE KERNEL_VADDR_START
 #define USER_STACK_BASE 0xC0000000UL
+#define INTERP_VADDR_START 0x40000000 // 共享库或者动态链接器的起始地址
 // heap 从低往高长
 // mmap 从高往低找
 // stack 固定占最高 8MB
@@ -23,10 +24,13 @@
 #define VM_READ       0x0001
 #define VM_WRITE      0x0002
 #define VM_EXEC       0x0004
-#define VM_STACK      0x0008  // 依然保留这个方便快速识别
+// #define VM_STACK      0x0008  // 依然保留这个方便快速识别
+//!VM_SHARED 就可以等同于 VM_PRIVATE。
+#define VM_SHARED     0x0008  // 标志是否为共享映射 (MAP_SHARED)
 #define VM_ANON       0x0010  // 匿名页（无文件备份，如堆、栈）
 #define VM_GROWSDOWN  0x0020  // 向低地址生长（栈专用）
 #define VM_GROWSUP    0x0040  // 向高地址生长（堆专用）
+#define VM_USER       0x0080  // 1表示用户态可访问，0表示仅内核可访问
 
 struct task_struct;
 

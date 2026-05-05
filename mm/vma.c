@@ -6,6 +6,7 @@
 #include <stdio-kernel.h>
 #include <memory.h>
 #include <inode.h>
+#include <errno.h>
 
 
 // 判定函数，检查当前的 vma 是否包含目标地址

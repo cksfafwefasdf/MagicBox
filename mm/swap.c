@@ -14,6 +14,7 @@
 #include <ide.h>
 #include <stdbool.h>
 #include <sync.h>
+#include <errno.h>
 
 // 为了快速索引，用数组存指针
 // 设备号从 1 开始，以便避免创建出的 pte 最终为 0 的情况
@@ -105,7 +106,7 @@ void swap_page(uint32_t err_code,void* err_vaddr){
            (err_code & 1) ? "Page Present" : "Page Not Present");
 #endif
 	enum intr_status _old =  intr_disable();
-#ifdef DEBUG_SWAP
+#ifdef DEBUG_PG_FAULT
 	printk("swap_page:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
 #endif
 	struct task_struct* cur = get_running_task_struct();
@@ -145,7 +146,9 @@ void swap_page(uint32_t err_code,void* err_vaddr){
     // 页面在交换分区中 (P=0 且 PTE 有内容)
     if (pte_val != 0 && !(pte_val & PG_P_1)) {
         if (!swap_in(pte_ptr, page_vaddr, vma)) {
-            PANIC("swap_page: swap_in failed");
+            printk("swap_page: swap_in failed");
+            intr_set_status(_old);
+            goto segmentation_fault;
         }
         intr_set_status(_old);
         return;
@@ -197,7 +200,8 @@ void swap_page(uint32_t err_code,void* err_vaddr){
         if (swapped_phys == NULL) {
             // 连 swap_out 都踢不出页面了（比如内存里全是内核不可移动页或被锁定的页）
             // 此时才是真正的 Out of Memory，而不是内存负载过大
-            PANIC("Out of Memory! No page can be swapped out.");
+            printk("swap_page: out of memory! No page can be swapped out.\n");
+            goto segmentation_fault;
         }
 
         // 既然 swap_out 成功返回了一个物理地址，说明理论上现在有一页空闲了
@@ -318,7 +322,7 @@ void write_protect(uint32_t err_code, void* err_vaddr) {
 	enum intr_status _old =  intr_disable();
 	
     struct task_struct* cur = get_running_task_struct();
-#ifdef DEBUG_SWAP
+#ifdef DEBUG_PG_FAULT
     printk("write_protect:::err_code: %d, err_vaddr: %x\n", err_code, err_vaddr);
 #endif
 
@@ -427,7 +431,9 @@ void do_swapon(struct partition* part) {
     }
     
     si->part = part;
-    si->slot_cnt = part->sec_cnt / 8; // 一个页面 8 个扇区
+    // 我们减去一个 1，留出8个扇区的间隙，防止使用多分区时两个分区间隔的太近
+    // 一个分区把另一个分区的分区表给写坏了，这种情况实在是难以避免，因此我们就采用最简单的留出间隙的方法
+    si->slot_cnt = part->sec_cnt / 8 - 1; // 一个页面 8 个扇区
     
     // 初始化位图结构
     // 计算位图字节长度：slot_cnt / 8 向上取整
@@ -489,10 +495,15 @@ void do_swapoff(struct partition* part) {
 }
 
 // 返回编码后的 PTE 值 (slot_idx << 4 | dev_id << 1)
-uint32_t alloc_swap_slot(void) {
+uint32_t alloc_swap_slot(int32_t* status) {
+    bool has_dev = false;
     for (int i = 1; i <= MAX_SWAP_DEVICES; i++) {
         struct swap_info* si = swap_table[i];
         if (si == NULL) continue;
+        has_dev =true;
+        if(si->used_slots > si->slot_cnt){
+            continue;
+        }
         // printk("alloc slot\n");
         // 扫描 1 个空位
         // 再磁盘上找一个可用的 page slot
@@ -506,10 +517,16 @@ uint32_t alloc_swap_slot(void) {
             // 防止上溢出，通常不容易发生，主要要检查的是下溢出，上溢出只是顺手检查
             ASSERT(si->used_slots+1>si->used_slots);
             si->used_slots++;
+            *status = 0;
             return (uint32_t)((bit_idx << 4) | (si->dev_id << 1));
         }
     }
-    return 0; // 交换空间全满
+    if(has_dev){
+        *status = -ENOMEM; // 交换空间全满
+    } else {
+        *status = -ENODEV; // 无交换设备
+    }
+    return 0;
 }
 
 void free_swap_slot(uint32_t pte_val) {
@@ -629,28 +646,51 @@ static void* swap_out(void) {
 
     // 我们是可以将自己的页置换到磁盘的，不一定非要置换其他进程的页
     // ASSERT(pg->first_owner != get_running_task_struct());
-    printk("swap_out: swap out %s for %s\n",pg->first_owner->name,get_running_task_struct()->name);
 
+#ifdef DEBUG_SWAP
+    printk("swap_out: swap out %s for %s\n",pg->first_owner->name,get_running_task_struct()->name);
+#endif
     uint32_t* pte_ptr = get_pte_ptr(owner->pgdir, vaddr);
     
     // 记录下该页的物理地址，最后返回它
     void* phys_addr = (void*)(*pte_ptr & 0xfffff000);
 
+    bool is_dirty = (*pte_ptr & PG_D);
+    
+    // struct vm_area* vma = find_vma(owner, vaddr);
+    // 扩大了写回的条件，导致了我们对于磁盘容量的要求更高了，原本只需要一个 sdb1 (3901 个页 slot) 就能在4MB环境下运行 tcc_emu0 测试
+    // 现在需要更多的空间才能进行了，大概需要 sdb1 (3901 slots) + sdb5 (2011 slots) + sdb6 (2893 slots) + sdb7 (1633 slots) 才能运行完毕
+    // bool is_writable = (vma->vma_flags & VM_WRITE); 
+
+    // 为了简单起见，我们直接使用页上的 W 位来判断是否可写，可以少一次 vma 链表的遍历
+    // 如果后期因为 swap 导致 0 地址页错误了，那么可以尝试将此处的 is_writable 改成用 vma 判断
+    bool is_writable = (*pte_ptr & PG_RW_W);
+
     // 检查脏位 (PG_D)
     // 如果页面是脏的，或者它从未被换出过，则必须写入磁盘
+    // is_writable 会覆盖所有可写的地址范围，包括堆段和栈段以及某些 mmap 出来的区域，由于他们是孤本，在磁盘没有任何备份
+    // 在动态链接的情况下，会引发很多莫名其妙的错误，因此保险起见，对于这样的页我们也都要写回，防止丢数据
+    // 静态链接时，程序的布局比较固定，也不存在很复杂的运行时加载操作，因此我们只判断 is_dirty
+    // 如果后期因为 swap 导致 0 地址页错误了，可以尝试取消这个对于静态链接程序的优化
     // 如果页面是干净的 (D=0)，说明磁盘上的数据和内存一致，直接跳过写入
-    if (*pte_ptr & PG_D) {
+    if (is_dirty || (owner->is_dyn_link && is_writable)) {
         // 匿名脏页，直接写到 Swap 分区
         // 对于文件映射脏页
         // 因为我们目前只支持 MAP_PRIVATE，私有映射的脏页不应该写回原文件！
         // 它们一旦变脏，就变成了“写时复制”后的私有数据，应该当做匿名页处理，写到 Swap。
-
-        uint32_t swap_pte = alloc_swap_slot();
-        if (swap_pte == 0) {
-            // 交换分区满了！
+        int32_t status = 0;
+        uint32_t swap_pte = alloc_swap_slot(&status);  
+        if (status < 0) {
+            if(status == -ENOMEM){
+                printk("swap_out: fail to alloc_swap_slot, swap space exhausted!!!\n");
+            }else if(status == -ENODEV){
+                printk("swap_out: fail to alloc_swap_slot, you may need a swap device!!!\n");
+            } else {
+                // 先 panic ，之后再进一步处理
+                PANIC("swap_out: fail to alloc_swap_slot, unknown error!");
+            }
             lock_release(&swap_lock);
-            // 先 panic ，之后再进一步处理
-            PANIC("swap_out: fail to alloc_swap_slot, you may need a swap device!");
+            
             return NULL; 
         }
 
@@ -670,7 +710,7 @@ static void* swap_out(void) {
         // 之后建立新申请的物理页和触发页错误的虚拟页之间的映射  
         *pte_ptr = swap_pte; // 页表存 Swap 索引
     } else {
-        // 无论是文件映射页还是匿名映射页，总之我们直接把页表项置空，等访问时触发缺页中断逻辑
+        // 对于只读类型的页，我们直接把页表项置空，等访问时触发缺页中断逻辑
         // 然后让 swap_page 函数来处理
         // 这会让我们得到一个神奇的特性，如果我们目前置换的页不是一个脏页，那么即使没有 swap 设备我们的 swap 操作也能成功
         // 如果一个程序整体没有脏页，那么在没有 swap 设备的情况下即使将整个程序 swap 出去也都不会产生问题
@@ -689,7 +729,9 @@ static void* swap_out(void) {
     asm volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
 
     lock_release(&swap_lock);
+#ifdef DEBUG_SWAP
     printk("swap_out: unbind and pfree paddr(0x%x) and vaddr(0x%x)\n", phys_addr, vaddr);
+#endif
     // 返回这个可以被重新使用的物理地址
     return phys_addr;
 }
@@ -716,7 +758,7 @@ static bool swap_in(uint32_t* pte_ptr, uint32_t page_vaddr, struct vm_area* vma)
             // 物理页全被锁定或全是内核页，实在无法置换
             lock_release(&swap_lock);
             // 目前先 panic，防止内核跑飞
-            PANIC("swap_in: OOM - no page can be swapped out!\n");
+            printk("swap_in: OOM - no page can be swapped out!\n");
             return false; 
         }
         // swap_out 成功后，下一轮循环会再次尝试 palloc
@@ -741,7 +783,9 @@ static bool swap_in(uint32_t* pte_ptr, uint32_t page_vaddr, struct vm_area* vma)
     *pte_ptr = (uint32_t)page_paddr | PG_P_1 | PG_US_U | attr;
     asm volatile("invlpg (%0)" : : "r"(page_vaddr) : "memory");
     lock_release(&swap_lock);
+#ifdef DEBUG_SWAP
     printk("swap_in: bind paddr(0x%x) with vaddr(0x%x)\n",page_paddr,page_vaddr);
+#endif
     return true;
 }
 
@@ -760,6 +804,10 @@ static void swap_write(uint32_t pte_val, void* buf) {
     uint8_t dev_id = (pte_val >> 1) & 0x07;
     uint32_t slot_idx = pte_val >> 4;
     struct swap_info* si = swap_table[dev_id];
+    
+#ifdef DEBUG_SWAP
+    printk("swap_write: write to dev %s\n", si->part->name);
+#endif
 
     // 一个 Slot 占 8 个扇区 (4KB / 512B)
     uint32_t logic_lba = slot_idx * 8; 

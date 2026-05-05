@@ -124,6 +124,7 @@ extern uint32_t sys_brk(uint32_t new_brk);
 extern uint32_t sys_mmap(uint32_t user_mmap_args);
 extern uint32_t sys_mmap_direct(uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset);
 extern int32_t sys_munmap(uint32_t addr, uint32_t len);
+extern int32_t sys_mprotect(uint32_t addr, uint32_t len, uint32_t new_flags);
 extern uint32_t* get_pte_ptr(uint32_t* pgdir, uint32_t vaddr);
 
 

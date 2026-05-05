@@ -87,6 +87,7 @@ struct task_struct{
 	char name[TASK_NAME_LEN];
 	uint8_t priority;
 	uint8_t ticks;
+	bool is_dyn_link; // 标志当前进程是否是动态链接的，用于优化 swap
 	uint32_t elapsed_ticks;
 
 	// Per-process Open File Table

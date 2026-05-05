@@ -373,3 +373,7 @@ int32_t swapon(const char* _pathname){
 int32_t swapoff(const char* _pathname){
 	return _syscall1(SYS_SWAPOFF,_pathname);
 }
+
+int32_t mprotect(uint32_t addr, uint32_t len, uint32_t new_flags){
+	return _syscall3(SYS_MPROTECT, addr, len, new_flags);
+}

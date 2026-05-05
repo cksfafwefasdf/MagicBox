@@ -21,6 +21,13 @@
 // 当动态链接器（ld.so）帮主程序搬完砖（加载完所有 .so 库）后，它需要知道跳到哪里去开始执行主程序，这个地址就从这里拿。
 #define AT_ENTRY  9 
 
+#define ET_NONE		0		/* No file type */
+#define ET_REL		1		/* Relocatable file */
+#define ET_EXEC		2		/* Executable file */
+#define ET_DYN		3		/* Shared object file */
+#define ET_CORE		4		/* Core file */
+#define	ET_NUM		5		/* Number of defined types */
+
 typedef uint32_t Elf32_Word,Elf32_Addr,Elf32_Off;
 typedef uint16_t Elf32_Half;
 

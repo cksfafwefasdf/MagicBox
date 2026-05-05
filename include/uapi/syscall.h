@@ -73,6 +73,7 @@
 #define SYS_FTRUNCATE 62
 #define SYS_SWAPON 63
 #define SYS_SWAPOFF 64
+#define SYS_MPROTECT 65
 
 // user interface
 extern uint32_t getpid(void);
@@ -147,5 +148,6 @@ extern int32_t link(const char* _oldpath, const char* _newpath);
 extern void sync(void);
 extern int32_t swapon(const char* _pathname);
 extern int32_t swapoff(const char* _pathname);
+extern int32_t mprotect(uint32_t addr, uint32_t len, uint32_t new_flags);
 
 #endif

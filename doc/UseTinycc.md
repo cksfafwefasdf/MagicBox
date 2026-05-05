@@ -12,12 +12,12 @@ make distclean
 
 # musl 的包装器是路径敏感的，他不会自动展开 ~
 # 所以最好用 $HOME
+# 如果不想要 libc.so 这个动态链接器的话，可以把参数 --disable-shared 加上
 ./configure \
     --target=i686 \
     --prefix=$HOME/musl-install \
     CC='gcc -m32' \
     CFLAGS='-m32 -march=i486 -fno-stack-protector' \
-    --disable-shared \
     --enable-gcc-wrapper
 ```
 
@@ -195,7 +195,9 @@ sed 's/\\/\\\\/g;s/"/\\"/g;s/$/\\n/g' include/tccdefs.h | awk '{print "\""$0"\""
 之后，在宿主机上编译 tcc (此时位于tcc源码根目录)
 
 ```shell
+# DCONFIG_TCC_ELFINTERP 用于修改 interp 的位置为我们想要的位置
 gcc -m32 -static -O0 -nostdlib \
+	-DCONFIG_TCC_ELFINTERP='"/usr/lib/libc.so"' \
     -DONE_SOURCE=1 \
     -DCONFIG_TCC_STATIC=1 \
     -DTCC_TARGET_I386=1 \
@@ -310,6 +312,7 @@ int main(){
 
 ```shell
 # tcc、hello.c 按照实际情况修改
+# 如果像测试动态链接，可以把 -static 去了
 tcc -static -o hello hello.c
 ```
 

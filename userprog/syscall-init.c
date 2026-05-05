@@ -97,6 +97,7 @@ void syscall_init(void){
 	syscall_table[SYS_SYNC] = sys_sync;
 	syscall_table[SYS_SWAPON] = sys_swapon;
 	syscall_table[SYS_SWAPOFF] = sys_swapoff;
+	syscall_table[SYS_MPROTECT] = sys_mprotect;
 	
 	put_str("syscall_init done\n");
 }

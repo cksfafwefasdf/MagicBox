@@ -19,10 +19,13 @@
 
 extern void intr_exit;
 
-static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header){
+// load_bias 用于处理动态链接，动态链接时，程序的未知可能会在任意的位置，所以需要这个参数来定位
+static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header, uint32_t load_bias, char* interp_path){
 	
 	ASSERT(elf_header!=NULL && fd>=0);
-	int32_t load_bias = -EFAULT;
+	// int32_t load_bias = -EFAULT;
+
+	int32_t phdr_vaddr = -1; // 用来记录真正的 PHDR 加载位置
 	
 	// execv 的进程通常直接就是我们现在正在运行的程序所在的进程了
 	struct task_struct* cur = get_running_task_struct();
@@ -58,18 +61,28 @@ static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header){
 			return ret;
 		}
 
+		// 处理 PT_INTERP，读取加载器的路径
+		if (PT_INTERP == prog_header.p_type && interp_path != NULL) {
+            sys_lseek(fd, prog_header.p_offset, SEEK_SET);
+            sys_read(fd, interp_path, prog_header.p_filesz);
+			if (prog_header.p_filesz >= MAX_PATH_LEN){
+				PANIC("p_filesz >= MAX_PATH_LEN");
+			}
+            interp_path[prog_header.p_filesz] = '\0';
+        }
+
 		// printf("prog_header.p_type:%x\n",prog_header.p_type);
 		// 所有的代码段和数据段都必须是可加载段（PT_LOAD）
 		if(PT_LOAD == prog_header.p_type){
-			// 找出偏移量为 0 的可加载段，以便给 AT_PHDR 用
-			if (prog_header.p_offset == 0) {
-    			load_bias = prog_header.p_vaddr; 
-			}
+			// 记录第一个 PT_LOAD 的 vaddr，用于后续辅助向量计算 AT_PHDR
+            if (prog_header.p_offset == 0) {
+                phdr_vaddr = (prog_header.p_vaddr + load_bias) + elf_header->e_phoff;
+            }
 
 			// VMA_READ 的flag的定义和 PF_R 的定义不一样，所以得翻译一下
 			uint32_t vma_flags = 0;
 
-			uint32_t vaddr_start = prog_header.p_vaddr;
+			uint32_t vaddr_start = prog_header.p_vaddr + load_bias;
     		uint32_t vaddr_end = vaddr_start + prog_header.p_memsz;
 
 			// 按照elf的标准，
@@ -121,11 +134,13 @@ static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header){
 				// 但是这没啥关系，因为这和linux的表现一致
 				// 只有第一次遇到只读段时，才记录 start_code
 				if (cur->start_code == 0) {
-					cur->start_code = prog_header.p_vaddr;
+					// cur->start_code = prog_header.p_vaddr;
+					cur->start_code = vaddr_start;
 				}
 				cur->end_code = vaddr_end;
 			} else { // 有写权限 -> 数据段
-				cur->start_data = prog_header.p_vaddr;
+				// cur->start_data = prog_header.p_vaddr;
+				cur->start_data = vaddr_start;
 				cur->end_data = vaddr_end; // 数据/BSS 结束的地方
 			}
 
@@ -139,30 +154,34 @@ static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header){
 		prog_idx++;
 	}
 
-	// 找到程序最高的地址后，强行对齐到 4KB 边界
-	// 否则的化，例如 .bss 结束于 0x804D010。
-	// 如果不进行 PAGE_ALIGN_UP，堆（Heap）会从 0x804D010 开始。
-	// 此时，.bss 段的末尾和堆的起始处物理上挤在同一个 4KB 页面内（即 0x804D000 这一页）。
-	// 这意味着，这一个物理页既要承载全局变量，又要承载堆内存。
-	// 此时要是处理一些缺页错误啥的，可能会将原本bss段的数据都给破坏了！
-	// 为了简单，我们直接将堆设在bss段紧邻的下一个页的起始处
-	max_vaddr = PAGE_ALIGN_UP(max_vaddr); // 
+	if (load_bias == 0) {
+		// 只有主程序加载时，才初始化堆的 VMA 和 brk
 
-	// 这样堆就会从 0x0804e000 或更高的地方开始
-	// 初始给他划分一页的逻辑空间，物理空间等到缺页了再去映射
-	add_vma(cur, max_vaddr, max_vaddr + PG_SIZE, 0, NULL, VM_READ | VM_WRITE | VM_GROWSUP | VM_ANON, 0);
-	// 程序的终点即为堆的起点
-	// 其实这个数据主要是用来记录堆的起点的，因此它需要跟随向上对齐一页后的max_vaddr
-	cur->end_data = max_vaddr; 
-    cur->brk = max_vaddr; // 初始时堆顶等于堆起点
-	// 程序的栈起始位置
-	// 由于我们划分了高1GB的虚拟地址给内核空间，而栈是从高向低生长的
-	// 因此设置高1GB的最开始的地址 0xc0000000 作为栈底是合适的，可用空间很大
-    cur->start_stack = USER_STACK_BASE; 
+		// 找到程序最高的地址后，强行对齐到 4KB 边界
+		// 否则的化，例如 .bss 结束于 0x804D010。
+		// 如果不进行 PAGE_ALIGN_UP，堆（Heap）会从 0x804D010 开始。
+		// 此时，.bss 段的末尾和堆的起始处物理上挤在同一个 4KB 页面内（即 0x804D000 这一页）。
+		// 这意味着，这一个物理页既要承载全局变量，又要承载堆内存。
+		// 此时要是处理一些缺页错误啥的，可能会将原本bss段的数据都给破坏了！
+		// 为了简单，我们直接将堆设在bss段紧邻的下一个页的起始处
+		max_vaddr = PAGE_ALIGN_UP(max_vaddr); // 
+
+		// 这样堆就会从 0x0804e000 或更高的地方开始
+		// 初始给他划分一页的逻辑空间，物理空间等到缺页了再去映射
+		add_vma(cur, max_vaddr, max_vaddr + PG_SIZE, 0, NULL, VM_READ | VM_WRITE | VM_GROWSUP | VM_ANON, 0);
+		// 程序的终点即为堆的起点
+		// 其实这个数据主要是用来记录堆的起点的，因此它需要跟随向上对齐一页后的max_vaddr
+		cur->end_data = max_vaddr; 
+		cur->brk = max_vaddr; // 初始时堆顶等于堆起点
+		// 程序的栈起始位置
+		// 由于我们划分了高1GB的虚拟地址给内核空间，而栈是从高向低生长的
+		// 因此设置高1GB的最开始的地址 0xc0000000 作为栈底是合适的，可用空间很大
+		cur->start_stack = USER_STACK_BASE; // 只有第一次运行的时候初始化一下栈就行了，第二次初始化 ld 的 vma 时就不用初始化了
+	}
 
 	// printk("load: start_code:%x end_data:%x start_stack:%x\n",cur->start_code,cur->end_data,cur->start_stack);
 
-	return load_bias;
+	return phdr_vaddr;
 }
 
 static int32_t load_elf(int32_t fd, struct Elf32_Ehdr* elf_header){
@@ -185,13 +204,11 @@ static int32_t load_elf(int32_t fd, struct Elf32_Ehdr* elf_header){
 		return read_ret;
 	}
 
-	// e_type = 2 是 ET_EXEC
-	// e_machine = 3 是 i386
 	if(memcmp(elf_header->e_ident,"\177ELF\1\1\1",7)\
-	|| elf_header->e_type!=2\
-	|| elf_header->e_machine!=3\
-	|| elf_header->e_version!=1\
-	|| elf_header->e_phnum>1024\
+	|| (elf_header->e_type != ET_EXEC && elf_header->e_type != ET_DYN) // 2 是 ET_EXEC，3 是 ET_DYN (共享目标文件)
+	|| elf_header->e_machine != 3 // i386
+	|| elf_header->e_version != 1
+	|| elf_header->e_phnum > 1024
 	|| elf_header->e_phentsize!=sizeof(struct Elf32_Phdr)){
 		return -ENOEXEC;
 	}
@@ -261,6 +278,7 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
     if (err < 0) return err; // 直接返回错误，进程无损
 
     struct task_struct* cur = get_running_task_struct();
+	cur->is_dyn_link = false;
     uint32_t argc = 0;
     uint32_t envc = 0;
 	
@@ -333,18 +351,63 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
 
 	// 加载新程序，传入内核空间的 path 副本
     // 此时读取 path 访问的是内核地址 (0xC0000000以上)，绝对不会触发用户空间缺页
-    int32_t load_bias = load_vma(fd, &elf_header);
+    // int32_t load_bias = load_vma(fd, &elf_header);
+
+	// 第一遍，加载主程序
+	// 传入 interp_path，让 load_vma 帮我们填好
+	char interp_path[MAX_PATH_LEN];
+	memset(interp_path, 0 , MAX_PATH_LEN);
+	int32_t main_load_bias = 0;
+
+	// 如果是 PIE 或者是直接运行共享库，他们会认为自己的虚拟地址是0，我们不能映射到 0
+	// linux 是可以直接运行 ld.so 文件的，它本身就是一个 elf 文件
+	if (elf_header.e_type == ET_DYN) { 
+        // Linux 默认通常是 0x5555... 我们选一个简单的地址，就选用户起始地址
+        main_load_bias = USER_VADDR_START; 
+    }
+	int32_t main_phdr_vaddr = load_vma(fd, &elf_header, main_load_bias, interp_path);
+
+
     // fd 用完了，关掉
 	sys_close(fd);
-    if (load_bias < 0) {
-        // kfree(path_bk); 
+    if (main_phdr_vaddr < 0) {
+        kfree(path_bk); 
 		mfree_page(PF_KERNEL, k_arg_page, 1);
 		// 必须走 sys_exit。
 		// 既然已经 user_vaddr_space_clear 了，这个进程已经无法生存，
 		// 必须通过正规渠道“宣布死亡”，让父进程收尸。
-        sys_exit(load_bias);
+        sys_exit(main_phdr_vaddr);
 		// return load_vma_ret; // 返回错误码
     }
+
+	// 如果是正常的 ET_EXEC 的话，elf_header.e_entry 是 USER_START_VADDR
+	// 如果是 ET_DYN 的话就是 0
+	uint32_t entry_point = elf_header.e_entry + main_load_bias;
+
+	if (interp_path[0] != '\0') {
+		// 第二遍，加载解释器
+		// 此时传入 NULL，因为 libc.so 本身没有解释器，不需要再解析
+		struct Elf32_Ehdr interp_elf_header;
+		int32_t ifd = sys_open(interp_path, O_RDONLY);
+		if (ifd < 0) { 
+			PANIC("fail to open interp!\n");
+		}
+		
+		// 预检解释器 ELF
+		if (load_elf(ifd, &interp_elf_header) == 0) {
+			// 加载解释器到 0x40000000
+			// 解释器自己会假定自己的起始地址是 0 (他是位置无关的) 而不是像正常的 ELF 一样，认为自己的起始地址是 USER_START_VADDR
+			// 因此此处我们要给定偏移量是 0x40000000 以便将其加载到相应位置
+			load_vma(ifd, &interp_elf_header, INTERP_VADDR_START, NULL);
+			// 入口点改为解释器的地址，一般来说 interp_elf_header.e_entry 是 0
+			// 这么一来，最终的 entry_point 就是 0x40000000
+			entry_point = interp_elf_header.e_entry + INTERP_VADDR_START;
+			cur->is_dyn_link = true;
+		} else {
+			PANIC("load_elf: fail to load interp elf!\n");
+		}
+		sys_close(ifd);
+	}
 
     // 准备用户栈 (从高向低压入)
     // 栈底设为 0xc0000000
@@ -376,7 +439,7 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
     sp--; *sp = AT_NULL;     // Key: 0
 
     // AT_ENTRY (主程序入口点)
-    sp--; *sp = elf_header.e_entry; 
+    sp--; *sp = elf_header.e_entry + main_load_bias; 
     sp--; *sp = AT_ENTRY;    // Key: 9
 
     // AT_PHNUM (程序头数量)
@@ -392,9 +455,16 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
 	// 对于静态链接的执行文件
 	// ELF 文件头和程序头表（PHDR）通常被包含在第一个 PT_LOAD 段中
 	// 这个段在文件中的偏移 p_offset 是 0。
-    sp--; *sp = elf_header.e_phoff + load_bias;
+    // sp--; *sp = elf_header.e_phoff + load_bias;
+    sp--; *sp = main_phdr_vaddr;
 	// printk("load_bias: 0x%x\n",load_bias);
     sp--; *sp = AT_PHDR;     // Key: 3
+
+	// AT_BASE: 动态链接器(ld.so)需要知道它自己的加载基址
+    if (interp_path[0] != '\0') {
+        sp--; *sp = INTERP_VADDR_START; 
+        sp--; *sp = AT_BASE; // Key: 7
+    }
 
     // AT_PAGESZ (页面大小)
     sp--; *sp = PG_SIZE;        // 4KB
@@ -423,7 +493,7 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
 
     // 准备中断栈，进入用户态
     struct intr_stack* intr_0_stack = (struct intr_stack*)((uint32_t)cur->kstack_pages + KERNEL_THREAD_STACK - sizeof(struct intr_stack));
-    intr_0_stack->eip = (void*)elf_header.e_entry;
+    intr_0_stack->eip = (void*)entry_point;
     intr_0_stack->esp = (void*)sp;  // ESP 指向 argc
     
     // 按照 Linux ABI，EDX 存放 envp 地址，EBX 清零

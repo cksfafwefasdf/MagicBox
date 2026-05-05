@@ -27,5 +27,5 @@ extern void swap_init(void);
 extern void do_swapon(struct partition* part);
 extern void do_swapoff(struct partition* part);
 extern void free_swap_slot(uint32_t pte_val);
-extern uint32_t alloc_swap_slot(void);
+extern uint32_t alloc_swap_slot(int32_t* status);
 #endif
