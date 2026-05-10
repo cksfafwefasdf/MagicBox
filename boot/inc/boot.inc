@@ -62,14 +62,33 @@ SECONDARY_COMMAND equ 0x177
 SECONDARY_ALTERNATE_STATUS equ 0x376
 SECONDARY_DEVICE_CONTROL equ 0x376
 
-;------- loader and kernel----------
+; ------- loader and kernel----------
 
+; 物理地址范围       长度,          用途    
+; 0x000-0x3FF       1KB,        中断向量表 (IVT)
+; 0x500-0x7BFF      ~30KB       自由空间
+; 0x7C00-0x7DFF     512B        MBR 代码
+; 0x7E00-0x9FBFF    ~600KB      自由空间
+; 0xA0000-0xBFFFF   128KB       显存/视频缓冲 (VGA)
+; 0xC0000-0xFFFFF   256KB       BIOS ROM / 映射区
+; 内核入口的 0xc0001500 会被映射到物理内存的 0x1500 处
+; 使用 objdump -p ./build/kernel/kernel.bin 可以查看内核在实际开始运行时，会占用多大的内存
+; 主要关注 memsz 字段，filesz 字段是其在磁盘上的大小而不是内存中的大小
+; 在引入 DMA 后，查看镜像大小，memsz 总共为 0x515FC 大概是 330KB，但是实际我们写入磁盘的大小是 226KB = 0x37198
+; 这里有 100 多 KB 的增大是由 BSS 等数据段展开后导致的
+; KERNEL_BIN_BASE_ADDR 在 0x60000
+; 并且 0x60000 + 0x37198 = 0x97198，不会和 VGA 缓冲区踩踏
+; 0x1500+0x515FC=0x52AFC 刚好不会触及到 0x60000
+; 但是把内核入口放在 0x1500 会把 MBR 给盖了，但是我们不用了，所以没关系
+; 但是如果内核继续增大的话就一定要注意！必须时刻注意是否会发生踩踏
+; 由于我们的内核时 elf 格式的，因此我们不能一开始就直接把他拷贝到 0x1500
+; 我们需要先解析符号表，之后再拷贝，所以这个搬运操作是必不可少的
 LOADER_BASE_ADDR equ 0x900
 LOADER_START_SECTOR equ 0x2
 LOADER_SECTOR_CNT equ 0x4
 PAGE_DIR_TABLE_POS equ 0x100000
 KERNEL_START_SECTOR equ 0x9
-KERNEL_BIN_BASE_ADDR equ 0x70000
+KERNEL_BIN_BASE_ADDR equ 0x60000
 KERNEL_SECTOR_CNT equ 0x384 ; 0x384=900
 KERNEL_ENTRY_POINT equ 0xc0001500
 

@@ -27,6 +27,7 @@
 #include <uart.h>
 #include <syscall_intrcpt.h>
 #include <swap.h>
+#include <pci.h>
 
 void init(void);
 void print_logo(void);
@@ -208,9 +209,10 @@ static void after_init() {
     tss_init();
     syscall_init();
     musl_syscall_intrcpt_init();
-    intr_enable(); // ide_init will use the interrupt
     ide_buffer_init();
+    // intr_enable(); // ide_init will use the interrupt
     ide_init();
+    pci_init();
     swap_init();
     // 启动 sync 内核线程，他会定期将脏块刷回磁盘
     sync_thread = thread_start("sync",32,sync_ide_buffer,NULL);

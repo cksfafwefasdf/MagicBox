@@ -15,45 +15,6 @@
 #include <ioctl.h>
 #include <fs_types.h>
 
-#define reg_data(channel) (channel->port_base+0)
-#define reg_error(channel) (channel->port_base+1)
-#define reg_feature(channel) (reg_error(channel))
-#define reg_sect_cnt(channel) (channel->port_base+2)
-#define reg_lba_l(channel) (channel->port_base+3)
-#define reg_lba_m(channel) (channel->port_base+4)
-#define reg_lba_h(channel) (channel->port_base+5)
-#define reg_dev(channel) (channel->port_base+6)
-#define reg_status(channel) (channel->port_base+7)
-#define reg_cmd(channel) (reg_status(channel))
-#define reg_alt_status(channel) (channel->port_base+0x206)
-#define reg_ctl(channel) (reg_alt_status(channel))
-
-// important bit in status port or device port
-#define BIT_ALT_STAT_BSY 0x80
-#define BIT_ALT_STAT_DRDY 0x40
-#define BIF_ALT_STAT_DRQ 0x8
-#define BIT_DEV_MBS 0xa0 // 10100000, these bits are always set to 1
-#define BIT_DEV_LBA 0x40 // use LBA instead of CHS
-#define BIT_DEV_DEV 0x10 // 0 is master 1 is slave
-
-// commands to control the disk
-// these commands should be written in the reg_cmd port 
-#define CMD_IDENTIFY 0xec
-#define CMD_READ_SECTOR 0x20
-#define CMD_WRITE_SECTOR 0x30
-
-#define CMD_SET_MULTIPLE 0xC6 // 设置每次读取的块大小
-#define CMD_READ_MULTIPLE 0xC4 // 多扇区读取指令
-#define CMD_WRITE_MULTIPLE 0xC5  // 多扇区写入指令
-
-#define max_lba ((80*1024*1024/512)-1) // only surport 80MB disk
-
-// the number of the disk is stored in this addr by BIOS 
-#define BIOS_DISK_NUM_ADDR 0x475
-#define DISK_PARAM_ADDR 0x501
-
-#define BUSY_WAIT_TIME_LIMIT 30*1000
-
 uint32_t* disk_size;
 uint8_t disk_num;
 
@@ -89,9 +50,6 @@ struct boot_sector{
 } __attribute__ ((packed));
 
 
-static void select_disk(struct disk* hd);
-static void select_sector(struct disk* hd,uint32_t lba,uint8_t sec_cnt);
-static void cmd_out(struct ide_channel* channel,uint8_t cmd);
 static void read_from_sector(struct disk* hd,void* buf,uint8_t sec_cnt);
 static void write2sector(struct disk* hd,void* buf,uint8_t sec_cnt);
 static bool busy_wait(struct disk* hd);
@@ -121,23 +79,46 @@ static void ide_set_multiple_mode(struct disk* hd, uint8_t sec_per_block) {
     }
 }
 
+// DMA 中断本质上还是磁盘中断，和 PIO 用的同一个接口
 void intr_handler_hd(uint8_t irq_no){
 	ASSERT(irq_no==0x2e||irq_no==0x2f);
 	uint8_t ch_no = irq_no-0x2e;
 	struct ide_channel* channel = &channels[ch_no];
 	ASSERT(channel->irq_no==irq_no);
+	
 	// channel->expecting_intr will be true
 	// after running cmd_out
-	if(channel->expecting_intr){
-		channel->expecting_intr = false;
-		// Awake the thread.
-		// Instead of running instantly, the thead will be put into the ready queue
-		sema_signal(&channel->wait_disk);
-		// read the status reg to signal the disk controller 
-		// that the I/O operation has done,
-		// allowing the disk to perform new read/write operations
-		inb(reg_status(channel));
+	if(!channel->expecting_intr){
+		return;
 	}
+
+	// DMA 状态检查
+    // 即使是 PIO 模式，读这个寄存器也是安全的
+    uint8_t dma_status = inb(channel->bmba + BM_STATUS_REG_OFFSE);
+	
+	channel->expecting_intr = false;
+
+	// 如果 DMA 状态寄存器的中断位置 1，说明这是 DMA 传输完成
+	if (dma_status & BM_STATUS_INT) {
+		// 先停止 DMA 引擎 (Start 位清零)
+		uint8_t cmd = inb(channel->bmba + BM_COMMAND_REG_OFFSE);
+		outb(channel->bmba + BM_COMMAND_REG_OFFSE, cmd & ~BM_CMD_START);
+
+		// 再清除 DMA 中断位和错误位 (写 1 清除)
+		outb(channel->bmba + BM_STATUS_REG_OFFSE, dma_status | BM_STATUS_INT | BM_STATUS_ERROR);
+	}
+
+	// read the status reg to signal the disk controller 
+	// that the I/O operation has done,
+	// allowing the disk to perform new read/write operations
+	// 读取磁盘状态寄存器 (ACK 中断)
+	// 这一步是 ATA 协议要求的，读取 status 寄存器会通知硬盘中断已被处理
+	// 如果不读这个，硬盘会一直拉高 IRQ 线，导致 CPU 被卡死
+	inb(reg_status(channel));
+
+	// Awake the thread.
+	// Instead of running instantly, the thead will be put into the ready queue
+	sema_signal(&channel->wait_disk);
 }
 
 void ide_init(){
@@ -250,8 +231,7 @@ next_round:
 		disk_size[d_idx] = 0;
 		uint32_t ecx = *disk_param_addr++;
 		uint32_t edx = *disk_param_addr++;
-		// printk("ecx: %x",ecx);
-		// printk("edx: %x",edx);
+		
 		uint32_t cylinders = (((ecx&0xc0)<<2)|((ecx&0xff00)>>8))+1;
 		uint32_t heads = ((edx&0xff00)>>8)+1;
 		uint32_t sectors = ecx&0x3f;
@@ -261,7 +241,7 @@ next_round:
 	printk("ide_init done\n");
 }
 
-static void select_disk(struct disk* hd){
+void select_disk(struct disk* hd){
 	uint8_t reg_device = BIT_DEV_MBS|BIT_DEV_LBA;
 	if(hd->dev_no==1){
 		// if it is the slave, DEV set to 1
@@ -270,7 +250,7 @@ static void select_disk(struct disk* hd){
 	outb(reg_dev(hd->my_channel),reg_device);
 }
 
-static void select_sector(struct disk* hd,uint32_t lba,uint8_t sec_cnt){
+void select_sector(struct disk* hd,uint32_t lba,uint8_t sec_cnt){
 	if (lba > max_lba) {
         // struct task_struct* cur = get_running_task_struct();
         // printk("\n[IDE Error] Task:%s, CWD_Inode:0x%x, LBA:0x%x\n", 
@@ -292,13 +272,11 @@ static void select_sector(struct disk* hd,uint32_t lba,uint8_t sec_cnt){
 	outb(reg_dev(channel),BIT_DEV_MBS|BIT_DEV_LBA|(hd->dev_no==1?BIT_DEV_DEV:0)|lba>>24);
 }
 
-static void cmd_out(struct ide_channel* channel,uint8_t cmd){
+void cmd_out(struct ide_channel* channel,uint8_t cmd){
 	// the disk starts working after write cmd to cmd-reg
 	channel->expecting_intr = true;
 	outb(reg_cmd(channel),cmd);
 }
-
-
 
 static void read_from_sector(struct disk* hd,void* buf,uint8_t sec_cnt){
 	uint32_t size_in_byte;
@@ -341,8 +319,8 @@ static bool busy_wait(struct disk* hd){
 	return false;
 }
 
-void ide_read(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
-    lock_acquire(&hd->my_channel->lock);
+static void ide_read_pio(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
+	lock_acquire(&hd->my_channel->lock);
 
     // 告知起始地址和总扇区数
     select_sector(hd, lba, sec_cnt); 
@@ -371,8 +349,7 @@ void ide_read(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
     lock_release(&hd->my_channel->lock);
 }
 
-
-void ide_write(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
+static void ide_write_pio(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
 
 	if (lba >= 0xC0000000) {
 		printk("ide_write LBA=0x%x\n",lba);
@@ -412,6 +389,27 @@ void ide_write(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
     lock_release(&hd->my_channel->lock);
 }
 
+void ide_read(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
+    struct ide_channel* chan = hd->my_channel;
+	ASSERT(chan!=NULL);
+	// chan->dma_enabled = false;
+	if(chan->dma_enabled) {
+		ide_read_dma(hd, lba, buf, sec_cnt);
+	} else {
+		ide_read_pio(hd, lba, buf, sec_cnt);
+	}
+}
+
+void ide_write(struct disk* hd, uint32_t lba, void* buf, uint32_t sec_cnt) {
+	struct ide_channel* chan = hd->my_channel;
+	ASSERT(chan!=NULL);
+	// chan->dma_enabled = false;
+	if(chan->dma_enabled) {
+		ide_write_dma(hd, lba, buf, sec_cnt);
+	} else {
+		ide_write_pio(hd, lba, buf, sec_cnt);
+	}
+}
 
 static void swap_pairs_bytes(const char* dst,char* buf,uint32_t len){
 	uint8_t idx;
@@ -484,6 +482,7 @@ static void partition_scan(struct disk* hd,uint32_t ext_lba){
 				dlist_push_back(&partition_list,&hd->prim_parts[p_no].part_tag);
 				sprintf(hd->prim_parts[p_no].name,"%s%d",hd->name,p_no+1);
 				p_no++;
+				// printk("p_no:0x%x\n",p_no);
 				ASSERT(p_no<4);
 
 			}else{ // 逻辑分区

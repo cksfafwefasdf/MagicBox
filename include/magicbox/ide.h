@@ -7,7 +7,49 @@
 #include <stdbool.h>
 #include <fs_types.h>
 #include <ide_buffer.h>
+#include <ide_dma.h>
 
+#define reg_data(channel) (channel->port_base+0)
+#define reg_error(channel) (channel->port_base+1)
+#define reg_feature(channel) (reg_error(channel))
+#define reg_sect_cnt(channel) (channel->port_base+2)
+#define reg_lba_l(channel) (channel->port_base+3)
+#define reg_lba_m(channel) (channel->port_base+4)
+#define reg_lba_h(channel) (channel->port_base+5)
+#define reg_dev(channel) (channel->port_base+6)
+#define reg_status(channel) (channel->port_base+7)
+#define reg_cmd(channel) (reg_status(channel))
+#define reg_alt_status(channel) (channel->port_base+0x206)
+#define reg_ctl(channel) (reg_alt_status(channel))
+
+// important bit in status port or device port
+#define BIT_ALT_STAT_BSY 0x80
+#define BIT_ALT_STAT_DRDY 0x40
+#define BIF_ALT_STAT_DRQ 0x8
+#define BIT_DEV_MBS 0xa0 // 10100000, these bits are always set to 1
+#define BIT_DEV_LBA 0x40 // use LBA instead of CHS
+#define BIT_DEV_DEV 0x10 // 0 is master 1 is slave
+
+// commands to control the disk
+// these commands should be written in the reg_cmd port 
+#define CMD_IDENTIFY 0xec
+#define CMD_READ_SECTOR 0x20
+#define CMD_WRITE_SECTOR 0x30
+
+#define CMD_DMA_READ 0xC8
+#define CMD_DMA_WRITE 0xCA
+
+#define CMD_SET_MULTIPLE 0xC6 // 设置每次读取的块大小
+#define CMD_READ_MULTIPLE 0xC4 // 多扇区读取指令
+#define CMD_WRITE_MULTIPLE 0xC5  // 多扇区写入指令
+
+#define max_lba ((80*1024*1024/512)-1) // only surport 80MB disk
+
+// the number of the disk is stored in this addr by BIOS 
+#define BIOS_DISK_NUM_ADDR 0x475
+#define DISK_PARAM_ADDR 0x501
+
+#define BUSY_WAIT_TIME_LIMIT 30*1000
 
 #define CHANNEL_NUM 2
 #define MAX_DISK_NAME_LEN 8
@@ -85,6 +127,17 @@ struct ide_channel{
 	// when I/O operation occurs, proc can use this semaphore to block itself
 	struct semaphore wait_disk; // is used to block and wakeup the driver prog
 	struct disk devices[DEVICE_NUM_PER_CHANNEL]; // a channel has two disk, one for master channel, one for slave channel
+
+	// DMA 属于通道控制器
+	// 在 PCI IDE 控制器规范中，DMA 的寄存器（bmba）是按通道分布的，而不是按磁盘
+	// Primary Channel 拥有一套 Bus Master 寄存器（BMBA + 0x00 到 0x07）
+	// Secondary Channel 拥有另一套独立的寄存器（BMBA + 0x08 到 0x0F）
+	// 每一个通道在同一时刻只能处理一个 DMA 传输
+	// 即便在一个通道上挂了两个磁盘（Master 和 Slave），它们也必须共享同一个 DMA 控制器和同一张 PRD 表
+	uint32_t bmba; // Bus Master Base Address (从 PCI BAR4 获取)
+    bool dma_enabled; // 是否成功开启了 DMA 模式
+    struct prd* prd_table; // 该通道专属的 PRDT 表地址，显然它是一个虚拟地址
+    uint32_t prd_table_phys;    // 物理地址，用于写到 BMBA 寄存器
 };
 
 extern void ide_write(struct disk* hd,uint32_t lba,void* buf,uint32_t sec_cnt);
@@ -94,6 +147,9 @@ extern void intr_handler_hd(uint8_t irq_no);
 extern void sys_readraw(const char* disk_name,uint32_t lba,const char* filename,uint32_t file_size);
 extern void sys_read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uint32_t sec_cnt);
 extern struct partition* get_part_by_rdev(uint32_t rdev);
+extern void select_disk(struct disk* hd);
+extern void select_sector(struct disk* hd,uint32_t lba,uint8_t sec_cnt);
+extern void cmd_out(struct ide_channel* channel,uint8_t cmd);
 
 extern struct ide_channel channels[2];
 extern uint8_t channel_cnt;

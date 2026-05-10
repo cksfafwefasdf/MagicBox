@@ -50,4 +50,16 @@ static inline uint16_t inw(uint16_t port) {
     return data;
 }
 
+// 向端口写入一个双字 (32bit)
+static inline void outl(uint16_t port, uint32_t data) {
+    asm volatile ("outl %0, %w1" : : "a" (data), "Nd" (port));
+}
+
+// 从端口读取一个双字 (32bit)
+static inline uint32_t inl(uint16_t port) {
+    uint32_t data;
+    asm volatile ("inl %w1, %0" : "=a" (data) : "Nd" (port));
+    return data;
+}
+
 #endif

@@ -69,7 +69,7 @@ struct page* palloc_pages(struct buddy_pool* bpool, uint32_t order) {
     }
 
     if (k == MAX_ORDER) { // 内存耗尽
-        put_str("Buddy system out of memory! Requested order: "); put_int(order); put_str("\n");
+        // put_str("Buddy system out of memory! Requested order: "); put_int(order); put_str("\n");
         lock_release(&bpool->lock);
         return NULL;
     }
