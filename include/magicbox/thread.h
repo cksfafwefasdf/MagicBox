@@ -85,8 +85,8 @@ struct task_struct{
 	pid_t pid;
 	enum task_status status;
 	char name[TASK_NAME_LEN];
-	uint8_t priority;
-	uint8_t ticks;
+	int16_t priority;
+	int16_t ticks;
 	bool is_dyn_link; // 标志当前进程是否是动态链接的，用于优化 swap
 	uint32_t elapsed_ticks;
 

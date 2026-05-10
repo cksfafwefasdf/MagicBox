@@ -46,7 +46,9 @@ int main() {
 
 	// 加一个耗时操作，这样的话，当我们运行 prog_pipe & 时，按下回车
 	// 我们就有时间使用ps命令看到各个后台进程，否则执行的太快了我们都没时间输入 ps
-	for(volatile uint32_t i = 0; i < 1000000000; i++); 
+    for(volatile uint32_t j = 0; j<100 ;j++){
+        for(volatile uint32_t i = 0; i < 1000000000; i++); 
+    }
 
     int status;
     wait(&status);

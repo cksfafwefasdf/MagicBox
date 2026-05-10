@@ -33,7 +33,6 @@ struct pid_pool{
 struct task_struct* main_thread; // main thread PCB
 struct dlist thread_ready_list;
 struct dlist thread_all_list; // queue of all tasks
-static struct dlist_elem* thread_tag; 
 
 static void pid_pool_init(void);
 
@@ -152,7 +151,8 @@ struct task_struct* thread_start(char* name,int prio,thread_func function,void* 
 	return thread;
 }
 
-void schedule(){
+// 老版本的调度算法
+void schedule_old(){
     // scheduling process must be conducted in INTR_OFF 
     ASSERT(intr_get_status()==INTR_OFF);
 
@@ -175,7 +175,7 @@ void schedule(){
 		thread_unblock(idle_thread);
 	}
 
-	thread_tag = NULL; // clear tag
+	struct dlist_elem* thread_tag = NULL; // clear tag
 	thread_tag = dlist_pop_front(&thread_ready_list);
 	struct task_struct* next = elem2entry(struct task_struct,thread_tag);
 	next->status = TASK_RUNNING;
@@ -189,6 +189,82 @@ void schedule(){
 	put_int(cur->pid);put_str(" switch to ");put_int(next->pid);put_char('\n');
 #endif
 	switch_to(cur,next);
+}
+
+// 类早期 linux 的动态优先级调度算法
+void schedule() {
+    ASSERT(intr_get_status() == INTR_OFF);
+    struct task_struct* cur = get_running_task_struct();
+
+    // 处理当前进程：如果是时间片用完，变回就绪态入队
+    if (cur->status == TASK_RUNNING) {
+        ASSERT(!dlist_find(&thread_ready_list, &cur->general_tag));
+        dlist_push_back(&thread_ready_list, &cur->general_tag);
+        // 这里不要重置 ticks 了，重置留给底部的全局补偿公式
+        cur->status = TASK_READY;
+    }
+
+    struct task_struct* next = NULL;
+
+    while (1) {
+        int16_t max_ticks = -1;
+		next = NULL; // 每次循环开始重置 next，防止重置前后的逻辑干扰
+        struct dlist_elem* pelem = thread_ready_list.head.next;
+
+        // 在就绪队列中寻找 ticks 最大的进程
+        while (pelem != &thread_ready_list.tail) {
+            struct task_struct* p = member_to_entry(struct task_struct, general_tag, pelem);
+            if (p->ticks > max_ticks) {
+                max_ticks = p->ticks;
+                next = p;
+            }
+            pelem = pelem->next;
+        }
+
+        // 找到了大于 0 的进程，准备切换
+        if (next && max_ticks > 0) {
+            break; 
+        }
+
+        // 如果就绪队列为空，或者所有进程 ticks 都为 0
+        if (dlist_empty(&thread_ready_list)) {
+            // 实在没得跑了，选 idle
+            next = idle_thread;
+            // 确保 idle 能跑，给它一点点 ticks
+            if (next->ticks == 0) next->ticks = 1; 
+            break;
+        } else {
+            // 全局重置逻辑，会将包括阻塞态在内的进程的 tick 都重置
+            pelem = thread_all_list.head.next;
+            while (pelem != &thread_all_list.tail) {
+                struct task_struct* p = member_to_entry(struct task_struct, all_list_tag, pelem);
+				// 经常阻塞的进程 (如 shell) 通过 ticks/2 的累积，优先级会越来越高
+				// 到其苏醒的时候，就可以被优先的调度
+				// 这个加法操作不会发生溢出，因为这本质上是一个等比数列的求和
+				// 即使一个进程从不消耗 tick，它经过这个加法操作后
+				// 最终的 ticks 数也不会超过 priority 的两倍，即 2*priority
+				// 我们的 priority 通常只有几十左右，甚至不会超过 100，因此一般来说都是安全的
+                p->ticks = (p->ticks >> 1) + p->priority;
+                pelem = pelem->next;
+            }
+            // 重置完后，while(1) 会重新扫描就绪队列
+        }
+    }
+
+    /// 执行切换
+    ASSERT(next != NULL);
+    if (dlist_find(&thread_ready_list, &next->general_tag)) {
+        dlist_remove(&next->general_tag);
+    }
+    
+    next->status = TASK_RUNNING;
+    process_activate(next);
+
+#ifdef DEBUG_SWITCH_TO
+    printk("%s(%d) -> %s(%d)\n", cur->name, cur->pid, next->name, next->pid);
+#endif
+
+    switch_to(cur, next);
 }
 
 void thread_environment_init(void){
