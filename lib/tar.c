@@ -40,12 +40,20 @@ void untar_all(uint32_t base_lba) {
     char full_path[MAX_PATH_LEN]; // 用于拼接绝对路径
 
     printf("untar: start unarchiving from LBA %d\n", base_lba);
-	
+    int32_t fd = open("/dev/sda", O_RDONLY);
+
+    if(fd < 0){
+        printf("untar_all: fail to open /dev/sda!");
+        return;
+    }
+
     while (1) {
         // 读取 Header 扇区
         memset(&hdr, 0, SECTOR_SIZE);
+        lseek(fd, current_lba * SECTOR_SIZE, SEEK_SET);
 		// 将磁盘扇区读取到内存缓冲区中
-        read_sectors("sda", current_lba, (uint8_t*)&hdr, 1);
+        read(fd, (uint8_t*)&hdr, SECTOR_SIZE);
+
         // 终止条件，tar 标准规定结束符是连续两个全 0 扇区
         // 为了简单，判断文件名首字节是否为空即可
         if (hdr.name[0] == '\0') {
@@ -102,6 +110,6 @@ void untar_all(uint32_t base_lba) {
         // 即使文件只有 1 字节，它在 tar 中也会占用 1 个完整的 512B 扇区数据块
         current_lba += (1 + DIV_ROUND_UP(filesize, SECTOR_SIZE));
     }
-
+    close(fd);
     printf("untar: all files extracted successfully.\n");
 }

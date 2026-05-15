@@ -572,22 +572,6 @@ void sys_readraw(const char* disk_name, uint32_t lba, const char* filename, uint
     sys_close(fd);
 }
 
-// 对 bread_multi 在用户层面上的封装
-void sys_read_sectors(const char* hd_name, uint32_t lba, uint8_t* buf, uint32_t sec_cnt) {
-	struct disk* disk;
-    if(!strcmp("sda", hd_name)) {
-        disk = &channels[0].devices[0];
-    } else if(!strcmp("sdb", hd_name)) {
-        disk = &channels[0].devices[1];
-    } else {
-        printk("unknown disk name: %s!\n", hd_name);
-        return;
-    }
-    // 如果是对整个磁盘（裸盘）来进行操作的话，直接用bread_multi，不用partition_read没有问题
-    // 因为不同的磁盘它的绝对lba起始都是从0开始的，没问题
-    bread_multi(disk, lba, buf, sec_cnt);
-}
-
 // 磁盘设备 VFS 读取接口
 // file VFS 文件结构
 // buf 用户缓冲区

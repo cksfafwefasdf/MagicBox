@@ -145,7 +145,6 @@ extern void ide_read(struct disk* hd,uint32_t lba,void* buf,uint32_t sec_cnt);
 extern void ide_init(void);
 extern void intr_handler_hd(uint8_t irq_no);
 extern void sys_readraw(const char* disk_name,uint32_t lba,const char* filename,uint32_t file_size);
-extern void sys_read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uint32_t sec_cnt);
 extern struct partition* get_part_by_rdev(uint32_t rdev);
 extern void select_disk(struct disk* hd);
 extern void select_sector(struct disk* hd,uint32_t lba,uint8_t sec_cnt);

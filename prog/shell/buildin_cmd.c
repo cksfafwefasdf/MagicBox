@@ -331,69 +331,6 @@ Pipe Example:\n\
     ls | cat (Redirect output of 'ls' to 'cat')\n");
 }
 
-void buildin_readraw(uint32_t argc,char** argv){
-	uint32_t arg_idx = 0;
-	// readraw -f /file1 -d sda -s 10403 -l 300
-	if((argc==2)&&(!strcmp("-h",argv[1]))){
-		printf("readraw: usage: readraw -f file_name -d disk_name -s file_size -l lba\n");
-		return;
-	}
-	if(argc!=9){
-		printf("readraw: wrong usage! use 'readraw -h' for help!\n");
-		return;
-	}
-
-	char* filename=NULL;
-	char* disk_name=NULL;
-	int32_t lba=-1,file_size=-1;
-	while(arg_idx<argc){
-		if(argv[arg_idx][0]=='-'){
-			if(!strcmp("-f",argv[arg_idx])){
-				if(arg_idx+1>=argc){
-					printf("readraw: argument -f error! use 'readraw -h' for help!\n");
-					return;
-				}
-
-				make_clear_abs_path(argv[arg_idx+1],final_path);
-				filename = final_path;
-			}else if(!strcmp("-l",argv[arg_idx])){
-				if(arg_idx+1>=argc||(!atoi_dep(argv[arg_idx+1],&lba))){
-					printf("readraw: argument -l error! use 'readraw -h' for help!\n");
-					return;
-				}
-			}else if(!strcmp("-s",argv[arg_idx])){
-				if(arg_idx+1>=argc||(!atoi_dep(argv[arg_idx+1],&file_size))){
-					printf("readraw: argument -s error! use 'readraw -h' for help!\n");
-					return;
-				}
-			}else if(!strcmp("-d",argv[arg_idx])){
-				if(arg_idx+1>=argc){
-					printf("readraw: argument -d error! use 'readraw -h' for help!\n");
-					return;
-				}
-				disk_name = argv[arg_idx+1];
-			}else{
-				printf("readraw: unknown argument! use -h for help!\n");
-				return;
-			}
-		}
-		arg_idx++;
-	}
-	// printf("%d %s\n",filename==NULL,filename);
-	// printf("%d %s\n",disk_name==NULL,disk_name);
-	// printf("%d %d\n",lba<0,lba);
-	// printf("%d %d\n",file_size<0,file_size);
-
-	if(filename==NULL||disk_name==NULL||lba<0||file_size<0){
-		printf("readraw: missing argument\n");
-		return ;
-	}
-	
-
-	readraw(disk_name,(uint32_t)lba,(const char*)filename,(uint32_t)file_size);
-	printf("readraw: success!\n");
-}
-
 void buildin_free_mem(uint32_t argc UNUSED,char** argv UNUSED){
 	free_mem();
 }

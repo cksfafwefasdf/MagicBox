@@ -39,7 +39,9 @@
 #define	SYS_DISK_INFO 28
 #define	SYS_MOUNT 29
 #define	SYS_TEST 30
-#define	SYS_READ_SECTORS 31
+// 由于我们引入了 VFS，因此通过 open 打开 sda 文件
+// 结合 read 操作，就可以实现 READ_SECTORS 的功能了
+// #define	SYS_READ_SECTORS 31
 #define	SYS_MKNOD 32 
 #define	SYS_DUP2 33
 #define	SYS_SETPGID 34
@@ -108,7 +110,6 @@ extern void help(void);
 extern void free_mem(void);
 extern void disk_info(void);
 extern void test_func(void);
-extern void read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uint32_t sec_cnt);
 extern int32_t mount(char* dev_name, char* mount_path, char* type, unsigned long new_flags UNUSED, void * data UNUSED);
 extern int32_t mknod(const char* pathname, enum file_types type, uint32_t dev);
 extern int32_t dup2(uint32_t old_local_fd, uint32_t new_local_fd);

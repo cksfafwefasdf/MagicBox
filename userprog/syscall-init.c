@@ -59,7 +59,6 @@ void syscall_init(void){
 	syscall_table[SYS_DISK_INFO] = sys_disk_info;
 	syscall_table[SYS_MOUNT] = sys_mount;
 	syscall_table[SYS_TEST] = sys_test;
-	syscall_table[SYS_READ_SECTORS] = sys_read_sectors;
 	syscall_table[SYS_MKNOD] = sys_mknod;
 	syscall_table[SYS_DUP2] = sys_dup2;
 	syscall_table[SYS_SETPGID] = sys_setpgid;

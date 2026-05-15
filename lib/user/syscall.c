@@ -199,10 +199,6 @@ void test_func(){
 	printf("test_func:::test_func done!\n");
 }
 
-void read_sectors(const char* hd_name,uint32_t lba, uint8_t* buf, uint32_t sec_cnt){
-	_syscall4(SYS_READ_SECTORS,hd_name,lba,buf,sec_cnt);
-}
-
 int32_t dup2(uint32_t old_local_fd, uint32_t new_local_fd){
 	return _syscall3(SYS_DUP2,old_local_fd,new_local_fd,new_local_fd);
 }
