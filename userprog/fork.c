@@ -26,6 +26,12 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 	// 但现在这么做复制不过来了，因此没必要复制那么多了
 	memcpy(child_thread,parent_thread,sizeof(struct task_struct));
 
+	// 上面的拷贝操作把父进程的打开文件表的指针都拷贝了过来，我们先把这个指针置为 NULL
+	child_thread->fd_table = NULL; 
+
+	child_thread->fd_table = kmalloc(sizeof(struct fd_entry)*MAX_FILES_OPEN_PER_PROC);
+	memcpy(child_thread->fd_table , parent_thread->fd_table, sizeof(struct fd_entry)*MAX_FILES_OPEN_PER_PROC);
+
 	// 重新分配子进程的独立内核栈
     child_thread->kstack_pages = get_kernel_pages(KERNEL_THREAD_STACK_PAGES);
 

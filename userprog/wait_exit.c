@@ -34,6 +34,10 @@ static void release_prog_resource(struct task_struct* release_thread){
 		}
 		local_fd++;
 	}
+
+	// 文件全部都关闭完毕后，把表给释放了
+	kfree(release_thread->fd_table);
+	
 	inode_close(release_thread->pwd);
 }
 

@@ -93,6 +93,8 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 	pthread->blocked = 0;
 	pthread->pwd = root_dir_inode; // 默认在根目录
 
+	pthread->fd_table = kmalloc(sizeof(struct fd_entry)*MAX_FILES_OPEN_PER_PROC);
+
 	memset(pthread->sigactions, 0, sizeof(pthread->sigactions));
 
 	dlist_init(&pthread->vma_list);
@@ -149,46 +151,6 @@ struct task_struct* thread_start(char* name,int prio,thread_func function,void* 
 					pop %%ebp;pop %%ebx;pop %%edi;pop %%esi; \
 					ret"::"g"(thread->self_kstack):"memory"); */
 	return thread;
-}
-
-// 老版本的调度算法
-void schedule_old(){
-    // scheduling process must be conducted in INTR_OFF 
-    ASSERT(intr_get_status()==INTR_OFF);
-
-	struct task_struct* cur = get_running_task_struct();
-	if(cur->status==TASK_RUNNING){
-		// if time slice is depleted
-		ASSERT(!dlist_find(&thread_ready_list,&cur->general_tag));
-		dlist_push_back(&thread_ready_list,&cur->general_tag);
-		// restore ticks
-		cur->ticks = cur->priority;
-		cur->status = TASK_READY;
-	}else{
-		// block task
-	}
-
-	//ASSERT(!dlist_empty(&thread_ready_list));
-
-	// if no threads are ready to run, then run the idle thread
-	if(dlist_empty(&thread_ready_list)){
-		thread_unblock(idle_thread);
-	}
-
-	struct dlist_elem* thread_tag = NULL; // clear tag
-	thread_tag = dlist_pop_front(&thread_ready_list);
-	struct task_struct* next = elem2entry(struct task_struct,thread_tag);
-	next->status = TASK_RUNNING;
-	process_activate(next);
-
-	// if(strcmp(next->name,"idle")){
-	// 	printk("schedule: switch to %s\n",next->name);
-	// }
-#ifdef DEBUG_SWITCH_TO
-	put_str(cur->name);put_str(" switch to ");put_str(next->name);put_char('\n');
-	put_int(cur->pid);put_str(" switch to ");put_int(next->pid);put_char('\n');
-#endif
-	switch_to(cur,next);
 }
 
 // 类早期 linux 的动态优先级调度算法

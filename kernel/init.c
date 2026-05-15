@@ -150,7 +150,7 @@ static void idle(void *arg UNUSED){
 static void make_main_thread(void) {
     main_thread = get_kernel_pages(1);
     // 这里面会为main线程申请独立于pcb外的栈空间
-    init_thread(main_thread, "main", 5);
+    init_thread(main_thread, "_main", 5);
     
     // 准备新栈，：将原本要执行的后续代码after_init手动压入新栈
     // uint32_t* esp = (uint32_t*)((uint32_t)main_thread + PG_SIZE);
@@ -190,14 +190,14 @@ static void recyle_idle(){
 
     // 身份接管成为新的idle
     idle_thread = main_thread; 
-    strcpy(main_thread->name, "idle"); // 改个名字，方便 ps 查看
+    strcpy(main_thread->name, "_idle"); // 改个名字，方便 ps 查看
     intr_enable();
 }
 
 static void after_init() {
     // 这里才是主线程真正的逻辑起点
     // 此时它已经站在全新的、动态分配的 PCB 顶端了
-    idle_thread = thread_start("idle",3,idle,NULL);
+    idle_thread = thread_start("_idle",3,idle,NULL);
     timer_init();
     console_init();
     // 串口设备先进行初始化，他的优先级较高
@@ -215,7 +215,8 @@ static void after_init() {
     pci_init();
     swap_init();
     // 启动 sync 内核线程，他会定期将脏块刷回磁盘
-    sync_thread = thread_start("sync",32,sync_ide_buffer,NULL);
+    // 名称前面带下划线 _ 表示是一个内核线程
+    sync_thread = thread_start("_sync",32,sync_ide_buffer,NULL);
     time_init(); // 这里面会用到printk函数，因此放到此处
     filesys_init();
     make_dev_nodes();

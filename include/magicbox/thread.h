@@ -91,7 +91,8 @@ struct task_struct{
 	uint32_t elapsed_ticks;
 
 	// Per-process Open File Table
-	struct fd_entry fd_table[MAX_FILES_OPEN_PER_PROC];
+	// struct fd_entry fd_table[MAX_FILES_OPEN_PER_PROC];
+	struct fd_entry* fd_table;
 
 	struct dlist_elem general_tag;
 	struct dlist_elem all_list_tag;
