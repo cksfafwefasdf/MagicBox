@@ -29,8 +29,10 @@ struct vm_area* find_vma(struct task_struct* task, uint32_t vaddr) {
 #ifdef DEBUG_VMA
     printk("find_vma:vaddr: %x => ",vaddr);
 #endif
-    struct dlist_elem* vma_tag = dlist_traversal(&task->vma_list, vma_contains_address, &vaddr);
 
+    lock_acquire(&task->mm->mm_lock);
+    struct dlist_elem* vma_tag = dlist_traversal(&task->mm->vma_list, vma_contains_address, &vaddr);
+    lock_release(&task->mm->mm_lock);
 #ifdef DEBUG_VMA
     printk("\n");
 #endif
@@ -133,7 +135,9 @@ void add_vma_sorted(struct dlist* plist, uint32_t start, uint32_t end,
 
 // 任务绑定, 给特定进程添加 VMA
 void add_vma(struct task_struct* task, uint32_t start, uint32_t end, uint32_t pgoff, struct inode* inode, uint32_t flags, uint32_t filesz) {
-    add_vma_sorted(&task->vma_list, start, end, pgoff, inode, flags, filesz);
+    lock_acquire(&task->mm->mm_lock);
+    add_vma_sorted(&task->mm->vma_list, start, end, pgoff, inode, flags, filesz);
+    lock_release(&task->mm->mm_lock);
 }
 
 void remove_vma(struct vm_area* vma) {
@@ -160,10 +164,11 @@ void remove_vma(struct vm_area* vma) {
 // 清空进程所有的 VMA 链表，execv 和 exit 中都要用，exit无需多言
 // execv 中主要用于去清除继承父进程的 vma
 void clear_vma_list(struct task_struct* task) {
-    struct dlist_elem* elem = task->vma_list.head.next;
+    lock_acquire(&task->mm->mm_lock);
+    struct dlist_elem* elem = task->mm->vma_list.head.next;
 
     // 循环遍历并销毁每一个 VMA
-    while (elem != &task->vma_list.tail) {
+    while (elem != &task->mm->vma_list.tail) {
         // 必须先记住下一个元素，因为 remove_vma 会把当前 elem 释放掉
         struct dlist_elem* next_elem = elem->next;
 
@@ -174,19 +179,27 @@ void clear_vma_list(struct task_struct* task) {
 
         elem = next_elem;
     }
+    lock_release(&task->mm->mm_lock);
 }
 
 // 在 fork 时克隆父进程的 VMA 链表给子进程，是深拷贝
 bool copy_vma_list(struct task_struct* parent, struct task_struct* child) {
-    struct dlist_elem* elem = parent->vma_list.head.next;
 
-    while (elem != &parent->vma_list.tail) {
+    lock_acquire(&parent->mm->mm_lock);
+    lock_acquire(&child->mm->mm_lock);
+    struct dlist_elem* elem = parent->mm->vma_list.head.next;
+
+    while (elem != &parent->mm->vma_list.tail) {
         struct vm_area* p_vma = member_to_entry(struct vm_area, vma_tag, elem);
 
         // 为子进程申请新的 VMA 结构体
         struct vm_area* c_vma = (struct vm_area*)kmalloc(sizeof(struct vm_area));
-        if (c_vma == NULL) return false;
-
+        if (c_vma == NULL){
+            lock_release(&child->mm->mm_lock);
+            lock_release(&parent->mm->mm_lock);
+            return false;
+        }
+         
         // 复制基本属性
         memcpy(c_vma, p_vma, sizeof(struct vm_area));
 
@@ -199,10 +212,12 @@ bool copy_vma_list(struct task_struct* parent, struct task_struct* child) {
         }
 
         // 挂载到子进程链表
-        dlist_push_back(&child->vma_list, &c_vma->vma_tag);
+        dlist_push_back(&child->mm->vma_list, &c_vma->vma_tag);
 
         elem = elem->next;
     }
+    lock_release(&child->mm->mm_lock);
+    lock_release(&parent->mm->mm_lock);
     return true;
 }
 
@@ -216,18 +231,23 @@ uint32_t vma_find_gap(struct task_struct* task ,uint32_t pg_cnt) {
     uint32_t search_ptr = USER_VADDR_START;
     uint32_t upper_limit = USER_STACK_BASE - USER_STACK_SIZE; // 避开栈
     
-    struct dlist* plist = &task->vma_list;
+    struct dlist* plist = &task->mm->vma_list;
     
-    if (dlist_empty(plist)) return search_ptr;
+    lock_acquire(&task->mm->mm_lock);
+
+    if (dlist_empty(plist)){
+        lock_release(&task->mm->mm_lock);
+        return search_ptr;
+    }
 
     struct dlist_elem* elem = plist->head.next;
     while (elem != &plist->tail) {
         struct vm_area* vma = member_to_entry(struct vm_area, vma_tag, elem);
         // ASSERT(vma->vma_end%4096==0);
         
-        
         // 检查当前 search_ptr 和当前 vma 起始地址之间的 Gap
         if (vma->vma_start > search_ptr && (vma->vma_start - search_ptr) >= size) {
+            lock_release(&task->mm->mm_lock);
             return search_ptr;
         }
         
@@ -240,9 +260,10 @@ uint32_t vma_find_gap(struct task_struct* task ,uint32_t pg_cnt) {
 
     // 检查最后一个 VMA 到上限之间的空间
     if (upper_limit - search_ptr >= size) {
+        lock_release(&task->mm->mm_lock);
         return search_ptr;
     }
-
+    lock_release(&task->mm->mm_lock);
     return 0; // 没空间了
 }
 
@@ -252,14 +273,18 @@ uint32_t vma_find_gap_reverse(struct task_struct* task, uint32_t pg_cnt) {
     uint32_t size = pg_cnt * PG_SIZE;
     uint32_t lower_limit = USER_VADDR_START;
     uint32_t search_end = USER_MMAP_SEARCH_TOP;
-    struct dlist* plist = &task->vma_list;
+    
+    struct dlist* plist = &task->mm->vma_list;
 
     if (search_end <= lower_limit || search_end - lower_limit < size) {
         return 0;
     }
 
+    lock_acquire(&task->mm->mm_lock);
+
     // 如果链表是空的，直接返回结果，没什么可遍历的
     if (dlist_empty(plist)) {
+        lock_release(&task->mm->mm_lock);
         return search_end - size;
     }
 
@@ -269,6 +294,7 @@ uint32_t vma_find_gap_reverse(struct task_struct* task, uint32_t pg_cnt) {
 
         // 检查当前 vma 结束地址到 search_end 之间的高地址空洞。
         if (search_end > vma->vma_end && (search_end - vma->vma_end) >= size) {
+            lock_release(&task->mm->mm_lock);
             return search_end - size;
         }
 
@@ -279,9 +305,10 @@ uint32_t vma_find_gap_reverse(struct task_struct* task, uint32_t pg_cnt) {
     }
 
     if (search_end > lower_limit && (search_end - lower_limit) >= size) {
+        lock_release(&task->mm->mm_lock);
         return search_end - size;
     }
-
+    lock_release(&task->mm->mm_lock);
     return 0;
 }
 

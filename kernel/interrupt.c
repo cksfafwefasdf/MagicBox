@@ -9,6 +9,7 @@
 #include <debug.h>
 #include <stdio-kernel.h>
 #include <syscall_intrcpt.h>
+#include <memory.h>
 
 #define IDT_DESC_CNT 0x81
 
@@ -146,7 +147,7 @@ static void intr_handler_illegal_opcode(uint32_t vec_no) {
     struct task_struct* cur = get_running_task_struct();
     
     // 如果是内核自己跑出了非法指令，那必须 Panic
-    if (cur->pgdir == NULL) {
+    if (cur->mm == NULL) {
         printk("err type is %s\n",intr_name[vec_no]);
         PANIC("Kernel executed an illegal opcode!");
     }

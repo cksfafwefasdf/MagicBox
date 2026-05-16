@@ -1371,9 +1371,6 @@ static void clear_dev_directory(void) {
     int32_t fd = sys_open("/dev", O_RDONLY);
     // 根据重构后的 sys_readdir，它返回 1 表示成功，0 表示结束
     while (sys_readdir(fd, &de) > 0) {
-
-        printk("name:%s\n",de.d_name);
-
         // 使用 de.d_type 判断文件类型，将不是目录类型的文件全部删除，这么做可以把 . 和 .. 自然排除在外
         if (de.d_type != DT_DIR) {
             memset(path, 0, MAX_PATH_LEN);

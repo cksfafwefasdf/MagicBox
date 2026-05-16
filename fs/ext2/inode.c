@@ -12,6 +12,8 @@
 #include <unitype.h>
 #include <time.h>
 #include <inode.h>
+#include <memory.h>
+#include <string.h>
 
 static int32_t ext2_bmap(struct inode* inode, int32_t _index);
 

@@ -6,6 +6,7 @@
 #include <io.h>
 #include <stdio-kernel.h>
 #include <debug.h>
+#include <string.h>
 
 static int ide_dma_probe(struct pci_dev* dev);
 

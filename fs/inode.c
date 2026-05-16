@@ -11,6 +11,8 @@
 #include <sifs_inode.h>
 #include <ext2_inode.h>
 #include <time.h>
+#include <memory.h>
+#include <string.h>
 
 #define MAX_INODE_CACHE_SIZE 64
 #define BUCKET_NR 32

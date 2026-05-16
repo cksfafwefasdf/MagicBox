@@ -3,6 +3,7 @@
 #include <fs_types.h>
 #include <debug.h>
 #include <stdio-kernel.h>
+#include <thread.h>
 
 // System-wide Open File Table
 struct file file_table[MAX_FILE_OPEN_IN_SYSTEM];

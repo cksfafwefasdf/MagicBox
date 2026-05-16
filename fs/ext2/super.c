@@ -8,6 +8,7 @@
 #include <inode.h>
 #include <unitype.h>
 #include <time.h>
+#include <string.h>
 
 static struct super_block * ext2_read_super(struct super_block *sb, void *data UNUSED, int silent) {
 

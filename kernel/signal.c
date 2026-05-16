@@ -154,7 +154,7 @@ void kill_pgrp(pid_t pgrp, int sig) {
         struct task_struct* task = member_to_entry(struct task_struct, all_list_tag, node);
         
         // 匹配前台进程组且是非内核线程
-        if (task->pgdir != NULL && task->pgrp == pgrp) {
+        if (task->mm != NULL && task->pgrp == pgrp) {
             sig_addset(&task->signal, sig);
         }
         node = node->next;

@@ -15,6 +15,7 @@
 #include <stdbool.h>
 #include <sync.h>
 #include <errno.h>
+#include <thread.h>
 
 // 为了快速索引，用数组存指针
 // 设备号从 1 开始，以便避免创建出的 pte 最终为 0 的情况
@@ -40,10 +41,13 @@ void copy_page_tables(struct task_struct* from, struct task_struct* to, void* pa
 	enum intr_status old_status = intr_disable();
     uint32_t* to_pte_buf = (uint32_t*)page_buf;
 
+    lock_acquire(&from->mm->mm_lock);
+    lock_acquire(&to->mm->mm_lock);
+
     // 遍历用户空间 PDE
 	uint32_t pde_idx = 0;
     for (pde_idx = 0; pde_idx < USER_PDE_NR; pde_idx++) {
-        uint32_t* from_pde = from->pgdir + pde_idx;
+        uint32_t* from_pde = from->mm->pgdir + pde_idx;
         if (!(*from_pde & PG_P_1)) continue;
 
         // 为子进程分配页表物理页
@@ -79,8 +83,11 @@ void copy_page_tables(struct task_struct* from, struct task_struct* to, void* pa
         kunmap(to_pt_kaddr);
 
         // 将该页表挂载到子进程的页目录中
-        to->pgdir[pde_idx] = to_pt_pa | PG_US_U | PG_RW_W | PG_P_1;
+        to->mm->pgdir[pde_idx] = to_pt_pa | PG_US_U | PG_RW_W | PG_P_1;
     }
+
+    lock_release(&to->mm->mm_lock);
+    lock_release(&from->mm->mm_lock);
 
     // 因为修改了大量父进程的 PTE 属性（RW -> RO），必须重载 CR3 彻底刷新
     page_dir_activate(from);
@@ -119,7 +126,7 @@ void swap_page(uint32_t err_code,void* err_vaddr){
     // 防止swap_page递归重入，掩盖错误的第一现场
     // 如果报错地址小于 0x100000（低端1MB），通常不是懒加载，而是代码 Bug，
     // 主要是针对内核线程的限制，用户进程会发信号自己退出
-    if (vaddr < 0x100000 && cur->pgdir == NULL) {
+    if (vaddr < 0x100000 && cur->mm->pgdir == NULL) {
         printk("CRITICAL: Null Pointer Access at %x! Terminating.\n", vaddr);
         print_stacktrace();
         while(1);
@@ -140,7 +147,7 @@ void swap_page(uint32_t err_code,void* err_vaddr){
 	}
 
     // 获取 PTE 状态
-    uint32_t* pte_ptr = get_pte_ptr(cur->pgdir, page_vaddr);
+    uint32_t* pte_ptr = get_pte_ptr(cur->mm->pgdir, page_vaddr);
     uint32_t pte_val = (pte_ptr) ? *pte_ptr : 0;
 
     // 页面在交换分区中 (P=0 且 PTE 有内容)
@@ -251,7 +258,7 @@ void swap_page(uint32_t err_code,void* err_vaddr){
     return;
 
 segmentation_fault:
-        if (cur->pgdir != NULL) {
+        if (cur->mm != NULL) {
             printk("PID %d (%s) Segmentation Fault at %x\n", cur->pid, cur->name, vaddr);
         
         // 检查用户是否自定义了 SIGSEGV 的处理函数
@@ -327,7 +334,7 @@ void write_protect(uint32_t err_code, void* err_vaddr) {
 #endif
 
     // 内核触发写保护：直接 PANIC，因为内核不参与 COW
-    if (cur->pgdir == NULL || (uint32_t)err_vaddr >= 0xC0000000) {
+    if (cur->mm == NULL || (uint32_t)err_vaddr >= 0xC0000000) {
         PANIC("Kernel Write Protection Error!");
     }
 
@@ -567,7 +574,7 @@ static struct page* pick_page_from_activate_list(void) {
         // 第一所有者为空的进程不应该在活跃队列中
         ASSERT(pg->first_owner!=NULL);
 
-        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
+        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->mm->pgdir, pg->first_vaddr);
         
         if (!(*pte_ptr & PG_A) && !(*pte_ptr & PG_D) && pg->ref_count==1) {
             goto found;
@@ -584,7 +591,7 @@ static struct page* pick_page_from_activate_list(void) {
 
         ASSERT(pg->first_owner!=NULL);
 
-        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
+        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->mm->pgdir, pg->first_vaddr);
         
         if (!(*pte_ptr & PG_A) && (*pte_ptr & PG_D) && pg->ref_count==1) {
             goto found;
@@ -603,7 +610,7 @@ static struct page* pick_page_from_activate_list(void) {
 
         ASSERT(pg->first_owner!=NULL);
 
-        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
+        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->mm->pgdir, pg->first_vaddr);
         
         if (!(*pte_ptr & PG_A) && !(*pte_ptr & PG_D) && pg->ref_count==1) {
             goto found;
@@ -619,7 +626,7 @@ static struct page* pick_page_from_activate_list(void) {
 
         ASSERT(pg->first_owner!=NULL);
 
-        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->pgdir, pg->first_vaddr);
+        uint32_t* pte_ptr = get_pte_ptr(pg->first_owner->mm->pgdir, pg->first_vaddr);
         if (!(*pte_ptr & PG_A) && pg->ref_count==1) goto found;
         ptr = ptr->next;
     }
@@ -650,7 +657,7 @@ static void* swap_out(void) {
 #ifdef DEBUG_SWAP
     printk("swap_out: swap out %s for %s\n",pg->first_owner->name,get_running_task_struct()->name);
 #endif
-    uint32_t* pte_ptr = get_pte_ptr(owner->pgdir, vaddr);
+    uint32_t* pte_ptr = get_pte_ptr(owner->mm->pgdir, vaddr);
     
     // 记录下该页的物理地址，最后返回它
     void* phys_addr = (void*)(*pte_ptr & 0xfffff000);

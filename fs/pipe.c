@@ -9,6 +9,7 @@
 #include <fs_types.h>
 #include <file_table.h>
 #include <inode.h>
+#include <thread.h>
 
 int32_t sys_pipe(int32_t pipefd[2]) {
 

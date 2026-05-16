@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdio-kernel.h>
 #include <ide.h>
+#include <string.h>
 
 // search_file 函数所使用的状态机定义
 typedef enum {

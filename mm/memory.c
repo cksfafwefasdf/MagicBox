@@ -141,7 +141,7 @@ static void* vaddr_alloc(enum pool_flags pf, uint32_t pg_cnt, bool force_mmap) {
 
         // 如果不是强制使用 mmap，先尝试推高堆顶 (brk)
         if (!force_mmap) {
-            uint32_t old_brk = cur->brk;
+            uint32_t old_brk = cur->mm->brk;
             uint32_t new_brk = old_brk + size;
             uint32_t actual_brk = sys_brk(new_brk);
             if (actual_brk >= new_brk) {
@@ -720,6 +720,7 @@ void vaddr_remove(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt){
         struct vm_area* vma = find_vma(cur, start);
         if (vma == NULL) return;
 
+        lock_acquire(&cur->mm->mm_lock);
         // 若完全覆盖，此时直接移除vma
         if (start == vma->vma_start && end == vma->vma_end) {
             remove_vma(vma);
@@ -741,9 +742,10 @@ void vaddr_remove(enum pool_flags pf,void* _vaddr,uint32_t pg_cnt){
             vma->vma_end = start;
         }
         // 如果释放的虚拟内存位于堆顶区域，同步更新brk
-        if (end >= cur->brk && start < cur->brk) {
-            cur->brk = start;
+        if (end >= cur->mm->brk && start < cur->mm->brk) {
+            cur->mm->brk = start;
         }
+        lock_release(&cur->mm->mm_lock);
 	}
 	intr_set_status(old);
 }
@@ -923,10 +925,10 @@ void sys_test(){
 // (2) 起始地址固定等于进程的 end_data（即初始 start_brk）。
 // 尤其是第二点，第一点的话，用mmap映射出的内存块也符合但他不一定是堆
 static struct vm_area* find_heap_vma(struct task_struct* task) {
-    struct dlist_elem* e = task->vma_list.head.next;
-    while (e != &task->vma_list.tail) {
+    struct dlist_elem* e = task->mm->vma_list.head.next;
+    while (e != &task->mm->vma_list.tail) {
         struct vm_area* v = member_to_entry(struct vm_area, vma_tag, e);
-        if (v->vma_start == task->end_data &&
+        if (v->vma_start == task->mm->end_data &&
             v->vma_inode == NULL &&
             v->vma_flags == (VM_READ | VM_WRITE | VM_GROWSUP | VM_ANON)) {
             return v;
@@ -972,8 +974,8 @@ static uint32_t prot_to_vm_flags(uint32_t prot, uint32_t flags, bool anon) {
 // 这也是我们为什么要拿起始地址在 vaddr 后面的第一个 VMA
 // 因为这个 VMA 很可能会在 vaddr + size 区间所覆盖的范围内，此时需要释放它或者切分它
 static struct vm_area* find_covering_or_next_vma(struct task_struct* task, uint32_t vaddr) {
-    struct dlist_elem* e = task->vma_list.head.next;
-    while (e != &task->vma_list.tail) {
+    struct dlist_elem* e = task->mm->vma_list.head.next;
+    while (e != &task->mm->vma_list.tail) {
         struct vm_area* v = member_to_entry(struct vm_area, vma_tag, e);
         // 返回的这个 VMA 要么就直接命中了，要么就是起始地址在这个 vaddr 之后的 VMA
         if (vaddr < v->vma_end) {
@@ -1017,25 +1019,28 @@ static void direct_map_lowmem_range(uint32_t start_paddr, uint32_t end_paddr) {
 // 只有一个页的虚拟地址被完全回收时，我们才会将相应的物理页销毁，否则即使只剩1B我们也得留着
 uint32_t sys_brk(uint32_t new_brk) {
     struct task_struct* cur = get_running_task_struct();
-    if (new_brk == 0) return cur->brk;
-    if (new_brk < cur->end_data) return cur->brk;
+    if (new_brk == 0) return cur->mm->brk;
+    if (new_brk < cur->mm->end_data) return cur->mm->brk;
     // brk只能扩用户栈，不能碰内核区域
-    if (new_brk >= USER_STACK_BASE) return cur->brk; 
+    if (new_brk >= USER_STACK_BASE) return cur->mm->brk; 
+
+    lock_acquire(&cur->mm->mm_lock);
 
     struct vm_area* heap_vma = find_heap_vma(cur);
     ASSERT(heap_vma != NULL);
 
-    uint32_t old_brk_aligned = PAGE_ALIGN_UP(cur->brk);
+    uint32_t old_brk_aligned = PAGE_ALIGN_UP(cur->mm->brk);
     uint32_t new_brk_aligned = PAGE_ALIGN_UP(new_brk);
 
     // 超过用户空间上界，或 PAGE_ALIGN_UP 发生回绕，都视为非法请求。
     // new_brk_aligned < new_brk 说明上对齐后的空间比用户请求的还低，那么说明发生了溢出回绕
     if (new_brk_aligned < new_brk || new_brk_aligned >= USER_STACK_BASE) {
-        return cur->brk;
+        lock_release(&cur->mm->mm_lock);
+        return cur->mm->brk;
     }
 
     //  缩小堆
-    if (new_brk < cur->brk) {
+    if (new_brk < cur->mm->brk) {
         // 只有当对齐后的边界发生回退，才需要真正“收地”
         if (new_brk_aligned < old_brk_aligned) {
             // 堆收缩时只回收物理页和页表映射，不销毁 heap VMA 本身。
@@ -1053,31 +1058,34 @@ uint32_t sys_brk(uint32_t new_brk) {
             // 这么做最主要是为了简单，这么做页级懒分配也比较简单
             heap_vma->vma_end = new_brk_aligned;
         }
-        cur->brk = new_brk; // 记录用户的精确 brk
-        return cur->brk;
+        cur->mm->brk = new_brk; // 记录用户的精确 brk
+        lock_release(&cur->mm->mm_lock);
+        return cur->mm->brk;
     }
 
     // 扩大堆
     // 如果对齐后的边界没变，说明还在同一页内，直接更新 brk 即可
     if (new_brk_aligned <= old_brk_aligned) {
-        cur->brk = new_brk;
-        return cur->brk;
+        cur->mm->brk = new_brk;
+        lock_release(&cur->mm->mm_lock);
+        return cur->mm->brk;
     }
 
     // 检查是否撞上后续 VMA
     struct dlist_elem* next_elem = heap_vma->vma_tag.next;
-    if (next_elem != &cur->vma_list.tail) {
+    if (next_elem != &cur->mm->vma_list.tail) {
         struct vm_area* next_vma = member_to_entry(struct vm_area, vma_tag, next_elem);
         if (new_brk_aligned > next_vma->vma_start) {
-            return cur->brk; // 空间不足
+            lock_release(&cur->mm->mm_lock);
+            return cur->mm->brk; // 空间不足
         }
     }
 
     // 更新 VMA 边界（画饼，不实际分配内容，直到发生页错误，让swap_page来分配）
     heap_vma->vma_end = new_brk_aligned;
-    cur->brk = new_brk;
-
-    return cur->brk;
+    cur->mm->brk = new_brk;
+    lock_release(&cur->mm->mm_lock);
+    return cur->mm->brk;
 }
 
 // 该函数最核心的功能就是找空隙，然后建立vma
@@ -1149,7 +1157,7 @@ uint32_t sys_mmap(uint32_t user_mmap_args) {
     struct mmap_args* user_args = (struct mmap_args*)user_mmap_args;
 
     // sys_mmap 只能被用户进程调用
-    if (cur->pgdir == NULL) {
+    if (cur->mm == NULL) {
         return (uint32_t)MAP_FAILED;
     }
     if (user_args == NULL) {
@@ -1179,7 +1187,7 @@ uint32_t sys_mmap(uint32_t user_mmap_args) {
 // Musl 几乎总是优先调用 mmap2
 uint32_t sys_mmap_direct(uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset) {
     struct task_struct* cur = get_running_task_struct();
-    if (cur->pgdir == NULL) {
+    if (cur->mm == NULL) {
         return (uint32_t)MAP_FAILED;
     }
     return do_mmap(cur, addr, len, prot, flags, fd, offset);
@@ -1187,7 +1195,7 @@ uint32_t sys_mmap_direct(uint32_t addr, uint32_t len, uint32_t prot, uint32_t fl
 
 int32_t sys_munmap(uint32_t addr, uint32_t len) {
     struct task_struct* cur = get_running_task_struct();
-    if (cur->pgdir == NULL) {
+    if (cur->mm == NULL) {
         return -1;
     }
     if (len == 0 || (addr & (PG_SIZE - 1)) != 0) {
@@ -1360,9 +1368,14 @@ int32_t sys_mprotect(uint32_t addr, uint32_t len, uint32_t new_flags) {
     struct task_struct* cur = get_running_task_struct();
     uint32_t curr_addr = addr;
 
+    lock_acquire(&cur->mm->mm_lock);
+
     while (curr_addr < end) {
         struct vm_area* vma = find_vma(cur, curr_addr);
-        if (!vma) return -ENOMEM; // 权限修改不能超过已有的 VMA 范围
+        if (!vma) {
+            lock_release(&cur->mm->mm_lock);
+            return -ENOMEM; // 权限修改不能超过已有的 VMA 范围
+        }
 
         // 如果 vma 开始位置比修改起点早，分裂它
         if (vma->vma_start < curr_addr) {
@@ -1381,10 +1394,10 @@ int32_t sys_mprotect(uint32_t addr, uint32_t len, uint32_t new_flags) {
         vma->vma_flags = new_flags;
 
         // 同步物理页表
-        update_page_tables_permission(cur->pgdir, vma->vma_start, vma->vma_end, new_flags);
+        update_page_tables_permission(cur->mm->pgdir, vma->vma_start, vma->vma_end, new_flags);
 
         curr_addr = vma->vma_end;
     }
-
+    lock_release(&cur->mm->mm_lock);
     return 0;
 }

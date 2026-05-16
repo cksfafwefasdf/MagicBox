@@ -42,10 +42,10 @@ static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header, uint32_t load
 	uint32_t prog_idx = 0;
     uint32_t max_vaddr = 0; 
 	
-	cur->start_code = 0;
-    cur->end_code = 0;
-    cur->start_data = 0;
-    cur->end_data = 0;
+	cur->mm->start_code = 0;
+    cur->mm->end_code = 0;
+    cur->mm->start_data = 0;
+    cur->mm->end_data = 0;
 	
 	while(prog_idx<elf_header->e_phnum){
 
@@ -133,15 +133,15 @@ static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header, uint32_t load
 				// 但是，通常来说，第一个只读段都是 elf 头所在的位置，并不是 .text
 				// 但是这没啥关系，因为这和linux的表现一致
 				// 只有第一次遇到只读段时，才记录 start_code
-				if (cur->start_code == 0) {
+				if (cur->mm->start_code == 0) {
 					// cur->start_code = prog_header.p_vaddr;
-					cur->start_code = vaddr_start;
+					cur->mm->start_code = vaddr_start;
 				}
-				cur->end_code = vaddr_end;
+				cur->mm->end_code = vaddr_end;
 			} else { // 有写权限 -> 数据段
 				// cur->start_data = prog_header.p_vaddr;
-				cur->start_data = vaddr_start;
-				cur->end_data = vaddr_end; // 数据/BSS 结束的地方
+				cur->mm->start_data = vaddr_start;
+				cur->mm->end_data = vaddr_end; // 数据/BSS 结束的地方
 			}
 
 			if (vaddr_end > max_vaddr) {
@@ -171,12 +171,12 @@ static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header, uint32_t load
 		add_vma(cur, max_vaddr, max_vaddr + PG_SIZE, 0, NULL, VM_READ | VM_WRITE | VM_GROWSUP | VM_ANON, 0);
 		// 程序的终点即为堆的起点
 		// 其实这个数据主要是用来记录堆的起点的，因此它需要跟随向上对齐一页后的max_vaddr
-		cur->end_data = max_vaddr; 
-		cur->brk = max_vaddr; // 初始时堆顶等于堆起点
+		cur->mm->end_data = max_vaddr; 
+		cur->mm->brk = max_vaddr; // 初始时堆顶等于堆起点
 		// 程序的栈起始位置
 		// 由于我们划分了高1GB的虚拟地址给内核空间，而栈是从高向低生长的
 		// 因此设置高1GB的最开始的地址 0xc0000000 作为栈底是合适的，可用空间很大
-		cur->start_stack = USER_STACK_BASE; // 只有第一次运行的时候初始化一下栈就行了，第二次初始化 ld 的 vma 时就不用初始化了
+		cur->mm->start_stack = USER_STACK_BASE; // 只有第一次运行的时候初始化一下栈就行了，第二次初始化 ld 的 vma 时就不用初始化了
 	}
 
 	// printk("load: start_code:%x end_data:%x start_stack:%x\n",cur->start_code,cur->end_data,cur->start_stack);

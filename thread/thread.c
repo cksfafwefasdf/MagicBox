@@ -88,16 +88,20 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 	pthread->priority = prio;
 	pthread->ticks = prio;
 	pthread->elapsed_ticks = 0;
-	pthread->pgdir = NULL;
+	// pthread->pgdir = NULL;
 	pthread->signal = 0;
 	pthread->blocked = 0;
 	pthread->pwd = root_dir_inode; // 默认在根目录
 
 	pthread->fd_table = kmalloc(sizeof(struct fd_entry)*MAX_FILES_OPEN_PER_PROC);
 
+	// 我们不在这个函数里面对 mm 进行初始化，我们都先将其置为 NULL
+	// 因为内核线程的 mm 就是 NULL，用户进程如果要使用他，需要自己单独去申请
+	// pthread->mm = kmalloc(sizeof(struct mm_struct));
+
 	memset(pthread->sigactions, 0, sizeof(pthread->sigactions));
 
-	dlist_init(&pthread->vma_list);
+	// dlist_init(&pthread->vma_list);
 
 	// 将所有信号的处理函数默认设为 SIG_DFL
 	int i;
@@ -424,6 +428,8 @@ void thread_exit(struct task_struct* thread_over,bool need_schedule){
 	}
 
 	release_pid(thread_over->pid);
+
+	kfree(thread_over->mm);
 
 	if(need_schedule){
 		schedule();

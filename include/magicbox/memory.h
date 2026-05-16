@@ -5,6 +5,7 @@
 #include <unitype.h>
 #include <bitmap.h>
 #include <dlist.h>
+#include <sync.h>
 
 #define PG_P_1 1 
 #define PG_P_0 0 
@@ -89,6 +90,44 @@ struct mem_block_desc{
 	uint32_t block_size;
 	uint32_t block_per_arena; // num of mem_block in each arena
 	struct dlist free_list;
+};
+
+struct mm_struct {
+    uint32_t* pgdir;             // 页面目录表物理/虚拟指针 (原 task_struct->pgdir)
+	// 挂载该进程管理的 vm_area
+	// 使用侵入式链表定义，这样的话thread.h就不用抱包含vma.h了
+	// 避免了循环依赖
+    struct dlist vma_list;       //  (原 task_struct->vma_list)
+    
+    // 资源生命周期管理
+    uint32_t mm_users;           // 引用计数，有多少个 task_struct 正在共享这个内存空间（线程数）
+
+    // 内存布局边界 (我们将之前存在 task_struct 中的相关字段全都移动到了这里)
+    // 保护模式下，暴露给用户的地址都是虚拟地址，因此这里用的也都是虚拟地址
+	// 我们的系统是现代平坦模型（所有段基址都是 0，直接映射 4GB 虚拟空间）
+	// 因此我们这些字段的含义与linux早期版本中的不太一样，linux早期版本中这些字段存的都是段的偏移量
+	// 而我们直接存虚拟地址
+	// 这些地址都是在 load 函数中填写的
+	// 而 load 函数又是由 execv 调用的
+	// 这意味着我们的这些字段只有用户进程会去填充，内核进程是不会去填充的
+	// 这是合理的，因为内核线程通常直接运行在内核地址空间（3GB 以上）
+	// 它们没有自己的用户态虚拟地址池（userprog_vaddr 为空），也没有 ELF 文件。
+	// 并且内核线程申请内存用的是 kmalloc（在内核页表里分配），它们不使用 sys_brk。
+	uint32_t start_code;         // 代码段起始地址
+    uint32_t end_code;           // 代码段结束地址
+    uint32_t start_data;         // 数据段起始地址
+    uint32_t end_data;           // 数据段结束地址（也是堆的起始地址 start_brk）
+	// 实际上，我们使用堆的起始加上虚拟地址位图的最后一位也能算出堆顶
+	// 但是有一种特殊情况，例如堆里可能有“空洞”，例如 1111001111
+	// 如果只靠位图找 brk，会把中间那个 0 的位置误认为堆顶，导致地址空间分配冲突。
+	// 除非去扫描整个位图，但是每次都扫描整个位图太费时间了，brk相当于是一个“缓存”
+    uint32_t brk;                // 当前堆顶（sbrk 操纵的对象）
+    uint32_t start_stack;        // 用户栈底地址
+
+    // 并发控制锁
+    // 用于保护 vma_list 的增删改查以及 brk 堆顶的修改
+    // 防止两个线程同时触发 Page Fault 导致链表破坏，或同时调用 sbrk
+    struct lock mm_lock;         
 };
 
 struct task_struct;

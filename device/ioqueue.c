@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <thread.h>
 
 void ioqueue_init(struct ioqueue* ioq){
 	lock_init(&ioq->lock);

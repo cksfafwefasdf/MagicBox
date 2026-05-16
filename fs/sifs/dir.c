@@ -11,6 +11,7 @@
 #include <sifs_fs.h>
 #include <inode.h>
 #include <fs_types.h> 
+#include <memory.h>
 
 // 用于将 sifs 中的文件类型字段转换成在 Linux ABI 层上的定义
 static const uint8_t sifs_to_linux_dt[] = {

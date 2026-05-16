@@ -8,6 +8,7 @@
 #include <inode.h>
 #include <memory.h>
 #include <unitype.h>
+#include <string.h>
 
 int32_t inode_bitmap_alloc(struct partition* part){
 	int32_t bit_idx = bitmap_scan(&part->sb->sifs_info.inode_bitmap,1);

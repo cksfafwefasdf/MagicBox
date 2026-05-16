@@ -6,6 +6,7 @@
 #include <console.h>
 #include <device.h>
 #include <stdint.h>
+#include <string.h>
 
 #define COM1 0x3F8
 

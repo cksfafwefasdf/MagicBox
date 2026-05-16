@@ -14,6 +14,7 @@
 #include <stdio-kernel.h>
 #include <interrupt.h>
 #include <poll.h>
+#include <string.h>
 
 #define TTY_WRITE_BUF_SIZE 128
 

@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <ioctl.h>
 #include <fs_types.h>
+#include <memory.h>
 
 uint32_t* disk_size;
 uint8_t disk_num;

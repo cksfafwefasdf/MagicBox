@@ -21,7 +21,7 @@ extern void intr_exit(void);
 // 释放页表所指向的数据块
 void release_pg_block(struct task_struct* task){
 	enum intr_status _old = intr_disable();
-	uint32_t* pgdir_vaddr = task->pgdir;
+	uint32_t* pgdir_vaddr = task->mm->pgdir;
 	uint16_t pde_idx = 0;
 	uint32_t pde = 0;
 	uint32_t* v_pde_ptr = NULL;
@@ -70,7 +70,7 @@ void release_pg_block(struct task_struct* task){
 // 释放页表本身，不释放页表指向的块
 void release_pg_table(struct task_struct* task){
 	enum intr_status _old = intr_disable();
-	uint32_t* pgdir = task->pgdir;
+	uint32_t* pgdir = task->mm->pgdir;
 	int i = 0;
 	for (i = 0; i < USER_PDE_NR; i++) {
 		if (pgdir[i] & PG_P_1) {
@@ -87,15 +87,15 @@ void release_pg_table(struct task_struct* task){
 void release_pg_dir(struct task_struct* task){
 	enum intr_status _old = intr_disable();
 	// 释放一级页表（页目录）本身
-	uint32_t pgdir_phy = addr_v2p((uint32_t)task->pgdir);
+	uint32_t pgdir_phy = addr_v2p((uint32_t)task->mm->pgdir);
 	pfree(pgdir_phy);
-	task->pgdir = NULL; // 抹除映射
+	task->mm->pgdir = NULL; // 抹除映射
 	intr_set_status(_old);
 }
 
 void user_vaddr_space_clear(struct task_struct* cur) {
     
-	if (cur->pgdir == NULL) return; // 如果页目录都没了，直接返回
+	if (cur->mm == NULL) return; // 如果页目录都没了，直接返回
     release_pg_block(cur);
     release_pg_table(cur);
 
@@ -140,9 +140,9 @@ void start_process(void* filename_){
 void page_dir_activate(struct task_struct* pthread){
 	uint32_t pagedir_phy_addr = 0x100000;
 	// if [pthread] is a user proc
-	if(pthread->pgdir!=NULL){
+	if(pthread->mm!=NULL){
 		// vaddr convert into paddr
-		pagedir_phy_addr = addr_v2p((uint32_t)pthread->pgdir);
+		pagedir_phy_addr = addr_v2p((uint32_t)pthread->mm->pgdir);
 	}
 	// update PDTR, activate the new PDT
 	asm volatile ("movl %0,%%cr3"::"r"(pagedir_phy_addr):"memory");
@@ -154,7 +154,7 @@ void process_activate(struct task_struct* pthread){
 	// the priority of the kernel thread is 0
 	// CPU won't get esp0 from tss when interrupt occur
 	// so we don't need to update esp0
-	if(pthread->pgdir){
+	if(pthread->mm){
 		// if it is user proc, then update esp0
 		update_tss_esp(pthread);
 	}
@@ -193,6 +193,11 @@ void process_execute(void* filename,char* name){
 	prio = DEFAULT_PRIO;
 
 	init_thread(thread,name,prio);
+
+	thread->mm = (struct mm_struct*) kmalloc(sizeof(struct mm_struct));
+	dlist_init(&thread->mm->vma_list);
+	lock_init(&thread->mm->mm_lock);
+
 	// create_user_vaddr_bitmap(thread);
 	// start_process(filename) will be called by kernel_thread 
 	thread_create(thread,start_process,filename);
@@ -201,14 +206,14 @@ void process_execute(void* filename,char* name){
 	// 由于我们是通过内核main线程调用该函数启动的程序
 	// 因此这部分代码是在内核段中的，我们无需多处理，直接将其置为 USER_VADDR_START
 	add_vma(thread, USER_VADDR_START, USER_VADDR_START, 0, NULL, VM_READ | VM_WRITE | VM_GROWSUP | VM_ANON,0);
-	thread->end_data = USER_VADDR_START;
+	thread->mm->end_data = USER_VADDR_START;
 
 	// 添加栈的vma
 	add_vma(thread, USER_STACK_BASE-USER_STACK_SIZE, USER_STACK_BASE, 0, NULL, VM_READ | VM_WRITE | VM_GROWSDOWN | VM_ANON, 0);
 	
-	thread->start_stack = USER_STACK_BASE;
+	thread->mm->start_stack = USER_STACK_BASE;
 
-	thread->pgdir = create_page_dir();
+	thread->mm->pgdir = create_page_dir();
 
 	enum intr_status old_status = intr_disable();
 	ASSERT(!dlist_find(&thread_ready_list, &thread->general_tag));
