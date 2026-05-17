@@ -18,7 +18,7 @@ mkdir -p "$BUILD_DIR"
 rm -f "$TAR_NAME"
 
 # 编译选项
-CFLAGS="-Wall -c -fno-builtin -m32 -fno-stack-protector -I $LIB_DIR -I $LIB_DIR/uapi -I $LIB_DIR/sys -I $LIB_DIR/linux"
+CFLAGS="-Wall -g -c -fno-builtin -m32 -fno-stack-protector -I $LIB_DIR -I $LIB_DIR/uapi -I $LIB_DIR/sys -I $LIB_DIR/linux"
 BASE_OBJS="$KERNEL_BUILD/string.o $KERNEL_BUILD/syscall.o $KERNEL_BUILD/stdio.o $KERNEL_BUILD/assert.o"
 
 # 编译 CRT 入口
@@ -36,7 +36,7 @@ test_malloc,prog/native_test/test_malloc.c test_kmalloc,prog/native_test/test_km
 test_mmap,prog/native_test/test_mmap.c test_mmap_file,prog/native_test/test_mmap_file.c \
 test_symlink,prog/native_test/test_symlink.c test_rawtty,prog/native_test/test_raw_tty.c \
 test_timer,prog/native_test/test_timer.c test_truncate,prog/native_test/test_truncate.c \
-test_buffer,prog/native_test/test_ide_buffer.c"
+test_buffer,prog/native_test/test_ide_buffer.c test_clone,prog/native_test/test_clone.c"
 
 # 根据参数决定最终编译列表
 # $1 表示脚本收到的第一个参数

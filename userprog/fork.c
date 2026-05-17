@@ -14,6 +14,8 @@
 #include <inode.h>
 #include <ide.h>
 #include <swap.h>
+#include <syscall.h>
+#include <wait_exit.h>
 
 extern void intr_exit(void); // defined in  kernel.s
 static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,struct task_struct* parent_thread){
@@ -27,7 +29,7 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 	memcpy(child_thread,parent_thread,sizeof(struct task_struct));
 
 	// 上面的拷贝操作把父进程的打开文件表的指针都拷贝了过来，我们先把这个指针置为 NULL
-	child_thread->fd_table = NULL; 
+	child_thread->file_table = NULL; 
 
 	// 重新分配子进程的独立内核栈
     child_thread->kstack_pages = get_kernel_pages(KERNEL_THREAD_STACK_PAGES);
@@ -59,7 +61,7 @@ static int32_t copy_pcb_vaddrbitmap_stack0(struct task_struct* child_thread,stru
 	return 0;
 }
 
-static int32_t build_child_stack(struct task_struct* child, void* user_stack) {
+static int32_t build_child_stack(struct task_struct* child, void* user_stack, int (*fn)(void *fnarg), void *arg, void (*thread_restorer)(void)) {
     struct task_struct* parent = get_running_task_struct();
 
     // 定位父进程进入内核时的中断栈位置
@@ -76,14 +78,40 @@ static int32_t build_child_stack(struct task_struct* child, void* user_stack) {
 
 	if ((child->mm == parent->mm) && user_stack != NULL) {
         child_intr->esp = user_stack; 
+        child_intr->ebp = (uint32_t) user_stack; 
     }
+
+    // 根据 fn 进一步构建中断栈给返回到用户态时使用
+    if(fn != NULL){ // 有 fn，按照构造内核线程的流程构造
+        // 定位子进程的用户空间栈顶，并预埋一个用户态的退出系统调用
+        // 当用户函数 fn 执行完 ret 时，必须让它弹进一个能引发 exit 的地方
+        uint32_t* ustack = (uint32_t*)user_stack;
+        
+        ustack--;
+        *ustack = (uint32_t)arg; // 压入传给 fn 的参数
+
+        // 压入 fn 的返回地址 exit
+        // 由于是在用户态下，执行完 fn 后的返回地址
+        // 因此压入的必须是用户态下的系统调用
+        ustack--;
+        *ustack = (uint32_t)thread_restorer; 
+
+        // 强行将子进程的用户栈和 EIP 塞进中断栈
+        child_intr->esp = (void*)ustack;
+        child_intr->ebp = (uint32_t)ustack;
+        // eip 给出的函数类型的返回值是 void，但是我们提供的是 int，因此先强转一下
+        child_intr->eip = (void (*)(void))fn; // 目标直接指向用户态函数
+    } 
 
     // 构建 thread_stack 供 switch_to 使用
     uint32_t* ret_addr = (uint32_t*)child_intr - 1;
+    // 如果 fn 不为空，那么 intr_exit 后就会返回到 fn 中
+    // 否则返回到的是和 parent_intr 一样的 eip 处（因为我们上面执行了一个 memcpy）
     *ret_addr = (uint32_t)intr_exit;
 
     // 最终 self_kstack 指向 thread_stack 的栈顶（即 ret_addr 往下 4 个寄存器）
     child->self_kstack = (uint32_t*)child_intr - 5; 
+
     return 0;
 }
 
@@ -101,7 +129,7 @@ static void update_f_cnts(struct task_struct* thread) {
 	// 我们将 console 和 tty 都给文件话了，不能再像原来那样略过它们了
     int32_t local_fd = 0, global_fd = 0; 
     while(local_fd < MAX_FILES_OPEN_PER_PROC) {
-        global_fd = thread->fd_table[local_fd].global_fd_idx;
+        global_fd = thread->file_table->fd_table[local_fd].global_fd_idx;
         if(global_fd != -1) {
             struct file* f = &file_table[global_fd];
             // 必须增加引用计数，否则父子进程共享 FD 会出大问题
@@ -119,7 +147,7 @@ static void update_f_cnts(struct task_struct* thread) {
     }
 }
 
-static int32_t copy_process(uint32_t flags, void* user_stack, struct task_struct* child_thread, struct task_struct* parent_thread){
+static int32_t copy_process(uint32_t flags, struct task_struct* child_thread, struct task_struct* parent_thread){
     
     void* buf_page = get_kernel_pages(1);
     if(buf_page == NULL){
@@ -134,15 +162,14 @@ static int32_t copy_process(uint32_t flags, void* user_stack, struct task_struct
 
     /// 处理共享虚拟地址空间 (CLONE_VM)
     if (flags & CLONE_VM) {
+        // printk("sys_clone: share vm\n");
         // 线程模式，直接指向父进程的 mm 结构，实现内存完美共享
         child_thread->mm = parent_thread->mm;
         
-        // 在这里增加使用该 mm 的线程计数
-		// 此处不需要用 lock，因为当前操作是在关中断下进行的
-		// 即使是 SMP 的情况下，也不需要用，因为子进程还没有进入 ready 队列呢
-		// 只有父进程对这个 mm 有完全的控制权
+        lock_acquire(&parent_thread->mm->mm_lock);
         child_thread->mm->mm_users++; 
-        
+        lock_release(&parent_thread->mm->mm_lock);
+                
         // 因为共享，不需要 copy_vma_list，也不需要 create_page_dir 和 copy_page_tables
     } else {
         // 传统进程模式 (Fork)，独立分配虚拟地址空间
@@ -153,8 +180,7 @@ static int32_t copy_process(uint32_t flags, void* user_stack, struct task_struct
             mfree_page(PF_KERNEL, buf_page, 1);
             return -1;
         }
-        dlist_init(&child_thread->mm->vma_list);
-        lock_init(&child_thread->mm->mm_lock);
+        init_mm_struct(child_thread->mm);
 
         if (!copy_vma_list(parent_thread, child_thread)) {
 			// 如果 VMA 拷贝失败（比如 kmalloc 失败），需要清理已分配资源
@@ -176,22 +202,26 @@ static int32_t copy_process(uint32_t flags, void* user_stack, struct task_struct
 
     // 处理打开文件表 (CLONE_FILES)
     if (flags & CLONE_FILES) {
+        // printk("sys_clone: share files\n");
         // 线程模式，直接使用父进程的文件表指针
 		// 在这种情况下，子进程关闭一个文件父进程会受到影响
-        child_thread->fd_table = parent_thread->fd_table;
+        child_thread->file_table = parent_thread->file_table;
+
+        child_thread->file_table->ref_cnt++;
         
         // 既然 fd_table 是同一个，里面的 global_fd 没变，整体没有产生新的局部表项，
         // 因此不需要遍历增加全局 file 的 f_count。
     } else {
         // 传统进程模式 (Fork)，使用原本的逻辑更新计数
 		// 在这种情况下，子进程关闭一个文件，不会对父进程产生影响
-		child_thread->fd_table = kmalloc(sizeof(struct fd_entry)*MAX_FILES_OPEN_PER_PROC);
-		memcpy(child_thread->fd_table , parent_thread->fd_table, sizeof(struct fd_entry)*MAX_FILES_OPEN_PER_PROC);
+		child_thread->file_table = kmalloc(sizeof(struct file_table));
+
+        memcpy(child_thread->file_table, parent_thread->file_table, sizeof(struct file_table));
+
+        init_file_table(child_thread->file_table);
+		
         update_f_cnts(child_thread);
     }
-    
-    // 构建子任务的内核栈
-    build_child_stack(child_thread, user_stack);
     
     mfree_page(PF_KERNEL, buf_page, 1);
 #ifdef DEBUG_PG_FAULT
@@ -200,20 +230,13 @@ static int32_t copy_process(uint32_t flags, void* user_stack, struct task_struct
     return 0;
 }
 
-/*
-    TODO:   (1) 在 clone 和 exit 中添加对进程 fd_table 的引用计数的操作
-                以便实现共享退出时的保护，防止父进程或子线程在退出时无脑的对文件进行 close 和释放 fd_table
-            (2) 在 exit 中添加对于 mm 结构体释放的保护，先检查计数为 0 了再释放
-                防止子进程或者父进程退出时无脑的释放 mm 结构体中的各个页以及页表空间
-*/
-
 // 在 VM 共享的情况下，内核态线程和用户进程会共享 虚拟地址空间
 // 同时，也会共享 esp，这样的话子线程的 call 操作甚至会影响到父进程的 esp
 // 这显然有问题，因此我们需要传入一个 user_stack 来将二者分离
-
-// 由于 clone 在共享 VM 的情况下和 exit 之间的配合还没有完全写好
-// 因此 clone 先不导出出去了，先只作为一个 static 的函数专门给 fork 用
-static pid_t sys_clone(uint32_t flags, void* user_stack) {
+// fn 是内核线程的业务函数的逻辑，如果不传入该参数的话，进程会返回到 clone 函数执行完的下一个地址处
+// 其实这个 fn 为空的话，整体的运行流程就是原本的 fork 的运行流程，如果带有 fn 的话，clone 完会进入到 fn 中
+// thread_restorer 类似于 sig_restorer, 用于 LWP 的退出处理
+pid_t sys_clone(uint32_t flags, void* user_stack, int (*fn)(void *fnarg), void *arg, void (*thread_restorer)(void)) {
     struct task_struct* parent_thread = get_running_task_struct();
     struct task_struct* child_thread = get_kernel_pages(1); // 申请一页作为 PCB 容器
 
@@ -224,7 +247,13 @@ static pid_t sys_clone(uint32_t flags, void* user_stack) {
     ASSERT(INTR_OFF == intr_get_status() && parent_thread->mm->pgdir != NULL);
     
     // 带上 flags 运行
-    if(copy_process(flags, user_stack, child_thread, parent_thread) == -1){
+    if(copy_process(flags, child_thread, parent_thread) < 0){
+        mfree_page(PF_KERNEL, child_thread, 1);
+        return -1;
+    }
+
+    // 构建子任务的内核栈
+    if(build_child_stack(child_thread, user_stack, fn, arg, thread_restorer)<  0){
         mfree_page(PF_KERNEL, child_thread, 1);
         return -1;
     }
@@ -240,5 +269,5 @@ static pid_t sys_clone(uint32_t flags, void* user_stack) {
 
 // fork 纯粹是 clone 的一个特化封装（完全不带共享标志）
 pid_t sys_fork(){
-    return sys_clone(0, NULL); 
+    return sys_clone(0, NULL, NULL, NULL, NULL); 
 }

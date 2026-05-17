@@ -93,7 +93,8 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 	pthread->blocked = 0;
 	pthread->pwd = root_dir_inode; // 默认在根目录
 
-	pthread->fd_table = kmalloc(sizeof(struct fd_entry)*MAX_FILES_OPEN_PER_PROC);
+	pthread->file_table = kmalloc(sizeof(struct file_table));
+	init_file_table(pthread->file_table);
 
 	// 我们不在这个函数里面对 mm 进行初始化，我们都先将其置为 NULL
 	// 因为内核线程的 mm 就是 NULL，用户进程如果要使用他，需要自己单独去申请
@@ -115,8 +116,8 @@ void init_thread(struct task_struct* pthread,char* name,int prio){
 	// the others set as -1
 	uint8_t fd_idx = 0;
 	while(fd_idx<MAX_FILES_OPEN_PER_PROC){
-		pthread->fd_table[fd_idx].global_fd_idx = -1;
-		pthread->fd_table[fd_idx].flags = 0;
+		pthread->file_table->fd_table[fd_idx].global_fd_idx = -1;
+		pthread->file_table->fd_table[fd_idx].flags = 0;
 		fd_idx++;
 	}
 
@@ -286,6 +287,19 @@ void thread_unblock(struct task_struct* pthread){
 	intr_set_status(old_stat);
 }
 
+// 不清 0，清 0 由调用者保证
+void init_file_table(struct file_table* ft){
+	ft->ref_cnt = 1;
+	lock_init(&ft->table_lock);
+}
+
+// 不清 0，清 0 由调用者保证
+void init_mm_struct(struct mm_struct* mm){
+	dlist_init(&mm->vma_list);
+	lock_init(&mm->mm_lock);
+	mm->mm_users = 1;
+}
+
 static pid_t allocate_pid(void){
 	lock_acquire(&pid_pool.pid_lock);
 	int32_t bit_idx = bitmap_scan(&pid_pool.pid_bitmap,1);
@@ -423,13 +437,24 @@ void thread_exit(struct task_struct* thread_over,bool need_schedule){
 
 	dlist_remove(&thread_over->all_list_tag);
 
+	// 安全释放 mm_struct 结构体外壳
+    // 刚才在 sys_exit 阶段我们已经把 mm_users 递减了。
+    // 如果现在由于 sys_wait 完成了最终收尸，导致 mm_users 彻底归 0，
+    // 那么这个 mm_struct 结构体就可以放心地从内核堆（kmalloc）里销毁了。
+    if (thread_over->mm) {
+        if (thread_over->mm->mm_users == 0) {
+            kfree(thread_over->mm);
+        }
+        thread_over->mm = NULL;
+    }
+
+	// 释放 PCB 自身
 	if(thread_over!=main_thread){
 		mfree_page(PF_KERNEL,thread_over,1);
 	}
 
 	release_pid(thread_over->pid);
 
-	kfree(thread_over->mm);
 
 	if(need_schedule){
 		schedule();

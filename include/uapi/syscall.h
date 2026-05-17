@@ -41,7 +41,7 @@
 #define	SYS_TEST 30
 // 由于我们引入了 VFS，因此通过 open 打开 sda 文件
 // 结合 read 操作，就可以实现 READ_SECTORS 的功能了
-// #define	SYS_READ_SECTORS 31
+#define	SYS_CLONE 31
 #define	SYS_MKNOD 32 
 #define	SYS_DUP2 33
 #define	SYS_SETPGID 34
@@ -80,10 +80,6 @@
 // user interface
 extern uint32_t getpid(void);
 extern uint32_t write(int32_t fd,const void* buf,uint32_t count);
-// libc heap allocator entry points (no longer direct syscalls)
-extern void* malloc(uint32_t size);
-extern void free(void *ptr);
-extern void* realloc(void* ptr, uint32_t size);
 extern pid_t fork(void);
 extern void clear(void);
 extern int32_t read(int32_t fd,void* buf,uint32_t count);
@@ -142,7 +138,6 @@ extern int32_t readlink(const char* _path, char* buf, int32_t bufsize);
 extern int32_t poll(struct pollfd* fds, uint32_t nfds, int32_t timeout_ms);
 extern int32_t rt_sigaction(int sig, const struct sigaction* act, struct sigaction* oact, uint32_t sigsetsize);
 extern pid_t getppid(void);
-extern void* sbrk(int32_t increment);
 extern int32_t truncate(const char* path, int32_t length);
 extern int32_t ftruncate(int32_t fd, int32_t length);
 extern int32_t link(const char* _oldpath, const char* _newpath);
@@ -150,5 +145,13 @@ extern void sync(void);
 extern int32_t swapon(const char* _pathname);
 extern int32_t swapoff(const char* _pathname);
 extern int32_t mprotect(uint32_t addr, uint32_t len, uint32_t new_flags);
+extern pid_t clone(uint32_t flags, void* user_stack, int (*fn)(void *fnarg), void *arg, void (*thread_restorer)(void));
 
+// 这些是用户态下使用的函数的封装，他们不是系统调用，只是为了方便把他们声明在这的
+extern void* sbrk(int32_t increment);
+// libc heap allocator entry points (no longer direct syscalls)
+extern void* malloc(uint32_t size);
+extern void free(void *ptr);
+extern void* realloc(void* ptr, uint32_t size);
+extern pid_t pthread_create(void* user_stack, int (*fn)(void *fnarg), void *arg);
 #endif

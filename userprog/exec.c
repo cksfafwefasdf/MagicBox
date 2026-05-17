@@ -41,6 +41,8 @@ static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header, uint32_t load
 
 	uint32_t prog_idx = 0;
     uint32_t max_vaddr = 0; 
+
+	lock_acquire(&cur->mm->mm_lock);
 	
 	cur->mm->start_code = 0;
     cur->mm->end_code = 0;
@@ -58,6 +60,7 @@ static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header, uint32_t load
 
 		if(ret < 0){
 			// 直接返回 read 的错误码
+			lock_release(&cur->mm->mm_lock);
 			return ret;
 		}
 
@@ -178,6 +181,8 @@ static int32_t load_vma(int32_t fd, struct Elf32_Ehdr* elf_header, uint32_t load
 		// 因此设置高1GB的最开始的地址 0xc0000000 作为栈底是合适的，可用空间很大
 		cur->mm->start_stack = USER_STACK_BASE; // 只有第一次运行的时候初始化一下栈就行了，第二次初始化 ld 的 vma 时就不用初始化了
 	}
+
+	lock_release(&cur->mm->mm_lock);
 
 	// printk("load: start_code:%x end_data:%x start_stack:%x\n",cur->start_code,cur->end_data,cur->start_stack);
 
@@ -338,7 +343,7 @@ int32_t sys_execve(const char* path, const char* argv[], const char* envp[]) {
 	// 遍历当前进程的所有文件描述符
     for (int i = 0; i < MAX_FILES_OPEN_PER_PROC; i++) {
         // 如果 global_fd_idx 有效，且标志位设置了 FD_CLOEXEC 
-        if (cur->fd_table[i].global_fd_idx != -1 && (cur->fd_table[i].flags & FD_CLOEXEC)) {
+        if (cur->file_table->fd_table[i].global_fd_idx != -1 && (cur->file_table->fd_table[i].flags & FD_CLOEXEC)) {
             // 调用 sys_close。这会处理全局引用计数 f_count 和 inode 的关闭
             sys_close(i);
         }

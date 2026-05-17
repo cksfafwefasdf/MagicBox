@@ -3,16 +3,19 @@
 #include <unitype.h>
 #include <string.h>
 #include <stdint.h>
+#include <fork.h>
 
 // 该 syscall 文件主要是由用户程序包含的
 // 而我们的所有用户程序都要链接运行时库 start.s
 // 因此所有用户程序都能访问到 sig_restorer 这个函数
-// 由于我们的init进程是一个用户进程，因此他只能调用syscall.h 中的系统调用，不能使用 sys_xxx函数
+// 由于我们的init进程是一个用户进程，因此他只能调用 syscall.h 中的系统调用，不能使用 sys_xxx函数
 // 但是它又是随内核一起编译的，这就引发了一个问题，
-// sig_restorer是随用户程序编译的，但是init这个随内核编译的用户程序并没有包含start.s，因此init它不知道sig_restorer的存在
-// 因此我们将sig_restorer声明成弱引用，链接器在链接时，若没有找到该符号，那么就把他置为0，找到了就置为相应值
+// sig_restorer 是随用户程序编译的，但是 init 这个随内核编译的用户程序并没有包含 start.s，因此 init 它不知道 sig_restorer 的存在
+// 因此我们将 sig_restorer 声明成弱引用，链接器在链接时，若没有找到该符号，那么就把他置为0，找到了就置为相应值
 
 __attribute__((weak)) extern void sig_restorer(void);
+
+__attribute__((weak)) extern void thread_restorer(void); // 用于 lwp 的退出收尾，写在 start.s 中，因此我们同样也用弱引用
 
 // eax for int_no
 // ebx for arg1
@@ -372,4 +375,13 @@ int32_t swapoff(const char* _pathname){
 
 int32_t mprotect(uint32_t addr, uint32_t len, uint32_t new_flags){
 	return _syscall3(SYS_MPROTECT, addr, len, new_flags);
+}
+
+pid_t clone(uint32_t flags, void* user_stack, int (*fn)(void *fnarg), void *arg, void (*thread_restorer)(void)) {
+	return _syscall5(SYS_CLONE, flags, user_stack, fn, arg, thread_restorer);
+}
+
+// 对于 clone 的用户态封装，他提供了默认的 flag 和 退出例程
+pid_t pthread_create(void* user_stack, int (*fn)(void *fnarg), void *arg){
+	return clone(CLONE_VM | CLONE_FILES, user_stack, fn, arg, thread_restorer);
 }

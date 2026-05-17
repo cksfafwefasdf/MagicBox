@@ -195,8 +195,7 @@ void process_execute(void* filename,char* name){
 	init_thread(thread,name,prio);
 
 	thread->mm = (struct mm_struct*) kmalloc(sizeof(struct mm_struct));
-	dlist_init(&thread->mm->vma_list);
-	lock_init(&thread->mm->mm_lock);
+	init_mm_struct(thread->mm);
 
 	// create_user_vaddr_bitmap(thread);
 	// start_process(filename) will be called by kernel_thread 

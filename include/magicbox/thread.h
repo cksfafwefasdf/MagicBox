@@ -34,7 +34,32 @@ enum task_status{
 	TASK_DIED
 };
 
+/*
++-------------------------------------------------------+ 高地址 (stack_top)
+  |  ss                                                   |
+  |  esp (用户态栈指针)                                    |  <-- 硬件压入
+  |  eflags/ cs/ eip (用户态入口地址)                      |
+  |  err_code                                             |
+  +-------------------------------------------------------+
+  |  ds / es / fs / gs                                    |  <-- 软件 push (intr_stack)
+  |  eax / ecx / edx / ebx / esp_dummy / ebp / esi / edi |
+  +=======================================================+ <-- 这条线就是 child_intr
+  |  func_arg (线程参数)                                  |
+  |  function (线程函数)                                  |  <-- 伪造的内核调用结构
+  |  unused_retaddr / eip (指向 intr_exit)                |      (thread_stack)
+  +-------------------------------------------------------+
+  |  esi / edi / ebx / ebp (全为 0)                        |
+  +-------------------------------------------------------+ <-- 这条线就是 self_kstack
+  |                                                       |
+  |  (空闲栈空间，向下生长...)                             	|
+  |                                                       |
+  v                                                       v 低地址 (kstack_pages)
+*/
+
+// 用于处理用户态到内核态的切换
 struct intr_stack{
+	// 从此处 vec_no 到 ds 的部分由我们软件压入
+	// 主要在 kernel.s 中处理，存的是用户态的环境
 	uint32_t vec_no;
 	uint32_t edi;
 	uint32_t esi;
@@ -48,7 +73,7 @@ struct intr_stack{
 	uint32_t fs;
 	uint32_t es;
 	uint32_t ds;
-
+	// 下面的这部分内容（例如 err_code）由硬件自动压入
 	uint32_t err_code;
 	void (*eip) (void);
 	uint32_t cs;
@@ -57,6 +82,33 @@ struct intr_stack{
 	uint32_t ss;
 };
 
+// thread_stack 用于处理内核态到内核态的切换，主要给 switch_to 使用
+// 根据 x86 ABI，内核态下调用一个普通的 C 语言函数
+// 只需要保存 4 个主叫方保存寄存器（Callee-saved Registers）：esi, edi, ebx, ebp 即可
+// 当 switch_to 执行 ret 时，栈顶指针 ESP 正好指向 eip。
+// switch_to 的 ret 执行后, CPU 强行把 eip 的值（即 kernel_thread）弹入 EIP 寄存器
+// ret 弹栈后，ESP 自动向高地址移动 4 个字节，精准地停在了 unused_retaddr 上
+// 此时，CPU 已经进入了 kernel_thread 的代码。作为一个标准的 C 语言函数，查看自己的栈
+// [esp] 是 unused_retaddr，它会把这个值当成自己的返回地址。
+// [esp + 4] 是 function（第一个参数）
+// [esp + 8] 是 func_arg（第二个参数）
+// 由于有 unused_retaddr 在这里挡了一下， kernel_thread 寻找参数的相对偏移量（esp + 4 和 esp + 8）就变得完全合法了！
+// 由于我们通过 kernel_thread 中的 function(func_arg) 操作，直接就进入到后续的业务逻辑中了
+// 因此我们不会从这个桩函数，也就不会用到这个 unused_retaddr 了
+// 但是我们并不总是会返回到 kernel_thread 中
+// 只有 内核线程 或者调用 process_execute 启动的用户进程（比如 init）才会到 kernel_thread 中
+// 因为 thread_start 和 process_execute 底层调用的 thread_create 需要接受一个业务函数以及这个业务函数的参数
+// 我们通过 kernel_thread 这个桩可以很好的取出业务函数和参数
+// 但是 fork 出来的进程不会到 kernel_thread 中，因为他们没有通过 thread_create 启动
+// 我们在 fork 操作的 build_child_stack 函数中直接无视了 function func_arg unused_retaddr 这三个参数
+// 直接将 eip 赋值成了 intr_exit，然后将 self_kstack 赋值成了 eip 往下 4 个寄存器，为 esi 等留出了空间
+// 到进入 switch_to 时， mov esp,[eax] 操作会更新当前的 esp 为 next 进程的内核栈顶 self_kstack
+// 通过一系列 pop 操作后，指针最终就指向了 eip，ret 后就直接进入了 intr_exit
+// 经过系统调用的中断返回后，直接进入刚刚父进程进行 fork 的代码的下一行代码
+// 对于 thread_create 创建出的进程
+// thread_create 函数会将 self_kstack 指向一个完整的 thread_stack 结构体的顶端（最低地址处），因此 pop 后
+// 栈顶指向桩函数 kernel_thread
+// 桩函数 kernel_thread 通过调用 function(func_arg); 就可以完美的取出 function 和 func_arg 并使用
 struct thread_stack{
 	uint32_t ebp;
 	uint32_t ebx;
@@ -65,7 +117,7 @@ struct thread_stack{
 
 	void (*eip) (thread_func* func,void* func_arg);
 
-	void (*unused_retaddr);
+	void (*unused_retaddr)(void);
 	thread_func* function;
 	void* func_arg;
 };
@@ -77,6 +129,12 @@ struct thread_stack{
 struct fd_entry {
     int32_t global_fd_idx;  // 指向全局 file_table 的索引
     uint8_t flags;          // 记录 FD_CLOEXEC 等
+};
+
+struct file_table {
+    int ref_cnt;                            // 引用计数（有多少个线程共享此表）
+    struct lock table_lock;                 // 保护动态增删 fd 时的并发锁
+    struct fd_entry fd_table[MAX_FILES_OPEN_PER_PROC]; // 实际的打开文件指针数组
 };
 
 struct task_struct{
@@ -92,7 +150,7 @@ struct task_struct{
 
 	// Per-process Open File Table
 	// struct fd_entry fd_table[MAX_FILES_OPEN_PER_PROC];
-	struct fd_entry* fd_table;
+	struct file_table* file_table;
 
 	struct dlist_elem general_tag;
 	struct dlist_elem all_list_tag;
@@ -134,6 +192,8 @@ struct task_struct{
 
 
 extern void init_thread(struct task_struct* pthread,char* name,int prio);
+extern void init_file_table(struct file_table* ft);
+extern void init_mm_struct(struct mm_struct* mm);
 extern void thread_create(struct task_struct* pthread,thread_func* function,void* func_arg);
 extern struct task_struct* thread_start(char* name,int prio,thread_func function,void* func_arg);
 extern struct task_struct* get_running_task_struct(void);

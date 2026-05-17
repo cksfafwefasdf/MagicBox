@@ -141,8 +141,16 @@ void swap_page(uint32_t err_code,void* err_vaddr){
 #endif
     // 如果 vma 都不存在，那么说明不是懒加载，而是真正的段错误 
 	if (vma == NULL) {
-        printk("VMA Search Failed! vaddr: %x\n", page_vaddr);
+        printk("VMA Search Failed! vaddr: 0x%x\n", page_vaddr);
         // vma = find_vma_condition(cur, VM_READ|VM_WRITE|VM_GROWSDOWN|VM_ANON);
+        struct dlist_elem* pelem = cur->mm->vma_list.head.next;
+        printk("--- Available VMAs for this process ---\n");
+        while (pelem) {
+            struct vm_area* pvma = member_to_entry(struct vm_area, vma_tag, pelem);
+            printk("VMA: start=0x%x, end=0x%x, flags=0x%x\n", pvma->vma_start, pvma->vma_end, pvma->vma_flags);
+            pelem = pelem->next;
+        }
+        printk("--- Available VMAs for this process end ---\n");
 		goto segmentation_fault;
 	}
 

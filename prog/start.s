@@ -34,9 +34,14 @@ _start:
     
     call main
 
+; 默认的进程的离开路径
+; LWP 也是默认从这里退出，除非我们在 clone 时指定另一个出口 
+global thread_restorer
+thread_restorer:
     ; 退出处理
     push eax            ; main 的返回值
     call exit
+    hlt                 ; 防护代码， exit 后应该就不会回来这个文件里的代码了 
 
 
 %define SYS_SIGRETURN 40

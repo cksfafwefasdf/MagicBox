@@ -368,7 +368,7 @@ int32_t sys_open(const char* _pathname,int32_t flags){
 
     // 处理追加模式
     struct task_struct* cur = get_running_task_struct();
-    struct file* f = &file_table[cur->fd_table[fd].global_fd_idx];
+    struct file* f = &file_table[cur->file_table->fd_table[fd].global_fd_idx];
     struct inode* inode = f->fd_inode;
 
     if(flags & O_APPEND){
@@ -397,7 +397,7 @@ int32_t sys_close(int32_t fd) {
     }
 
     struct task_struct* cur = get_running_task_struct();
-    int32_t global_fd = cur->fd_table[fd].global_fd_idx;
+    int32_t global_fd = cur->file_table->fd_table[fd].global_fd_idx;
 
     if (global_fd == -1) {
         return -EBADF; // 该 FD 并没有指向任何打开的文件
@@ -423,8 +423,8 @@ int32_t sys_close(int32_t fd) {
     int32_t ret = file_close(file);
 
     // 释放局部资源, 本进程的局部 fd 槽位回收
-    cur->fd_table[fd].global_fd_idx = -1;
-    cur->fd_table[fd].flags = 0;
+    cur->file_table->fd_table[fd].global_fd_idx = -1;
+    cur->file_table->fd_table[fd].flags = 0;
 
     return ret;
 }
@@ -1300,7 +1300,7 @@ int32_t sys_dup2(uint32_t old_local_fd, uint32_t new_local_fd) {
     struct task_struct* cur = get_running_task_struct();
 
     // 基础校验
-    if (old_local_fd >= MAX_FILES_OPEN_PER_PROC || cur->fd_table[old_local_fd].global_fd_idx == -1) {
+    if (old_local_fd >= MAX_FILES_OPEN_PER_PROC || cur->file_table->fd_table[old_local_fd].global_fd_idx == -1) {
         return -1;
     }
     if (new_local_fd >= MAX_FILES_OPEN_PER_PROC) return -1;
@@ -1310,17 +1310,17 @@ int32_t sys_dup2(uint32_t old_local_fd, uint32_t new_local_fd) {
 	
 
     // 如果 new_fd 已经指向某个文件，先关闭它
-    if (cur->fd_table[new_local_fd].global_fd_idx != -1) {
+    if (cur->file_table->fd_table[new_local_fd].global_fd_idx != -1) {
         sys_close(new_local_fd);
     }
 	
 
 	// 将两个局部描述符指向同一个全局描述符
-    uint32_t global_fd = cur->fd_table[old_local_fd].global_fd_idx;
-    cur->fd_table[new_local_fd].global_fd_idx = global_fd;
+    uint32_t global_fd = cur->file_table->fd_table[old_local_fd].global_fd_idx;
+    cur->file_table->fd_table[new_local_fd].global_fd_idx = global_fd;
     // 根据标准，dup、dup2 和 fcntl(F_DUPFD) 产生的新文件描述符必须有一套全新的 flags
     // 因此需要置为 0
-    cur->fd_table[new_local_fd].flags = 0;
+    cur->file_table->fd_table[new_local_fd].flags = 0;
 
 	struct file* f = &file_table[global_fd];
 
@@ -1777,7 +1777,7 @@ int32_t sys_fcntl(int32_t fd, uint32_t cmd, uint32_t arg) {
     
     struct task_struct* cur = get_running_task_struct();
 
-    int32_t g_idx = cur->fd_table[fd].global_fd_idx; 
+    int32_t g_idx = cur->file_table->fd_table[fd].global_fd_idx; 
     
     if (g_idx == -1) return -EBADF;
     struct file* file = &file_table[g_idx];
@@ -1788,23 +1788,23 @@ int32_t sys_fcntl(int32_t fd, uint32_t cmd, uint32_t arg) {
             // 复制 FD，要求新 FD >= arg
             int32_t new_fd = arg;
             while (new_fd < MAX_FILES_OPEN_PER_PROC) {
-                if (cur->fd_table[new_fd].global_fd_idx == -1) break;
+                if (cur->file_table->fd_table[new_fd].global_fd_idx == -1) break;
                 new_fd++;
             }
             if (new_fd >= MAX_FILES_OPEN_PER_PROC) return -EMFILE;
             
-            cur->fd_table[new_fd].global_fd_idx = g_idx;
-            cur->fd_table[new_fd].flags = 0; // 新复制的 FD 默认不带 CLOEXEC
+            cur->file_table->fd_table[new_fd].global_fd_idx = g_idx;
+            cur->file_table->fd_table[new_fd].flags = 0; // 新复制的 FD 默认不带 CLOEXEC
             file->f_count++; // 全局引用计数加 1
             return new_fd;
         }
 
         case F_GETFD:
-            return cur->fd_table[fd].flags;
+            return cur->file_table->fd_table[fd].flags;
 
         case F_SETFD:
             // 确保只保留合法位（目前我们只有第一位，表示FD_CLOEXEC）
-            cur->fd_table[fd].flags = arg & FD_CLOEXEC;
+            cur->file_table->fd_table[fd].flags = arg & FD_CLOEXEC;
             return 0;
 
         case F_GETFL:
@@ -1960,13 +1960,13 @@ int32_t sys_ftruncate(int32_t fd, int32_t length) {
 
     // 检查 fd 合法性
     struct task_struct* cur = get_running_task_struct();
-    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC || cur->fd_table[fd].global_fd_idx == -1) {
+    if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC || cur->file_table->fd_table[fd].global_fd_idx == -1) {
         printk("sys_ftruncate: bad fd (0x%x)\n",fd);
         return -EBADF;
     }
 
     // 获取全局文件结构和 inode
-    uint32_t global_idx = cur->fd_table[fd].global_fd_idx;
+    uint32_t global_idx = cur->file_table->fd_table[fd].global_fd_idx;
     struct file* f = &file_table[global_idx];
     struct inode* inode = f->fd_inode;
     // 必须是以写模式打开的文件才能 truncate
