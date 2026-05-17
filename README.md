@@ -68,8 +68,8 @@ MagicBox now reserves interrupt `0x80` as a Linux i386 syscall compatibility ent
 
 **Task Management:**
 
-- `fork()`: Creates a child process utilizing Copy-On-Write (COW).
-- `execve()`: Parses ELF files, builds the initial user stack, and registers VMAs to support on-demand loading. The current interface already reserves the `envp` slot for future environment-variable support.
+- `fork()` / `clone()`: Creates a new task; `fork()` enforces an isolated address space via Copy-On-Write (COW), while `clone()` offers granular control to either apply COW or share the VM (via `CLONE_VM`).
+- `execve()`: Parses ELF files, builds the initial user stack, and registers VMAs to support on-demand loading.
 - `waitpid()` / `exit()`: Handles process lifecycle synchronization and resource recycling.
 - `setpgid()` / `getpgid()`: Provides basic process group management for shell job control.
 - `alarm()` / `pause()`: Supports simple timed signal delivery and process suspension.
